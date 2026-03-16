@@ -1,0 +1,20 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/smartark}
+    username: ${DB_USERNAME:smartark}
+    password: ${DB_PASSWORD:smartark}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+services:
+  requirement:
+    url: ${REQUIREMENT_SERVICE_URL:http://localhost:8001}
+  generation:
+    url: ${GENERATION_SERVICE_URL:http://localhost:8002}

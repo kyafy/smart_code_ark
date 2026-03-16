@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: smartark
+      POSTGRES_USER: smartark
+      POSTGRES_PASSWORD: smartark
+    ports:
+      - "5432:5432"
+    volumes:
+      - smartark-postgres-data:/var/lib/postgresql/data
+
+  api-gateway:
+    build:
+      context: ./services/api-gateway-java
+    environment:
+      REQUIREMENT_SERVICE_URL: http://requirement-service:8001
+      GENERATION_SERVICE_URL: http://generation-service:8002
+      DB_URL: jdbc:postgresql://postgres:5432/smartark
+      DB_USERNAME: smartark
+      DB_PASSWORD: smartark
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - requirement-service
+      - generation-service
+
+  requirement-service:
+    build:
+      context: ./services/requirement-service-py
+    ports:
+      - "8001:8001"
+
+  generation-service:
+    build:
+      context: ./services/generation-service-py
+    ports:
+      - "8002:8002"
+
+volumes:
+  smartark-postgres-data:
