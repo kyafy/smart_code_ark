@@ -1,4 +1,4 @@
-# Smart Code Ark (智码方舟)
+# Smart Code Ark (慧码方舟)
 
 Smart Code Ark 是一个基于 AI 的毕业设计项目生成平台，旨在通过对话式交互辅助用户完成从需求梳理、技术选型到代码生成的全过程。
 
