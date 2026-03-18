@@ -1,103 +1,217 @@
 package com.smartark.gateway.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.smartark.gateway.common.auth.RequestContext;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
-import com.smartark.gateway.common.response.PageResponse;
-import com.smartark.gateway.dto.CreateProjectRequest;
-import com.smartark.gateway.dto.ProjectResult;
-import com.smartark.gateway.entity.ProjectEntity;
-import com.smartark.gateway.repository.ProjectRepository;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
+import com.smartark.gateway.db.entity.ChatMessageEntity;
+import com.smartark.gateway.db.entity.ChatSessionEntity;
+import com.smartark.gateway.db.entity.ProjectEntity;
+import com.smartark.gateway.db.entity.ProjectSpecEntity;
+import com.smartark.gateway.db.entity.TaskEntity;
+import com.smartark.gateway.db.repo.ChatMessageRepository;
+import com.smartark.gateway.db.repo.ChatSessionRepository;
+import com.smartark.gateway.db.repo.ProjectRepository;
+import com.smartark.gateway.db.repo.ProjectSpecRepository;
+import com.smartark.gateway.db.repo.TaskRepository;
+import com.smartark.gateway.dto.ProjectConfirmRequest;
+import com.smartark.gateway.dto.ProjectConfirmResult;
+import com.smartark.gateway.dto.ProjectDetail;
+import com.smartark.gateway.dto.ProjectSummary;
+import com.smartark.gateway.dto.StackConfig;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import com.smartark.gateway.dto.TaskSummary;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
-/**
- * 项目管理服务
- * <p>
- * 提供项目的创建、查询（列表和详情）等核心功能。
- * 负责维护项目元数据，如名称、描述、状态等。
- * </p>
- */
 @Service
 public class ProjectService {
     private final ProjectRepository projectRepository;
+    private final ProjectSpecRepository projectSpecRepository;
+    private final ChatSessionRepository chatSessionRepository;
+    private final ChatMessageRepository chatMessageRepository;
+    private final TaskRepository taskRepository;
+    private final ModelService modelService;
+    private final ObjectMapper objectMapper;
 
-    /**
-     * 构造函数
-     *
-     * @param projectRepository 项目数据仓库
-     */
-    public ProjectService(ProjectRepository projectRepository) {
+    public ProjectService(
+            ProjectRepository projectRepository,
+            ProjectSpecRepository projectSpecRepository,
+            ChatSessionRepository chatSessionRepository,
+            ChatMessageRepository chatMessageRepository,
+            TaskRepository taskRepository,
+            ModelService modelService,
+            ObjectMapper objectMapper
+    ) {
         this.projectRepository = projectRepository;
+        this.projectSpecRepository = projectSpecRepository;
+        this.chatSessionRepository = chatSessionRepository;
+        this.chatMessageRepository = chatMessageRepository;
+        this.taskRepository = taskRepository;
+        this.modelService = modelService;
+        this.objectMapper = objectMapper;
     }
 
-    /**
-     * 创建新项目
-     *
-     * @param ownerId 项目所有者 ID
-     * @param request 创建项目请求参数
-     * @return 创建成功的项目详情
-     */
-    public ProjectResult create(String ownerId, CreateProjectRequest request) {
-        Instant now = Instant.now();
-        ProjectEntity entity = new ProjectEntity();
-        entity.setId(UUID.randomUUID().toString());
-        entity.setOwnerId(ownerId);
-        entity.setName(request.name());
-        entity.setDescription(request.description());
-        entity.setStatus("DRAFT");
-        entity.setCreatedAt(now);
-        entity.setUpdatedAt(now);
-        return toResult(projectRepository.save(entity));
+    @Transactional
+    public ProjectConfirmResult confirm(ProjectConfirmRequest request) {
+        Long userId = requireUserId();
+        ChatSessionEntity session = chatSessionRepository.findById(request.sessionId())
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "会话不存在"));
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该会话");
+        }
+
+        if (session.getProjectId() != null && !session.getProjectId().isBlank()) {
+            ProjectEntity existing = projectRepository.findById(session.getProjectId())
+                    .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "项目不存在"));
+            return new ProjectConfirmResult(existing.getId(), existing.getStatus());
+        }
+
+        String projectId = UUID.randomUUID().toString().replace("-", "");
+        LocalDateTime now = LocalDateTime.now();
+
+        ProjectEntity project = new ProjectEntity();
+        project.setId(projectId);
+        project.setUserId(userId);
+        project.setTitle(session.getTitle());
+        String desc = request.description();
+        if (desc == null || desc.isBlank()) {
+            desc = session.getDescription();
+        }
+        project.setDescription(desc == null ? "" : desc);
+        project.setProjectType(session.getProjectType());
+        project.setStackBackend(request.stack().backend());
+        project.setStackFrontend(request.stack().frontend());
+        project.setStackDb(request.stack().db());
+        project.setStatus("confirmed");
+        project.setCreatedAt(now);
+        project.setUpdatedAt(now);
+        projectRepository.save(project);
+
+        session.setProjectId(projectId);
+        session.setStatus("confirmed");
+        session.setUpdatedAt(now);
+        chatSessionRepository.save(session);
+
+        try {
+            ProjectSpecEntity spec = new ProjectSpecEntity();
+            spec.setProjectId(projectId);
+            spec.setVersion(1);
+            
+            spec.setRequirementJson(objectMapper.writeValueAsString(Map.of(
+                    "title", project.getTitle(),
+                    "description", project.getDescription(),
+                    "projectType", project.getProjectType(),
+                    "stack", Map.of(
+                            "backend", project.getStackBackend(),
+                            "frontend", project.getStackFrontend(),
+                            "db", project.getStackDb()
+                    ),
+                    "sessionId", session.getId(),
+                    "prd", request.prd() != null ? request.prd() : ""
+            )));
+            
+            spec.setDomainJson(null);
+            spec.setApiContractJson(null);
+            spec.setCreatedAt(now);
+            projectSpecRepository.save(spec);
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCodes.INTERNAL_ERROR, "Failed to save project spec");
+        }
+
+        return new ProjectConfirmResult(projectId, "confirmed");
     }
 
-    /**
-     * 分页查询用户的项目列表
-     *
-     * @param ownerId 项目所有者 ID
-     * @param page    页码（从1开始）
-     * @param size    每页数量
-     * @return 项目列表的分页结果
-     */
-    public PageResponse<ProjectResult> listByOwner(String ownerId, int page, int size) {
-        int safePage = Math.max(page, 1);
-        int safeSize = Math.min(Math.max(size, 1), 100);
-        Page<ProjectEntity> pageData = projectRepository.findByOwnerId(
-                ownerId,
-                PageRequest.of(safePage - 1, safeSize, Sort.by(Sort.Direction.DESC, "createdAt"))
+    public List<ProjectSummary> list() {
+        Long userId = requireUserId();
+        return projectRepository.findByUserIdOrderByUpdatedAtDesc(userId).stream()
+                .map(p -> new ProjectSummary(
+                        p.getId(),
+                        p.getTitle(),
+                        p.getDescription(),
+                        p.getStatus(),
+                        p.getUpdatedAt() == null ? null : p.getUpdatedAt().toString()
+                ))
+                .toList();
+    }
+
+    public ProjectDetail detail(String projectId) {
+        Long userId = requireUserId();
+        ProjectEntity project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "项目不存在"));
+        if (!userId.equals(project.getUserId())) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该项目");
+        }
+        String specJson = projectSpecRepository.findTopByProjectIdOrderByVersionDesc(projectId)
+                .map(ProjectSpecEntity::getRequirementJson)
+                .orElse(null);
+        StackConfig stack = new StackConfig(
+                project.getStackBackend() == null ? "" : project.getStackBackend(),
+                project.getStackFrontend() == null ? "" : project.getStackFrontend(),
+                project.getStackDb() == null ? "" : project.getStackDb()
         );
-        List<ProjectResult> items = pageData.getContent().stream().map(this::toResult).toList();
-        return PageResponse.of(items, pageData.getTotalElements(), safePage, safeSize);
-    }
 
-    /**
-     * 查询项目详情
-     *
-     * @param ownerId   项目所有者 ID
-     * @param projectId 项目 ID
-     * @return 项目详细信息
-     * @throws BusinessException 如果项目不存在或不属于该用户
-     */
-    public ProjectResult detail(String ownerId, String projectId) {
-        return projectRepository.findByIdAndOwnerId(projectId, ownerId)
-                .map(this::toResult)
-                .orElseThrow(() -> new BusinessException(ErrorCodes.PROJECT_NOT_FOUND, "项目不存在"));
-    }
+        List<TaskSummary> tasks = taskRepository.findByProjectIdOrderByCreatedAtDesc(projectId).stream()
+                .map(t -> new TaskSummary(
+                        t.getId(),
+                        t.getProjectId(),
+                        t.getTaskType(),
+                        t.getStatus(),
+                        t.getProgress(),
+                        t.getErrorMessage(),
+                        t.getCreatedAt() != null ? t.getCreatedAt().toString() : null,
+                        t.getUpdatedAt() != null ? t.getUpdatedAt().toString() : null
+                ))
+                .collect(Collectors.toList());
 
-    private ProjectResult toResult(ProjectEntity entity) {
-        return new ProjectResult(
-                entity.getId(),
-                entity.getOwnerId(),
-                entity.getName(),
-                entity.getDescription(),
-                entity.getStatus(),
-                entity.getCreatedAt(),
-                entity.getUpdatedAt()
+        List<Map<String, String>> messages = new ArrayList<>();
+        if (specJson != null) {
+            try {
+                String sessionId = objectMapper.readTree(specJson).path("sessionId").asText(null);
+                if (sessionId != null && !sessionId.isEmpty()) {
+                    messages = chatMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
+                            .map(m -> Map.of(
+                                    "role", m.getSpeaker(),
+                                    "content", m.getMessage()
+                            ))
+                            .collect(Collectors.toList());
+                }
+            } catch (Exception e) {
+                // Ignore parse error
+            }
+        }
+
+        return new ProjectDetail(
+                project.getId(),
+                project.getTitle(),
+                project.getDescription(),
+                project.getProjectType(),
+                project.getStatus(),
+                stack,
+                specJson,
+                project.getCreatedAt() == null ? null : project.getCreatedAt().toString(),
+                project.getUpdatedAt() == null ? null : project.getUpdatedAt().toString(),
+                tasks,
+                messages
         );
+    }
+
+    private Long requireUserId() {
+        String userId = RequestContext.getUserId();
+        if (userId == null || userId.isBlank()) {
+            throw new BusinessException(ErrorCodes.UNAUTHORIZED, "未登录");
+        }
+        try {
+            return Long.parseLong(userId);
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCodes.UNAUTHORIZED, "未登录");
+        }
     }
 }

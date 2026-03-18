@@ -1,17 +1,15 @@
 spring:
-  datasource:
-    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  jpa:
-    hibernate:
-      ddl-auto: create-drop
   flyway:
     enabled: false
-
-services:
-  requirement:
-    url: http://localhost:8001
-  generation:
-    url: http://localhost:8002
+  data:
+    redis:
+      repositories:
+        enabled: false
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false
+    username: sa
+    password: sa
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false

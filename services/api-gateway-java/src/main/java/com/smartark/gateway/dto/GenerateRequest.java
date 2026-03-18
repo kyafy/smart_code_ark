@@ -1,6 +1,4 @@
 package com.smartark.gateway.dto;
 
-public record GenerateRequest(
-        RequirementResult analysis
-) {
+public record GenerateRequest(String projectId) {
 }

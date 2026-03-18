@@ -1,42 +1,46 @@
 services:
-  postgres:
-    image: postgres:16-alpine
+  mysql:
+    image: mysql:8.0
     environment:
-      POSTGRES_DB: smartark
-      POSTGRES_USER: smartark
-      POSTGRES_PASSWORD: smartark
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: smartark
+      MYSQL_USER: smartark
+      MYSQL_PASSWORD: smartark
+      TZ: UTC
     ports:
-      - "5432:5432"
-    volumes:
-      - smartark-postgres-data:/var/lib/postgresql/data
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   api-gateway:
     build:
       context: ./services/api-gateway-java
     environment:
-      REQUIREMENT_SERVICE_URL: http://requirement-service:8001
-      GENERATION_SERVICE_URL: http://generation-service:8002
-      DB_URL: jdbc:postgresql://postgres:5432/smartark
-      DB_USERNAME: smartark
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: smartark
+      DB_USER: smartark
       DB_PASSWORD: smartark
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TZ: UTC
     ports:
       - "8080:8080"
     depends_on:
-      - postgres
-      - requirement-service
-      - generation-service
-
-  requirement-service:
-    build:
-      context: ./services/requirement-service-py
-    ports:
-      - "8001:8001"
-
-  generation-service:
-    build:
-      context: ./services/generation-service-py
-    ports:
-      - "8002:8002"
-
-volumes:
-  smartark-postgres-data:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

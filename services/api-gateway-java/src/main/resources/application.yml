@@ -2,19 +2,48 @@ server:
   port: 8080
 
 spring:
+  application:
+    name: api-gateway
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/smartark}
-    username: ${DB_USERNAME:smartark}
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:smartark}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${DB_USER:smartark}
     password: ${DB_PASSWORD:smartark}
   jpa:
-    open-in-view: false
     hibernate:
       ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
   flyway:
     enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      repositories:
+        enabled: false
 
-services:
-  requirement:
-    url: ${REQUIREMENT_SERVICE_URL:http://localhost:8001}
-  generation:
-    url: ${GENERATION_SERVICE_URL:http://localhost:8002}
+smartark:
+  cors:
+    allowed-origins: "*"
+  auth:
+    jwt-secret: ${JWT_SECRET:change-me}
+    token-ttl-seconds: ${JWT_TTL_SECONDS:604800}
+  model:
+    base-url: ${MODEL_BASE_URL:}
+    api-key: ${MODEL_API_KEY:}
+    chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
+    code-model: ${CODE_MODEL:qwen-plus}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}

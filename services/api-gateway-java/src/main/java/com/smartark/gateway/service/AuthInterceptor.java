@@ -19,9 +19,12 @@ public class AuthInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         String path = request.getRequestURI();
-        if (path.startsWith("/api/v1/auth/") || path.equals("/api/v1/health") || path.equals("/error")) {
+        if (path.startsWith("/api/auth/") || path.startsWith("/api/v1/auth/")
+                || path.equals("/api/health") || path.equals("/api/v1/health")
+                || path.equals("/error")) {
             return true;
         }
+
         String header = request.getHeader("Authorization");
         if (header == null || !header.startsWith("Bearer ")) {
             throw new BusinessException(ErrorCodes.UNAUTHORIZED, "未授权访问");
@@ -31,10 +34,5 @@ public class AuthInterceptor implements HandlerInterceptor {
                 .orElseThrow(() -> new BusinessException(ErrorCodes.UNAUTHORIZED, "无效令牌"));
         RequestContext.setUserId(userId);
         return true;
-    }
-
-    @Override
-    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
-        RequestContext.clear();
     }
 }

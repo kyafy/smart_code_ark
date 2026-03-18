@@ -6,7 +6,7 @@ public record ApiResponse<T>(
         T data
 ) {
     public static <T> ApiResponse<T> success(T data) {
-        return new ApiResponse<>(0, "OK", data);
+        return new ApiResponse<>(0, "ok", data);
     }
 
     public static <T> ApiResponse<T> fail(int code, String message) {
