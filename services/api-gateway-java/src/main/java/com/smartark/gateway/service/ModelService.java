@@ -36,6 +36,7 @@ public class ModelService {
     private final RestClient restClient;
     private final String baseUrl;
     private final String apiKey;
+    private final boolean mockEnabled;
     private final String chatModel;
     private final String codeModel;
 
@@ -43,20 +44,26 @@ public class ModelService {
             ObjectMapper objectMapper,
             @Value("${smartark.model.base-url:}") String baseUrl,
             @Value("${smartark.model.api-key:}") String apiKey,
+            @Value("${smartark.model.mock-enabled:false}") boolean mockEnabled,
             @Value("${smartark.model.chat-model:Qwen3.5-Plus}") String chatModel,
             @Value("${smartark.model.code-model:qwen-plus}") String codeModel
     ) {
         this.objectMapper = objectMapper;
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         this.apiKey = apiKey == null ? "" : apiKey.trim();
+        this.mockEnabled = mockEnabled;
         this.chatModel = chatModel;
         this.codeModel = codeModel;
         this.restClient = RestClient.builder().build();
     }
 
     public void streamChatReply(String sessionTitle, String projectType, String userMessage, List<Map<String, String>> history, Consumer<String> onContent, Runnable onDone, Consumer<Throwable> onError) {
-        if (baseUrl.isEmpty()) {
-            logger.info("Using mock model for stream reply");
+        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+            if (!mockEnabled) {
+                onError.accept(new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型配置缺失：请设置 MODEL_BASE_URL 与 MODEL_API_KEY"));
+                return;
+            }
+            logger.info("Using mock model for stream reply (baseUrlPresent={}, apiKeyPresent={})", !baseUrl.isEmpty(), !apiKey.isEmpty());
             String fullReply = buildStubReply(guessModules(sessionTitle, userMessage, projectType), userMessage);
             new Thread(() -> {
                 try {
@@ -155,7 +162,10 @@ public class ModelService {
     }
 
     public ModelResult chatReply(String sessionTitle, String projectType, String userMessage, List<Map<String, String>> history) {
-        if (baseUrl.isEmpty()) {
+        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+            if (!mockEnabled) {
+                throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型配置缺失：请设置 MODEL_BASE_URL 与 MODEL_API_KEY");
+            }
             List<String> modules = guessModules(sessionTitle, userMessage, projectType);
             String reply = buildStubReply(modules, userMessage);
             int inTok = estimateTokens(objectMapper.valueToTree(Map.of(
@@ -210,7 +220,10 @@ public class ModelService {
     }
 
     public String generateRequirement(String sessionTitle, String projectType, List<Map<String, String>> history) {
-        if (baseUrl.isEmpty()) {
+        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+            if (!mockEnabled) {
+                throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型配置缺失：请设置 MODEL_BASE_URL 与 MODEL_API_KEY");
+            }
             return "Mock PRD for " + sessionTitle + " (" + projectType + ")\n\nGenerated from chat history.";
         }
         try {

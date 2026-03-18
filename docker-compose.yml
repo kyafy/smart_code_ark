@@ -36,6 +36,11 @@ services:
       DB_PASSWORD: smartark
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_MOCK_ENABLED: ${MODEL_MOCK_ENABLED:-true}
+      CHAT_MODEL: ${CHAT_MODEL:-Qwen3.5-Plus}
+      CODE_MODEL: ${CODE_MODEL:-qwen-plus}
       TZ: UTC
     ports:
       - "8080:8080"

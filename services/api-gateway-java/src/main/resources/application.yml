@@ -36,6 +36,7 @@ smartark:
   model:
     base-url: ${MODEL_BASE_URL:}
     api-key: ${MODEL_API_KEY:}
+    mock-enabled: ${MODEL_MOCK_ENABLED:false}
     chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
     code-model: ${CODE_MODEL:qwen-plus}
 

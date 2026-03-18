@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 public class ChatService {
@@ -214,6 +215,10 @@ public class ChatService {
         }
 
         SseEmitter emitter = new SseEmitter(180000L);
+        AtomicBoolean closed = new AtomicBoolean(false);
+        emitter.onCompletion(() -> closed.set(true));
+        emitter.onTimeout(() -> closed.set(true));
+        emitter.onError(t -> closed.set(true));
         long t0 = System.nanoTime();
         
         Executors.newSingleThreadExecutor().submit(() -> {
@@ -222,16 +227,22 @@ public class ChatService {
                 StringBuilder fullReply = new StringBuilder();
                 modelService.streamChatReply(session.getTitle(), session.getProjectType(), request.message(), history,
                         content -> {
+                            if (closed.get()) {
+                                return;
+                            }
                             try {
                                 logger.debug("Sending delta content: {}", content);
                                 emitter.send(SseEmitter.event().name("delta").data(content));
                                 fullReply.append(content);
-                            } catch (IOException e) {
-                                logger.error("Failed to send SSE delta", e);
-                                throw new RuntimeException(e);
+                            } catch (IOException | IllegalStateException e) {
+                                closed.set(true);
+                                emitter.complete();
                             }
                         },
                         () -> {
+                            if (closed.get()) {
+                                return;
+                            }
                             try {
                                 String reply = fullReply.toString();
                                 logger.info("Stream chat completed. Full reply length: {}", reply.length());
@@ -275,12 +286,15 @@ public class ChatService {
                                         session.getUpdatedAt().toString()
                                 )));
                                 emitter.complete();
-                            } catch (IOException e) {
-                                logger.error("Failed to complete SSE", e);
-                                emitter.completeWithError(e);
+                            } catch (IOException | IllegalStateException e) {
+                                closed.set(true);
+                                emitter.complete();
                             }
                         },
                         e -> {
+                            if (closed.get()) {
+                                return;
+                            }
                             logger.error("Error in stream chat", e);
                             emitter.completeWithError(e);
                         }
