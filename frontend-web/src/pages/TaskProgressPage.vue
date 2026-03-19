@@ -49,14 +49,12 @@ onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
 })
 
-// Extract projectId if backend returns it in task status, else fallback to projects
-const projectId = computed(() => task.rawStatus?.projectId || '')
+// Use backend returned projectId to navigate to project detail
+const projectId = computed(() => task.rawStatus?.projectId)
 
 const onViewResult = () => {
   if (projectId.value) {
     router.push({ name: 'project-detail', params: { projectId: projectId.value } })
-  } else {
-    router.push({ name: 'projects' })
   }
 }
 

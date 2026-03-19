@@ -5,39 +5,42 @@
         <h1 class="font-semibold text-lg">Project Preview</h1>
         <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full">Live</span>
       </div>
-      <div class="text-sm text-gray-500">
-        Task ID: {{ route.params.taskId }}
+      <div class="flex items-center gap-4">
+        <div class="text-sm text-gray-500">
+          Task ID: {{ route.params.taskId }}
+        </div>
+        <el-button type="primary" size="small" @click="handleDownload">
+          下载代码
+        </el-button>
+        <el-button size="small" @click="router.push({ name: 'projects' })">
+          返回项目
+        </el-button>
       </div>
     </div>
     
     <div class="flex-1 overflow-hidden relative">
-      <div class="absolute inset-0 flex items-center justify-center">
+      <iframe 
+        v-if="previewUrl" 
+        :src="previewUrl" 
+        class="w-full h-full border-none"
+        title="Project Preview"
+      ></iframe>
+      <div v-else-if="loading" class="absolute inset-0 flex items-center justify-center">
+        <el-icon class="is-loading text-4xl text-blue-500"><Loading /></el-icon>
+      </div>
+      <div v-else class="absolute inset-0 flex items-center justify-center">
         <div class="bg-white p-8 rounded-lg shadow-lg max-w-2xl w-full mx-4 text-center">
-          <div class="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-8 h-8">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 17.25V15m-3 0-3-3m0 0-3 3m3-3V15" />
-            </svg>
+          <div class="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <el-icon class="text-3xl"><Warning /></el-icon>
           </div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-2">Welcome to Your Generated App</h2>
+          <h2 class="text-2xl font-bold text-gray-900 mb-2">预览不可用</h2>
           <p class="text-gray-500 mb-6">
-            This is a preview placeholder. The actual application code has been generated and is ready for download.
-            In a production environment, this would host the live version of your deployed application.
+            {{ errorMessage || '当前任务暂无预览地址，或任务尚未完成。' }}<br/>
+            您可以直接下载生成的应用代码在本地运行。
           </p>
-          
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-left">
-            <div class="p-4 border rounded-lg bg-gray-50">
-              <div class="font-medium text-gray-900 mb-1">Frontend</div>
-              <div class="text-sm text-gray-500">Vue 3 + Tailwind</div>
-            </div>
-            <div class="p-4 border rounded-lg bg-gray-50">
-              <div class="font-medium text-gray-900 mb-1">Backend</div>
-              <div class="text-sm text-gray-500">Spring Boot 3</div>
-            </div>
-            <div class="p-4 border rounded-lg bg-gray-50">
-              <div class="font-medium text-gray-900 mb-1">Database</div>
-              <div class="text-sm text-gray-500">MySQL 8.0</div>
-            </div>
-          </div>
+          <el-button type="primary" size="large" @click="handleDownload">
+            下载应用代码
+          </el-button>
         </div>
       </div>
     </div>
@@ -45,7 +48,37 @@
 </template>
 
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { taskApi } from '@/api/endpoints'
+import { Loading, Warning } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 
 const route = useRoute()
+const router = useRouter()
+const taskId = String(route.params.taskId)
+
+const previewUrl = ref('')
+const loading = ref(true)
+const errorMessage = ref('')
+
+onMounted(async () => {
+  try {
+    const res = await taskApi.preview(taskId)
+    if (res.previewUrl) {
+      previewUrl.value = res.previewUrl
+    } else {
+      errorMessage.value = '未返回有效的预览地址'
+    }
+  } catch (error: any) {
+    console.error('Failed to get preview URL', error)
+    errorMessage.value = error.response?.data?.message || '获取预览地址失败'
+  } finally {
+    loading.value = false
+  }
+})
+
+const handleDownload = () => {
+  window.open(`/api/task/${taskId}/download`, '_blank')
+}
 </script>
