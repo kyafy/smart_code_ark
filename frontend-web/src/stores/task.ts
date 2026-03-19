@@ -24,14 +24,10 @@ export const useTaskStore = defineStore('task', () => {
 
   const loadStatus = async (id: string) => {
     taskId.value = id
-    try {
-      const s = await taskApi.status(id)
-      setFromStatus(s)
-      const logsRes = await taskApi.logs(id)
-      logs.value = logsRes
-    } catch (error) {
-      console.error('Failed to load task status', error)
-    }
+    const s = await taskApi.status(id)
+    setFromStatus(s)
+    const logsRes = await taskApi.logs(id)
+    logs.value = logsRes
   }
 
   const reset = () => {

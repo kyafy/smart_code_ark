@@ -96,7 +96,7 @@ const onLoginSms = async () => {
           <div class="flex items-center gap-3">
             <div class="h-10 w-10 rounded-2xl bg-blue-600" />
             <div>
-              <div class="text-lg font-semibold">智码方舟</div>
+              <div class="text-lg font-semibold">毕设码上行</div>
               <div class="text-sm text-slate-500">毕业设计 AI 项目生成平台</div>
             </div>
           </div>
@@ -155,4 +155,3 @@ const onLoginSms = async () => {
     </div>
   </div>
 </template>
-

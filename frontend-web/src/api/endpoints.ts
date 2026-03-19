@@ -50,28 +50,28 @@ export const projectApi = {
 export const taskApi = {
   generate: (payload: { projectId: string; instructions?: string }) =>
     requestJson<GenerateResult>({ method: 'POST', url: '/api/generate', data: payload }),
-  status: (taskId: string) => requestJson<TaskStatusResult>({ method: 'GET', url: `/task/${taskId}/status` }),
-  preview: (taskId: string) => requestJson<TaskPreviewResult>({ method: 'GET', url: `/task/${taskId}/preview` }),
-  download: (taskId: string) => requestBlob({ method: 'GET', url: `/task/${taskId}/download` }),
+  status: (taskId: string) => requestJson<TaskStatusResult>({ method: 'GET', url: `/api/task/${taskId}/status` }),
+  preview: (taskId: string) => requestJson<TaskPreviewResult>({ method: 'GET', url: `/api/task/${taskId}/preview` }),
+  download: (taskId: string) => requestBlob({ method: 'GET', url: `/api/task/${taskId}/download` }),
   modify: (taskId: string, payload: { changeInstructions: string }) =>
     requestJson<GenerateResult>({
-      url: `/task/${taskId}/modify`,
+      url: `/api/task/${taskId}/modify`,
       method: 'POST',
       data: payload
     }),
   cancel: (taskId: string) =>
     requestJson<GenerateResult>({
-      url: `/task/${taskId}/cancel`,
+      url: `/api/task/${taskId}/cancel`,
       method: 'POST'
     }),
   retry: (taskId: string, stepCode: string) =>
     requestJson<GenerateResult>({
-      url: `/task/${taskId}/retry/${stepCode}`,
+      url: `/api/task/${taskId}/retry/${stepCode}`,
       method: 'POST'
     }),
   logs: (taskId: string) =>
     requestJson<TaskLogResult[]>({
-      url: `/task/${taskId}/logs`,
+      url: `/api/task/${taskId}/logs`,
       method: 'GET'
     })
 }

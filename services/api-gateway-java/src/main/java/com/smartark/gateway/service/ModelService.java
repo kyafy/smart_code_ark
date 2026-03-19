@@ -142,9 +142,24 @@ public class ModelService {
                     })
                     .body(payload)
                     .exchange((request, response) -> {
-                        logger.info("Model API response status: {}", response.getStatusCode());
-                        try (InputStream is = response.getBody();
-                             BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                        var status = response.getStatusCode();
+                        logger.info("Model API response status: {}", status);
+                        try (InputStream is = response.getBody()) {
+                            if (!status.is2xxSuccessful()) {
+                                String errBody;
+                                try {
+                                    errBody = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+                                } catch (Exception ex) {
+                                    errBody = null;
+                                }
+                                String msg = "模型服务调用失败: " + status;
+                                if (errBody != null && !errBody.isBlank()) {
+                                    msg = msg + " body=" + truncate(errBody.replace("\n", " ").replace("\r", " "), 500);
+                                }
+                                onError.accept(new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, msg));
+                                return null;
+                            }
+                            BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
                             String line;
                             while ((line = reader.readLine()) != null) {
                                 if (line.startsWith("data: ")) {

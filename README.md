@@ -70,6 +70,19 @@ smart_code_ark/
 - Docker & Docker Compose
 - Maven 3.8+
 
+### 一键启动（推荐）
+
+```bash
+cp .env.example .env
+bash scripts/dev-up.sh
+```
+
+停止服务：
+
+```bash
+bash scripts/dev-down.sh
+```
+
 ### 1. 启动基础设施 (MySQL + Redis)
 
 ```bash
