@@ -86,6 +86,69 @@ public class TaskService {
         return createAndStartTask(parentTask.getProjectId(), userId, "modify", request.changeInstructions());
     }
 
+    @Transactional
+    public GenerateResult cancelTask(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+        }
+        if (!"queued".equals(task.getStatus()) && !"running".equals(task.getStatus())) {
+            throw new BusinessException(ErrorCodes.CONFLICT, "当前状态不允许取消任务");
+        }
+        task.setStatus("cancelled");
+        task.setErrorCode(String.valueOf(ErrorCodes.TASK_CANCELLED));
+        task.setErrorMessage("用户取消任务");
+        task.setUpdatedAt(LocalDateTime.now());
+        taskRepository.save(task);
+        appendTaskLog(taskId, "warn", "Task cancelled by user");
+        return new GenerateResult(taskId, "cancelled");
+    }
+
+    @Transactional
+    public GenerateResult retryStep(String taskId, String stepCode) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+        }
+        if (!"failed".equals(task.getStatus()) && !"cancelled".equals(task.getStatus())) {
+            throw new BusinessException(ErrorCodes.CONFLICT, "当前状态不允许重试");
+        }
+
+        List<TaskStepEntity> steps = taskStepRepository.findByTaskIdOrderByStepOrderAsc(taskId);
+        TaskStepEntity target = steps.stream()
+                .filter(s -> stepCode.equals(s.getStepCode()))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "步骤不存在"));
+
+        for (TaskStepEntity step : steps) {
+            if (step.getStepOrder() >= target.getStepOrder()) {
+                step.setStatus("pending");
+                step.setProgress(0);
+                step.setStartedAt(null);
+                step.setFinishedAt(null);
+                step.setErrorCode(null);
+                step.setErrorMessage(null);
+                step.setUpdatedAt(LocalDateTime.now());
+                taskStepRepository.save(step);
+            }
+        }
+
+        task.setStatus("running");
+        task.setCurrentStep(stepCode);
+        task.setErrorCode(null);
+        task.setErrorMessage(null);
+        task.setUpdatedAt(LocalDateTime.now());
+        taskRepository.save(task);
+
+        appendTaskLog(taskId, "info", "Manual retry from step: " + stepCode);
+        taskExecutorService.executeTask(taskId);
+        return new GenerateResult(taskId, "running");
+    }
+
     private GenerateResult createAndStartTask(String projectId, Long userId, String taskType, String instructions) {
         String taskId = UUID.randomUUID().toString().replace("-", "");
         LocalDateTime now = LocalDateTime.now();
@@ -219,5 +282,14 @@ public class TaskService {
                 log.getContent(),
                 log.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         )).toList();
+    }
+
+    private void appendTaskLog(String taskId, String level, String content) {
+        TaskLogEntity log = new TaskLogEntity();
+        log.setTaskId(taskId);
+        log.setLevel(level);
+        log.setContent(content);
+        log.setCreatedAt(LocalDateTime.now());
+        taskLogRepository.save(log);
     }
 }

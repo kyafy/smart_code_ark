@@ -195,7 +195,13 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
     session.messages.push({ speaker: 'assistant', message: reply })
     session.updatedAt = Date.now()
     setState(state)
-    const r: ChatReplyResult = { reply, draftModules: session.draftModules }
+    const r: ChatReplyResult = {
+      sessionId,
+      messages: session.messages.map((m) => ({
+        role: m.speaker,
+        content: m.message,
+      })),
+    }
     return ok(r)
   }
 

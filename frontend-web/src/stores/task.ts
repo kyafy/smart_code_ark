@@ -1,5 +1,4 @@
 import { defineStore } from 'pinia'
-import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { taskApi } from '@/api/endpoints'
 import type { TaskStatusResult, TaskLogResult } from '@/types/api'
@@ -14,6 +13,7 @@ export const useTaskStore = defineStore('task', () => {
 
   const isFinished = computed(() => status.value === 'finished')
   const isFailed = computed(() => status.value === 'failed')
+  const isCancelled = computed(() => status.value === 'cancelled')
 
   const setFromStatus = (s: TaskStatusResult) => {
     rawStatus.value = s
@@ -26,14 +26,9 @@ export const useTaskStore = defineStore('task', () => {
     taskId.value = id
     try {
       const s = await taskApi.status(id)
-      if (s.data) {
-        setFromStatus(s.data)
-        // Load real logs
-        const logsRes = await taskApi.logs(id)
-        if (logsRes.data) {
-          logs.value = logsRes.data
-        }
-      }
+      setFromStatus(s)
+      const logsRes = await taskApi.logs(id)
+      logs.value = logsRes
     } catch (error) {
       console.error('Failed to load task status', error)
     }
@@ -57,8 +52,8 @@ export const useTaskStore = defineStore('task', () => {
     logs,
     isFinished,
     isFailed,
+    isCancelled,
     loadStatus,
     reset
   }
 })
-

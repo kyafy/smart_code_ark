@@ -9,6 +9,7 @@ import type {
   ProjectDetail,
   SmsSendResult,
   StackConfig,
+  TaskLogResult,
   TaskPreviewResult,
   TaskStatusResult,
 } from '@/types/api'
@@ -58,10 +59,19 @@ export const taskApi = {
       method: 'POST',
       data: payload
     }),
+  cancel: (taskId: string) =>
+    requestJson<GenerateResult>({
+      url: `/task/${taskId}/cancel`,
+      method: 'POST'
+    }),
+  retry: (taskId: string, stepCode: string) =>
+    requestJson<GenerateResult>({
+      url: `/task/${taskId}/retry/${stepCode}`,
+      method: 'POST'
+    }),
   logs: (taskId: string) =>
     requestJson<TaskLogResult[]>({
       url: `/task/${taskId}/logs`,
       method: 'GET'
     })
 }
-

@@ -141,8 +141,8 @@ const onSend = async (text: string) => {
   try {
     if (activeStep.value === 1) {
       const sid = await chat.startSession({
-        title: form.value.title || text.slice(0, 10),
-        projectType: form.value.projectType,
+        title: chat.title || text.slice(0, 10),
+        projectType: 'web',
         description: text,
       })
       await router.replace({ query: { session: sid } })

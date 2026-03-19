@@ -30,6 +30,8 @@ spring:
 smartark:
   agent:
     workspace-root: /tmp/smartark/
+    max-retries: 2
+    retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate
   cors:
     allowed-origins: "*"
   auth:

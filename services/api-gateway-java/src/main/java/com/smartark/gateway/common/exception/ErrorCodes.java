@@ -15,6 +15,10 @@ public final class ErrorCodes {
     public static final int MODEL_SERVICE_ERROR = 3001;
     public static final int TASK_FAILED = 3002;
     public static final int TASK_TIMEOUT = 3003;
+    public static final int TASK_MODEL_ERROR = 3004;
+    public static final int TASK_IO_ERROR = 3005;
+    public static final int TASK_VALIDATION_ERROR = 3006;
+    public static final int TASK_CANCELLED = 3007;
 
     public static final int INTERNAL_ERROR = 9000;
 

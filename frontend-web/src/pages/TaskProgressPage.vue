@@ -5,6 +5,7 @@ import LogPanel from '@/components/LogPanel.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import StepTimeline from '@/components/StepTimeline.vue'
 import { showApiError } from '@/api/http'
+import { taskApi } from '@/api/endpoints'
 import { useTaskStore } from '@/stores/task'
 
 const route = useRoute()
@@ -20,7 +21,7 @@ const poll = async () => {
   isPolling.value = true
   try {
     await task.loadStatus(taskId.value)
-    if (task.isFinished || task.isFailed) {
+    if (task.isFinished || task.isFailed || task.isCancelled) {
       if (pollTimer) {
         window.clearInterval(pollTimer)
         pollTimer = null
@@ -58,6 +59,22 @@ const onViewResult = () => {
     router.push({ name: 'projects' })
   }
 }
+
+const onCancel = async () => {
+  await taskApi.cancel(taskId.value)
+  await poll()
+}
+
+const onRetry = async () => {
+  const stepCode = task.currentStep || 'requirement_analyze'
+  await taskApi.retry(taskId.value, stepCode)
+  await poll()
+  if (!pollTimer) {
+    pollTimer = window.setInterval(() => {
+      void poll()
+    }, 2000)
+  }
+}
 </script>
 
 <template>
@@ -80,6 +97,9 @@ const onViewResult = () => {
         <div v-if="task.status === 'failed' && task.rawStatus?.errorMessage" class="mt-2 text-xs text-red-500">
           错误信息：{{ task.rawStatus.errorMessage }}
         </div>
+        <div v-if="task.status === 'cancelled'" class="mt-2 text-xs text-amber-600">
+          任务已取消
+        </div>
       </div>
 
       <div class="mt-6">
@@ -88,6 +108,8 @@ const onViewResult = () => {
 
       <div class="mt-6 flex items-center gap-2">
         <el-button @click="router.push({ name: 'projects' })">返回项目</el-button>
+        <el-button v-if="task.status === 'queued' || task.status === 'running'" type="warning" @click="onCancel">取消任务</el-button>
+        <el-button v-if="task.status === 'failed' || task.status === 'cancelled'" type="primary" @click="onRetry">重试当前步骤</el-button>
         <el-button v-if="task.isFinished" type="primary" @click="onViewResult">查看项目详情</el-button>
       </div>
     </div>
@@ -95,4 +117,3 @@ const onViewResult = () => {
     <LogPanel :logs="task.logs" :show-hint="true" />
   </div>
 </template>
-

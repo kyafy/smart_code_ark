@@ -46,6 +46,16 @@ public class TaskController {
         return ApiResponse.success(taskService.modify(taskId, request));
     }
 
+    @PostMapping("/task/{taskId}/cancel")
+    public ApiResponse<GenerateResult> cancel(@PathVariable("taskId") String taskId) {
+        return ApiResponse.success(taskService.cancelTask(taskId));
+    }
+
+    @PostMapping("/task/{taskId}/retry/{stepCode}")
+    public ApiResponse<GenerateResult> retryStep(@PathVariable("taskId") String taskId, @PathVariable("stepCode") String stepCode) {
+        return ApiResponse.success(taskService.retryStep(taskId, stepCode));
+    }
+
     @GetMapping(value = "/task/{taskId}/download", produces = "application/zip")
     public ResponseEntity<byte[]> download(@PathVariable("taskId") String taskId) {
         byte[] data = taskService.getDownload(taskId);

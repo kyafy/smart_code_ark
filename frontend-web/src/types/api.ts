@@ -80,7 +80,7 @@ export type GenerateResult = {
 }
 
 export interface TaskStatusResult {
-  status: 'queued' | 'running' | 'finished' | 'failed'
+  status: 'queued' | 'running' | 'finished' | 'failed' | 'cancelled' | 'timeout'
   progress: number
   step: string
   current_step: string
@@ -101,4 +101,3 @@ export interface TaskLogResult {
 export type TaskPreviewResult = {
   previewUrl: string
 }
-
