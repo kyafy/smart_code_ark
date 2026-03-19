@@ -77,6 +77,7 @@ public class AgentOrchestrator {
             context.setTask(task);
             context.setSpec(spec);
             context.setInstructions(task.getInstructions());
+            context.setNormalizedInstructions(normalizeInstructions(task.getInstructions()));
             Path workspaceDir = Paths.get(workspaceRoot, taskId);
             context.setWorkspaceDir(workspaceDir);
 
@@ -236,6 +237,21 @@ public class AgentOrchestrator {
             return throwable.getClass().getSimpleName();
         }
         return msg;
+    }
+
+    private String normalizeInstructions(String instructions) {
+        if (instructions == null) {
+            return null;
+        }
+        String normalized = instructions.trim().replaceAll("\\s+", " ");
+        if (normalized.isBlank()) {
+            return null;
+        }
+        int maxLen = 2000;
+        if (normalized.length() > maxLen) {
+            return normalized.substring(0, maxLen);
+        }
+        return normalized;
     }
 
     private void log(String taskId, String level, String content) {

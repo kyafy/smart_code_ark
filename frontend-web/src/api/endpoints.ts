@@ -48,7 +48,7 @@ export const projectApi = {
 }
 
 export const taskApi = {
-  generate: (payload: { projectId: string }) =>
+  generate: (payload: { projectId: string; instructions?: string }) =>
     requestJson<GenerateResult>({ method: 'POST', url: '/api/generate', data: payload }),
   status: (taskId: string) => requestJson<TaskStatusResult>({ method: 'GET', url: `/task/${taskId}/status` }),
   preview: (taskId: string) => requestJson<TaskPreviewResult>({ method: 'GET', url: `/task/${taskId}/preview` }),

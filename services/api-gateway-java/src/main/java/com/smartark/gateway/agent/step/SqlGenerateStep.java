@@ -5,6 +5,8 @@ import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.service.ModelService;
 import org.springframework.stereotype.Component;
 
+import java.util.Set;
+
 @Component
 public class SqlGenerateStep extends AbstractCodegenStep {
 
@@ -20,9 +22,7 @@ public class SqlGenerateStep extends AbstractCodegenStep {
     @Override
     public void execute(AgentExecutionContext context) throws Exception {
         logger.info("Starting sql generate step");
-        generateFiles(context, "database");
-        generateFiles(context, "Dockerfile");
-        generateFiles(context, "docker-compose");
-        generateFiles(context, "README.md");
+        ensureLegacyFilePlan(context);
+        generateFilesByGroups(context, Set.of("database", "infra", "docs"));
     }
 }

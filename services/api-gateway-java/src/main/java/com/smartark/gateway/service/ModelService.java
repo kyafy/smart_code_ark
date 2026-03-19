@@ -4,6 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.db.entity.PromptHistoryEntity;
+import com.smartark.gateway.db.repo.PromptHistoryRepository;
+import com.smartark.gateway.prompt.PromptRenderer;
+import com.smartark.gateway.prompt.PromptResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,7 +18,9 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -39,9 +45,15 @@ public class ModelService {
     private final boolean mockEnabled;
     private final String chatModel;
     private final String codeModel;
+    private final PromptResolver promptResolver;
+    private final PromptRenderer promptRenderer;
+    private final PromptHistoryRepository promptHistoryRepository;
 
     public ModelService(
             ObjectMapper objectMapper,
+            PromptResolver promptResolver,
+            PromptRenderer promptRenderer,
+            PromptHistoryRepository promptHistoryRepository,
             @Value("${smartark.model.base-url:}") String baseUrl,
             @Value("${smartark.model.api-key:}") String apiKey,
             @Value("${smartark.model.mock-enabled:false}") boolean mockEnabled,
@@ -54,6 +66,9 @@ public class ModelService {
         this.mockEnabled = mockEnabled;
         this.chatModel = chatModel;
         this.codeModel = codeModel;
+        this.promptResolver = promptResolver;
+        this.promptRenderer = promptRenderer;
+        this.promptHistoryRepository = promptHistoryRepository;
         this.restClient = RestClient.builder().build();
     }
 
@@ -285,30 +300,60 @@ public class ModelService {
     }
 
     public List<String> generateProjectStructure(String prd, String stackBackend, String stackFrontend, String stackDb, String instructions) {
+        return generateProjectStructure(null, null, prd, stackBackend, stackFrontend, stackDb, instructions);
+    }
+
+    public List<String> generateProjectStructure(String taskId, String projectId, String prd, String stackBackend, String stackFrontend, String stackDb, String instructions) {
         if (baseUrl.isEmpty()) {
             return List.of("README.md", "backend/src/main/java/App.java", "frontend/package.json");
         }
+        long start = System.currentTimeMillis();
+        String templateKey = "project_structure_plan";
+        int versionNo = 1;
+        String modelName = codeModel;
         try {
-            List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "system", "content", 
-                "你是一个资深架构师。请根据以下PRD和技术栈，规划项目的完整文件结构。\n" +
-                "技术栈：后端 " + stackBackend + "，前端 " + stackFrontend + "，数据库 " + stackDb + "。\n" +
-                "请输出一个JSON数组，包含所有需要生成的文件路径（相对路径）。\n" +
-                "例如：[\"README.md\", \"backend/pom.xml\", \"frontend/package.json\", ...]\n" +
-                "请确保结构合理，包含必要的配置文件、代码文件和部署文件（Dockerfile, docker-compose.yml）。\n" +
-                "只输出JSON数组，不要包含Markdown标记或其他文字。"
-            ));
-            String userContent = "PRD内容：\n" + prd;
-            if (instructions != null && !instructions.isBlank()) {
-                userContent += "\n\n额外指令：\n" + instructions;
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("prd", prd);
+            vars.put("stackBackend", stackBackend);
+            vars.put("stackFrontend", stackFrontend);
+            vars.put("stackDb", stackDb);
+            vars.put("instructions", instructions == null ? "" : instructions);
+
+            String defaultSystemPrompt =
+                    "你是一个资深架构师。请根据以下PRD和技术栈，规划项目的完整文件结构。\n" +
+                    "技术栈：后端 {{stackBackend}}，前端 {{stackFrontend}}，数据库 {{stackDb}}。\n" +
+                    "请输出一个JSON数组，包含所有需要生成的文件路径（相对路径）。\n" +
+                    "例如：[\"README.md\", \"backend/pom.xml\", \"frontend/package.json\", ...]\n" +
+                    "请确保结构合理，包含必要的配置文件、代码文件和部署文件（Dockerfile, docker-compose.yml）。\n" +
+                    "只输出JSON数组，不要包含Markdown标记或其他文字。";
+            String defaultUserPrompt = "PRD内容：\n{{prd}}\n\n额外指令：\n{{instructions}}";
+
+            PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey).orElse(null);
+            String systemPrompt = defaultSystemPrompt;
+            String userPrompt = defaultUserPrompt;
+            if (resolvedPrompt != null) {
+                versionNo = resolvedPrompt.version().getVersionNo();
+                if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
+                    modelName = resolvedPrompt.version().getModel();
+                }
+                if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
+                    systemPrompt = resolvedPrompt.version().getSystemPrompt();
+                }
+                if (resolvedPrompt.version().getUserPrompt() != null && !resolvedPrompt.version().getUserPrompt().isBlank()) {
+                    userPrompt = resolvedPrompt.version().getUserPrompt();
+                }
             }
-            messages.add(Map.of("role", "user", "content", userContent));
+
+            List<Map<String, String>> messages = new ArrayList<>();
+            messages.add(Map.of("role", "system", "content", promptRenderer.render(systemPrompt, vars)));
+            messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
 
             Map<String, Object> payload = Map.of(
-                    "model", codeModel,
+                    "model", modelName,
                     "messages", messages
             );
-            
+            String requestJson = objectMapper.writeValueAsString(payload);
+            String requestHash = hash(requestJson);
             String response = callModelApi(payload);
             JsonNode root = objectMapper.readTree(response);
             String content = root.at("/choices/0/message/content").asText("");
@@ -325,38 +370,70 @@ public class ModelService {
                      content = content.substring(0, content.indexOf("```"));
                  }
             }
-            
-            return objectMapper.readValue(content.trim(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>(){});
+
+            List<String> result = objectMapper.readValue(content.trim(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>(){});
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
+            return result;
         } catch (Exception e) {
             logger.error("Failed to generate project structure", e);
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, null, null, null, 0, 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), e.getMessage());
             throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "生成项目结构失败");
         }
     }
 
     public String generateFileContent(String prd, String filePath, String techStack, String instructions) {
+        return generateFileContent(null, null, prd, filePath, techStack, instructions);
+    }
+
+    public String generateFileContent(String taskId, String projectId, String prd, String filePath, String techStack, String instructions) {
         if (baseUrl.isEmpty()) {
             return "// Mock content for " + filePath;
         }
+        long start = System.currentTimeMillis();
+        String templateKey = "file_content_generate";
+        int versionNo = 1;
+        String modelName = codeModel;
         try {
-            List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "system", "content", 
-                "你是一个全栈工程师。请根据PRD和技术栈，生成指定文件的完整代码内容。\n" +
-                "文件路径：" + filePath + "\n" +
-                "技术栈：" + techStack + "\n" +
-                "请直接输出文件内容，不要包含Markdown标记（如 ```java ... ```），除非文件本身是Markdown格式。\n" +
-                "如果文件是代码，请确保可以直接运行或编译。"
-            ));
-            String userContent = "PRD内容：\n" + prd;
-            if (instructions != null && !instructions.isBlank()) {
-                userContent += "\n\n额外指令：\n" + instructions;
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("prd", prd);
+            vars.put("filePath", filePath);
+            vars.put("techStack", techStack);
+            vars.put("instructions", instructions == null ? "" : instructions);
+
+            String defaultSystemPrompt =
+                    "你是一个全栈工程师。请根据PRD和技术栈，生成指定文件的完整代码内容。\n" +
+                    "文件路径：{{filePath}}\n" +
+                    "技术栈：{{techStack}}\n" +
+                    "请直接输出文件内容，不要包含Markdown标记（如 ```java ... ```），除非文件本身是Markdown格式。\n" +
+                    "如果文件是代码，请确保可以直接运行或编译。";
+            String defaultUserPrompt = "PRD内容：\n{{prd}}\n\n额外指令：\n{{instructions}}";
+
+            PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey).orElse(null);
+            String systemPrompt = defaultSystemPrompt;
+            String userPrompt = defaultUserPrompt;
+            if (resolvedPrompt != null) {
+                versionNo = resolvedPrompt.version().getVersionNo();
+                if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
+                    modelName = resolvedPrompt.version().getModel();
+                }
+                if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
+                    systemPrompt = resolvedPrompt.version().getSystemPrompt();
+                }
+                if (resolvedPrompt.version().getUserPrompt() != null && !resolvedPrompt.version().getUserPrompt().isBlank()) {
+                    userPrompt = resolvedPrompt.version().getUserPrompt();
+                }
             }
-            messages.add(Map.of("role", "user", "content", userContent));
+
+            List<Map<String, String>> messages = new ArrayList<>();
+            messages.add(Map.of("role", "system", "content", promptRenderer.render(systemPrompt, vars)));
+            messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
 
             Map<String, Object> payload = Map.of(
-                    "model", codeModel,
+                    "model", modelName,
                     "messages", messages
             );
-            
+            String requestJson = objectMapper.writeValueAsString(payload);
+            String requestHash = hash(requestJson);
             String response = callModelApi(payload);
             JsonNode root = objectMapper.readTree(response);
             String content = root.at("/choices/0/message/content").asText("");
@@ -368,10 +445,11 @@ public class ModelService {
                     content = content.substring(firstLineBreak + 1, content.lastIndexOf("```"));
                 }
             }
-            
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
             return content;
         } catch (Exception e) {
             logger.error("Failed to generate file content for " + filePath, e);
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, null, null, null, 0, 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), e.getMessage());
             return "// Failed to generate content: " + e.getMessage();
         }
     }
@@ -394,6 +472,60 @@ public class ModelService {
                 .body(payload)
                 .retrieve()
                 .body(String.class);
+    }
+
+    private void savePromptHistory(String taskId,
+                                   String projectId,
+                                   String templateKey,
+                                   Integer versionNo,
+                                   String modelName,
+                                   String requestHash,
+                                   String inputJson,
+                                   String outputJson,
+                                   int tokenInput,
+                                   int tokenOutput,
+                                   int latencyMs,
+                                   String status,
+                                   String errorCode,
+                                   String errorMessage) {
+        try {
+            PromptHistoryEntity history = new PromptHistoryEntity();
+            history.setTaskId(taskId);
+            history.setProjectId(projectId);
+            history.setTemplateKey(templateKey);
+            history.setVersionNo(versionNo == null ? 1 : versionNo);
+            history.setModel(modelName == null || modelName.isBlank() ? codeModel : modelName);
+            history.setRequestHash(requestHash == null ? "na" : requestHash);
+            history.setInputJson(inputJson);
+            history.setOutputJson(outputJson);
+            history.setTokenInput(Math.max(0, tokenInput));
+            history.setTokenOutput(Math.max(0, tokenOutput));
+            history.setLatencyMs(Math.max(0, latencyMs));
+            history.setStatus(status == null ? "success" : status);
+            history.setErrorCode(errorCode);
+            history.setErrorMessage(errorMessage == null ? null : truncate(errorMessage, 255));
+            history.setCreatedAt(LocalDateTime.now());
+            promptHistoryRepository.save(history);
+        } catch (Exception ex) {
+            logger.warn("Failed to save prompt history", ex);
+        }
+    }
+
+    private String hash(String text) {
+        if (text == null) {
+            return "na";
+        }
+        return Integer.toHexString(text.hashCode());
+    }
+
+    private String truncate(String text, int maxLen) {
+        if (text == null) {
+            return null;
+        }
+        if (text.length() <= maxLen) {
+            return text;
+        }
+        return text.substring(0, maxLen);
     }
 
     public Map<String, Object> extractRequirements(String reply) {

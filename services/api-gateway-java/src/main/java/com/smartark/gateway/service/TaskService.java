@@ -71,7 +71,7 @@ public class TaskService {
             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此项目");
         }
 
-        return createAndStartTask(project.getId(), userId, "generate", null);
+        return createAndStartTask(project.getId(), userId, "generate", request.instructions());
     }
 
     public GenerateResult modify(String taskId, TaskModifyRequest request) {

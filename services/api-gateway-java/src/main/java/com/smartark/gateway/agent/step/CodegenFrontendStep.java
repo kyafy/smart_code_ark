@@ -5,6 +5,8 @@ import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.service.ModelService;
 import org.springframework.stereotype.Component;
 
+import java.util.Set;
+
 @Component
 public class CodegenFrontendStep extends AbstractCodegenStep {
 
@@ -20,6 +22,7 @@ public class CodegenFrontendStep extends AbstractCodegenStep {
     @Override
     public void execute(AgentExecutionContext context) throws Exception {
         logger.info("Starting codegen frontend step");
-        generateFiles(context, "frontend");
+        ensureLegacyFilePlan(context);
+        generateFilesByGroups(context, Set.of("frontend"));
     }
 }
