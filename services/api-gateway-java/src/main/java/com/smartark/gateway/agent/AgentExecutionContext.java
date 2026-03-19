@@ -1,6 +1,7 @@
 package com.smartark.gateway.agent;
 
 import com.smartark.gateway.agent.model.FilePlanItem;
+import com.smartark.gateway.agent.model.PaperSourceItem;
 import com.smartark.gateway.db.entity.ProjectEntity;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
@@ -16,6 +17,14 @@ public class AgentExecutionContext {
     private Path workspaceDir;
     private List<String> fileList;
     private List<FilePlanItem> filePlan;
+    private Long paperSessionId;
+    private String topic;
+    private String discipline;
+    private String degreeLevel;
+    private String methodPreference;
+    private List<PaperSourceItem> retrievedSources;
+    private String outlineDraftJson;
+    private String qualityReportJson;
 
     public TaskEntity getTask() {
         return task;
@@ -79,5 +88,69 @@ public class AgentExecutionContext {
 
     public void setFilePlan(List<FilePlanItem> filePlan) {
         this.filePlan = filePlan;
+    }
+
+    public Long getPaperSessionId() {
+        return paperSessionId;
+    }
+
+    public void setPaperSessionId(Long paperSessionId) {
+        this.paperSessionId = paperSessionId;
+    }
+
+    public String getTopic() {
+        return topic;
+    }
+
+    public void setTopic(String topic) {
+        this.topic = topic;
+    }
+
+    public String getDiscipline() {
+        return discipline;
+    }
+
+    public void setDiscipline(String discipline) {
+        this.discipline = discipline;
+    }
+
+    public String getDegreeLevel() {
+        return degreeLevel;
+    }
+
+    public void setDegreeLevel(String degreeLevel) {
+        this.degreeLevel = degreeLevel;
+    }
+
+    public String getMethodPreference() {
+        return methodPreference;
+    }
+
+    public void setMethodPreference(String methodPreference) {
+        this.methodPreference = methodPreference;
+    }
+
+    public List<PaperSourceItem> getRetrievedSources() {
+        return retrievedSources;
+    }
+
+    public void setRetrievedSources(List<PaperSourceItem> retrievedSources) {
+        this.retrievedSources = retrievedSources;
+    }
+
+    public String getOutlineDraftJson() {
+        return outlineDraftJson;
+    }
+
+    public void setOutlineDraftJson(String outlineDraftJson) {
+        this.outlineDraftJson = outlineDraftJson;
+    }
+
+    public String getQualityReportJson() {
+        return qualityReportJson;
+    }
+
+    public void setQualityReportJson(String qualityReportJson) {
+        this.qualityReportJson = qualityReportJson;
     }
 }

@@ -1,18 +1,27 @@
 package com.smartark.gateway.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.common.auth.RequestContext;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.db.entity.PaperOutlineVersionEntity;
+import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.entity.ProjectEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.db.entity.TaskStepEntity;
 import com.smartark.gateway.db.entity.ArtifactEntity;
+import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
+import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.db.repo.ProjectRepository;
 import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
 import com.smartark.gateway.db.repo.ArtifactRepository;
 import com.smartark.gateway.dto.GenerateRequest;
 import com.smartark.gateway.dto.GenerateResult;
+import com.smartark.gateway.dto.PaperOutlineGenerateRequest;
+import com.smartark.gateway.dto.PaperOutlineGenerateResult;
+import com.smartark.gateway.dto.PaperOutlineResult;
 import com.smartark.gateway.dto.TaskModifyRequest;
 import com.smartark.gateway.dto.TaskPreviewResult;
 import com.smartark.gateway.dto.TaskStatusResult;
@@ -20,7 +29,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.smartark.gateway.db.entity.TaskLogEntity;
@@ -35,23 +46,32 @@ public class TaskService {
     private final TaskLogRepository taskLogRepository;
     private final ProjectRepository projectRepository;
     private final ArtifactRepository artifactRepository;
+    private final PaperTopicSessionRepository paperTopicSessionRepository;
+    private final PaperOutlineVersionRepository paperOutlineVersionRepository;
     private final TaskExecutorService taskExecutorService;
     private final BillingService billingService;
+    private final ObjectMapper objectMapper;
 
     public TaskService(TaskRepository taskRepository,
                        TaskStepRepository taskStepRepository,
                        TaskLogRepository taskLogRepository,
                        ProjectRepository projectRepository,
                        ArtifactRepository artifactRepository,
+                       PaperTopicSessionRepository paperTopicSessionRepository,
+                       PaperOutlineVersionRepository paperOutlineVersionRepository,
                        TaskExecutorService taskExecutorService,
-                       BillingService billingService) {
+                       BillingService billingService,
+                       ObjectMapper objectMapper) {
         this.taskRepository = taskRepository;
         this.taskStepRepository = taskStepRepository;
         this.taskLogRepository = taskLogRepository;
         this.projectRepository = projectRepository;
         this.artifactRepository = artifactRepository;
+        this.paperTopicSessionRepository = paperTopicSessionRepository;
+        this.paperOutlineVersionRepository = paperOutlineVersionRepository;
         this.taskExecutorService = taskExecutorService;
         this.billingService = billingService;
+        this.objectMapper = objectMapper;
     }
 
     private Long requireUserId() {
@@ -84,6 +104,24 @@ public class TaskService {
         }
 
         return createAndStartTask(parentTask.getProjectId(), userId, "modify", request.changeInstructions());
+    }
+
+    public PaperOutlineGenerateResult generatePaperOutline(PaperOutlineGenerateRequest request) {
+        Long userId = requireUserId();
+        String projectId = "paper_outline_" + userId;
+        String taskPayload;
+        try {
+            taskPayload = objectMapper.writeValueAsString(Map.of(
+                    "topic", request.topic(),
+                    "discipline", request.discipline(),
+                    "degreeLevel", request.degreeLevel(),
+                    "methodPreference", request.methodPreference() == null ? "" : request.methodPreference()
+            ));
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCodes.INTERNAL_ERROR, "论文主题参数序列化失败");
+        }
+        GenerateResult result = createAndStartPaperTask(projectId, userId, taskPayload);
+        return new PaperOutlineGenerateResult(result.taskId(), result.status());
     }
 
     @Transactional
@@ -179,6 +217,32 @@ public class TaskService {
         return new GenerateResult(taskId, "queued");
     }
 
+    private GenerateResult createAndStartPaperTask(String projectId, Long userId, String instructions) {
+        String taskId = UUID.randomUUID().toString().replace("-", "");
+        LocalDateTime now = LocalDateTime.now();
+
+        TaskEntity task = new TaskEntity();
+        task.setId(taskId);
+        task.setProjectId(projectId);
+        task.setUserId(userId);
+        task.setTaskType("paper_outline");
+        task.setInstructions(instructions);
+        task.setStatus("queued");
+        task.setProgress(0);
+        task.setCreatedAt(now);
+        task.setUpdatedAt(now);
+        taskRepository.save(task);
+
+        createStep(taskId, "topic_clarify", "主题澄清", 1);
+        createStep(taskId, "academic_retrieve", "学术检索", 2);
+        createStep(taskId, "outline_generate", "大纲生成", 3);
+        createStep(taskId, "outline_quality_check", "大纲质检", 4);
+
+        taskExecutorService.executeTask(taskId);
+
+        return new GenerateResult(taskId, "queued");
+    }
+
     private void createStep(String taskId, String code, String name, int order) {
         TaskStepEntity step = new TaskStepEntity();
         step.setTaskId(taskId);
@@ -237,6 +301,45 @@ public class TaskService {
 
         return new TaskPreviewResult("http://localhost:5173/preview/" + taskId);
     }
+
+    public PaperOutlineResult getPaperOutline(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+        }
+        if (!"paper_outline".equals(task.getTaskType())) {
+            throw new BusinessException(ErrorCodes.CONFLICT, "任务类型不匹配");
+        }
+
+        PaperTopicSessionEntity session = paperTopicSessionRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "论文会话不存在"));
+        PaperOutlineVersionEntity outlineVersion = paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(session.getId())
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "论文大纲尚未生成"));
+
+        JsonNode outlineRoot = parseJson(outlineVersion.getOutlineJson());
+        JsonNode qualityRoot = parseJson(outlineVersion.getQualityReportJson());
+
+        JsonNode chapters = outlineRoot.path("chapters");
+        JsonNode references = outlineRoot.path("references");
+        List<String> researchQuestions = readStringArray(outlineRoot.path("researchQuestions"));
+        if (researchQuestions.isEmpty()) {
+            researchQuestions = readStringArray(parseJson(session.getResearchQuestionsJson()));
+        }
+
+        return new PaperOutlineResult(
+                taskId,
+                outlineVersion.getCitationStyle(),
+                session.getTopic(),
+                session.getTopicRefined(),
+                researchQuestions,
+                chapters.isMissingNode() ? objectMapper.createArrayNode() : chapters,
+                qualityRoot.isMissingNode() ? objectMapper.createObjectNode() : qualityRoot,
+                references.isMissingNode() ? objectMapper.createArrayNode() : references
+        );
+    }
     
     public byte[] getDownload(String taskId) {
         Long userId = requireUserId();
@@ -291,5 +394,30 @@ public class TaskService {
         log.setContent(content);
         log.setCreatedAt(LocalDateTime.now());
         taskLogRepository.save(log);
+    }
+
+    private JsonNode parseJson(String json) {
+        if (json == null || json.isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            return objectMapper.readTree(json);
+        } catch (Exception e) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private List<String> readStringArray(JsonNode node) {
+        List<String> result = new ArrayList<>();
+        if (node == null || !node.isArray()) {
+            return result;
+        }
+        node.forEach(n -> {
+            String value = n.asText("");
+            if (!value.isBlank()) {
+                result.add(value);
+            }
+        });
+        return result;
     }
 }

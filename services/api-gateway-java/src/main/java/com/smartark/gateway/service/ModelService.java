@@ -454,6 +454,198 @@ public class ModelService {
         }
     }
 
+    public JsonNode clarifyPaperTopic(String taskId,
+                                      String projectId,
+                                      String topic,
+                                      String discipline,
+                                      String degreeLevel,
+                                      String methodPreference) {
+        if (baseUrl.isEmpty()) {
+            return objectMapper.valueToTree(Map.of(
+                    "topicRefined", topic,
+                    "researchQuestions", List.of("核心研究问题是什么", "可行的研究方法是什么", "如何验证研究结论")
+            ));
+        }
+        long start = System.currentTimeMillis();
+        String templateKey = "paper_topic_clarify";
+        int versionNo = 1;
+        String modelName = codeModel;
+        try {
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("topic", topic);
+            vars.put("discipline", discipline);
+            vars.put("degreeLevel", degreeLevel);
+            vars.put("methodPreference", methodPreference == null ? "" : methodPreference);
+            String defaultSystemPrompt = "你是论文导师助手。请将输入主题细化为可执行毕业论文题目，并输出JSON：{topicRefined:string,researchQuestions:string[]}。";
+            String defaultUserPrompt = "主题：{{topic}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}";
+            JsonNode result = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
+            if (!result.has("topicRefined")) {
+                return objectMapper.valueToTree(Map.of(
+                        "topicRefined", topic,
+                        "researchQuestions", List.of("核心研究问题是什么", "可行的研究方法是什么", "如何验证研究结论")
+                ));
+            }
+            return result;
+        } catch (Exception e) {
+            logger.error("Failed to clarify paper topic", e);
+            return objectMapper.valueToTree(Map.of(
+                    "topicRefined", topic,
+                    "researchQuestions", List.of("核心研究问题是什么", "可行的研究方法是什么", "如何验证研究结论")
+            ));
+        }
+    }
+
+    public JsonNode generatePaperOutline(String taskId,
+                                         String projectId,
+                                         String topic,
+                                         String topicRefined,
+                                         String discipline,
+                                         String degreeLevel,
+                                         String methodPreference,
+                                         String researchQuestionsJson,
+                                         JsonNode sources) {
+        if (baseUrl.isEmpty()) {
+            return objectMapper.valueToTree(Map.of(
+                    "researchQuestions", List.of("研究问题1", "研究问题2"),
+                    "chapters", List.of(
+                            Map.of("title", "绪论", "sections", List.of(
+                                    Map.of("title", "研究背景", "subsections", List.of(
+                                            Map.of("title", "问题提出", "evidence", List.of())
+                                    ))
+                            ))
+                    ),
+                    "references", List.of()
+            ));
+        }
+        long start = System.currentTimeMillis();
+        String templateKey = "paper_outline_generate";
+        int versionNo = 1;
+        String modelName = codeModel;
+        try {
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("topic", topic);
+            vars.put("topicRefined", topicRefined == null ? "" : topicRefined);
+            vars.put("discipline", discipline);
+            vars.put("degreeLevel", degreeLevel);
+            vars.put("methodPreference", methodPreference == null ? "" : methodPreference);
+            vars.put("researchQuestions", researchQuestionsJson == null ? "[]" : researchQuestionsJson);
+            vars.put("sources", sources == null ? "[]" : objectMapper.writeValueAsString(sources));
+            String defaultSystemPrompt = "你是毕业论文结构专家。请输出JSON对象，包含researchQuestions、chapters、references。chapters需为章-节-小节三级结构，每个小节提供3条evidence，evidence包含paperId/title/url。";
+            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n候选文献：{{sources}}";
+            return runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
+        } catch (Exception e) {
+            logger.error("Failed to generate paper outline", e);
+            return objectMapper.valueToTree(Map.of(
+                    "researchQuestions", List.of(),
+                    "chapters", List.of(),
+                    "references", List.of()
+            ));
+        }
+    }
+
+    public JsonNode qualityCheckPaperOutline(String taskId,
+                                             String projectId,
+                                             String topic,
+                                             String topicRefined,
+                                             String citationStyle,
+                                             JsonNode outlineJson) {
+        if (baseUrl.isEmpty()) {
+            return objectMapper.valueToTree(Map.of(
+                    "logicClosedLoop", true,
+                    "methodConsistency", "ok",
+                    "citationVerifiability", "ok",
+                    "issues", List.of()
+            ));
+        }
+        long start = System.currentTimeMillis();
+        String templateKey = "paper_outline_quality_check";
+        int versionNo = 1;
+        String modelName = codeModel;
+        try {
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("topic", topic);
+            vars.put("topicRefined", topicRefined == null ? "" : topicRefined);
+            vars.put("citationStyle", citationStyle == null ? "GB/T 7714" : citationStyle);
+            vars.put("outlineJson", outlineJson == null ? "{}" : objectMapper.writeValueAsString(outlineJson));
+            String defaultSystemPrompt = "你是论文质量审查助手。请对大纲进行质检并输出JSON：logicClosedLoop,methodConsistency,citationVerifiability,issues。";
+            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n引文样式：{{citationStyle}}\n大纲：{{outlineJson}}";
+            return runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
+        } catch (Exception e) {
+            logger.error("Failed to quality check paper outline", e);
+            return objectMapper.valueToTree(Map.of(
+                    "logicClosedLoop", false,
+                    "methodConsistency", "unknown",
+                    "citationVerifiability", "unknown",
+                    "issues", List.of("质检失败")
+            ));
+        }
+    }
+
+    private JsonNode runPromptForJson(String taskId,
+                                      String projectId,
+                                      String templateKey,
+                                      int defaultVersionNo,
+                                      String defaultModelName,
+                                      Map<String, String> vars,
+                                      String defaultSystemPrompt,
+                                      String defaultUserPrompt,
+                                      long start) throws Exception {
+        int versionNo = defaultVersionNo;
+        String modelName = defaultModelName;
+        PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey).orElse(null);
+        String systemPrompt = defaultSystemPrompt;
+        String userPrompt = defaultUserPrompt;
+        if (resolvedPrompt != null) {
+            versionNo = resolvedPrompt.version().getVersionNo();
+            if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
+                modelName = resolvedPrompt.version().getModel();
+            }
+            if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
+                systemPrompt = resolvedPrompt.version().getSystemPrompt();
+            }
+            if (resolvedPrompt.version().getUserPrompt() != null && !resolvedPrompt.version().getUserPrompt().isBlank()) {
+                userPrompt = resolvedPrompt.version().getUserPrompt();
+            }
+        }
+
+        List<Map<String, String>> messages = new ArrayList<>();
+        messages.add(Map.of("role", "system", "content", promptRenderer.render(systemPrompt, vars)));
+        messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
+
+        Map<String, Object> payload = Map.of("model", modelName, "messages", messages);
+        String requestJson = objectMapper.writeValueAsString(payload);
+        String requestHash = hash(requestJson);
+        String response = callModelApi(payload);
+        JsonNode root = objectMapper.readTree(response);
+        String content = root.at("/choices/0/message/content").asText("");
+        String cleaned = cleanupJsonContent(content);
+        JsonNode parsed = objectMapper.readTree(cleaned);
+        savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
+        return parsed;
+    }
+
+    private String cleanupJsonContent(String content) {
+        if (content == null) {
+            return "{}";
+        }
+        String cleaned = content.trim();
+        if (cleaned.contains("```json")) {
+            cleaned = cleaned.substring(cleaned.indexOf("```json") + 7);
+            if (cleaned.contains("```")) {
+                cleaned = cleaned.substring(0, cleaned.indexOf("```"));
+            }
+        } else if (cleaned.startsWith("```")) {
+            int firstLineBreak = cleaned.indexOf("\n");
+            if (firstLineBreak != -1) {
+                cleaned = cleaned.substring(firstLineBreak + 1);
+            }
+            if (cleaned.contains("```")) {
+                cleaned = cleaned.substring(0, cleaned.indexOf("```"));
+            }
+        }
+        return cleaned.trim();
+    }
+
     private String callModelApi(Map<String, Object> payload) {
         String url;
         if (baseUrl.endsWith("/v1/") || baseUrl.endsWith("/v1")) {

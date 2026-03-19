@@ -1,5 +1,7 @@
 package com.smartark.gateway.agent;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
@@ -35,6 +37,7 @@ public class AgentOrchestrator {
     private final TaskLogRepository taskLogRepository;
     private final ProjectSpecRepository projectSpecRepository;
     private final Map<String, AgentStep> stepMap;
+    private final ObjectMapper objectMapper;
 
     @Value("${smartark.agent.workspace-root:/tmp/smartark/}")
     private String workspaceRoot;
@@ -47,11 +50,13 @@ public class AgentOrchestrator {
                              TaskStepRepository taskStepRepository,
                              TaskLogRepository taskLogRepository,
                              ProjectSpecRepository projectSpecRepository,
+                             ObjectMapper objectMapper,
                              List<AgentStep> agentSteps) {
         this.taskRepository = taskRepository;
         this.taskStepRepository = taskStepRepository;
         this.taskLogRepository = taskLogRepository;
         this.projectSpecRepository = projectSpecRepository;
+        this.objectMapper = objectMapper;
         this.stepMap = agentSteps.stream().collect(Collectors.toMap(AgentStep::getStepCode, step -> step));
     }
 
@@ -70,8 +75,11 @@ public class AgentOrchestrator {
 
             log(taskId, "info", "Task started: " + taskId);
 
-            ProjectSpecEntity spec = projectSpecRepository.findTopByProjectIdOrderByVersionDesc(task.getProjectId())
-                    .orElseThrow(() -> new RuntimeException("Project spec not found"));
+            ProjectSpecEntity spec = null;
+            if (!"paper_outline".equals(task.getTaskType())) {
+                spec = projectSpecRepository.findTopByProjectIdOrderByVersionDesc(task.getProjectId())
+                        .orElseThrow(() -> new RuntimeException("Project spec not found"));
+            }
 
             AgentExecutionContext context = new AgentExecutionContext();
             context.setTask(task);
@@ -80,6 +88,9 @@ public class AgentOrchestrator {
             context.setNormalizedInstructions(normalizeInstructions(task.getInstructions()));
             Path workspaceDir = Paths.get(workspaceRoot, taskId);
             context.setWorkspaceDir(workspaceDir);
+            if ("paper_outline".equals(task.getTaskType())) {
+                fillPaperContext(context, task.getInstructions());
+            }
 
             List<TaskStepEntity> steps = taskStepRepository.findByTaskIdOrderByStepOrderAsc(taskId);
 
@@ -252,6 +263,21 @@ public class AgentOrchestrator {
             return normalized.substring(0, maxLen);
         }
         return normalized;
+    }
+
+    private void fillPaperContext(AgentExecutionContext context, String instructionsJson) {
+        if (instructionsJson == null || instructionsJson.isBlank()) {
+            return;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(instructionsJson);
+            context.setTopic(root.path("topic").asText(""));
+            context.setDiscipline(root.path("discipline").asText(""));
+            context.setDegreeLevel(root.path("degreeLevel").asText(""));
+            context.setMethodPreference(root.path("methodPreference").asText(""));
+        } catch (Exception e) {
+            log(context.getTask().getId(), "warn", "Invalid paper instructions payload");
+        }
     }
 
     private void log(String taskId, String level, String content) {
