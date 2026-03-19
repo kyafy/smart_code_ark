@@ -79,11 +79,23 @@ export type GenerateResult = {
   status: string
 }
 
-export type TaskStatusResult = {
-  status: string
+export interface TaskStatusResult {
+  status: 'queued' | 'running' | 'finished' | 'failed'
   progress: number
-  step?: string
-  current_step?: string
+  step: string
+  current_step: string
+  projectId?: string
+  errorCode?: string
+  errorMessage?: string
+  startedAt?: string
+  finishedAt?: string
+}
+
+export interface TaskLogResult {
+  id: number
+  level: string
+  content: string
+  ts: number
 }
 
 export type TaskPreviewResult = {

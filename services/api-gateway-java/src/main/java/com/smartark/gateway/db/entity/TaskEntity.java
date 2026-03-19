@@ -41,6 +41,9 @@ public class TaskEntity {
     @Column(name = "result_url", length = 512)
     private String resultUrl;
 
+    @Column(name = "instructions", columnDefinition = "TEXT")
+    private String instructions;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -141,5 +144,13 @@ public class TaskEntity {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getInstructions() {
+        return instructions;
+    }
+
+    public void setInstructions(String instructions) {
+        this.instructions = instructions;
     }
 }

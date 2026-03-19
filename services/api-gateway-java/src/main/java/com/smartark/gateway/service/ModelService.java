@@ -284,7 +284,7 @@ public class ModelService {
         return List.of("用户", "核心业务", "管理后台");
     }
 
-    public List<String> generateProjectStructure(String prd, String stackBackend, String stackFrontend, String stackDb) {
+    public List<String> generateProjectStructure(String prd, String stackBackend, String stackFrontend, String stackDb, String instructions) {
         if (baseUrl.isEmpty()) {
             return List.of("README.md", "backend/src/main/java/App.java", "frontend/package.json");
         }
@@ -298,7 +298,11 @@ public class ModelService {
                 "请确保结构合理，包含必要的配置文件、代码文件和部署文件（Dockerfile, docker-compose.yml）。\n" +
                 "只输出JSON数组，不要包含Markdown标记或其他文字。"
             ));
-            messages.add(Map.of("role", "user", "content", "PRD内容：\n" + prd));
+            String userContent = "PRD内容：\n" + prd;
+            if (instructions != null && !instructions.isBlank()) {
+                userContent += "\n\n额外指令：\n" + instructions;
+            }
+            messages.add(Map.of("role", "user", "content", userContent));
 
             Map<String, Object> payload = Map.of(
                     "model", codeModel,
@@ -329,7 +333,7 @@ public class ModelService {
         }
     }
 
-    public String generateFileContent(String prd, String filePath, String techStack) {
+    public String generateFileContent(String prd, String filePath, String techStack, String instructions) {
         if (baseUrl.isEmpty()) {
             return "// Mock content for " + filePath;
         }
@@ -342,7 +346,11 @@ public class ModelService {
                 "请直接输出文件内容，不要包含Markdown标记（如 ```java ... ```），除非文件本身是Markdown格式。\n" +
                 "如果文件是代码，请确保可以直接运行或编译。"
             ));
-            messages.add(Map.of("role", "user", "content", "PRD内容：\n" + prd));
+            String userContent = "PRD内容：\n" + prd;
+            if (instructions != null && !instructions.isBlank()) {
+                userContent += "\n\n额外指令：\n" + instructions;
+            }
+            messages.add(Map.of("role", "user", "content", userContent));
 
             Map<String, Object> payload = Map.of(
                     "model", codeModel,

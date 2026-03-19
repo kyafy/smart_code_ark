@@ -54,4 +54,9 @@ public class TaskController {
                 .contentType(MediaType.parseMediaType("application/zip"))
                 .body(data);
     }
+
+    @GetMapping("/task/{taskId}/logs")
+    public ApiResponse<java.util.List<com.smartark.gateway.dto.TaskLogDto>> getLogs(@PathVariable("taskId") String taskId) {
+        return ApiResponse.success(taskService.getLogs(taskId));
+    }
 }

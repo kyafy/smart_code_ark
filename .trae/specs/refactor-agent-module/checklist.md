@@ -1,0 +1,8 @@
+- [x] 数据库启动不报错，成功执行 `V3__task_instructions.sql` 脚本
+- [x] `TaskEntity` 包含 `instructions` 字段
+- [x] `TaskService.modify` 发起的任务能够在数据库中正确持久化 `changeInstructions`
+- [x] `application.yml` 中成功配置并能通过注入读取 `workspace-root` 路径
+- [x] `AgentExecutionContext` 与 `AgentStep` 体系能被正常扫描为 Spring Bean，无循环依赖
+- [x] 提交新的 Generate 任务能够走通全流程，并在目标路径生成产物 ZIP
+- [x] 提交 Modify 任务能够将用户的 `changeInstructions` 传递给模型，影响生成内容（或者至少在代码传递链路上没有断层）
+- [x] `TaskExecutorService` 代码干净，没有旧的 switch-case 逻辑

@@ -1,26 +1,22 @@
 import { defineStore } from 'pinia'
+import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { taskApi } from '@/api/endpoints'
-import type { TaskStatusResult } from '@/types/api'
-
-export type TaskLog = {
-  id: string
-  level: 'info' | 'warn' | 'error'
-  content: string
-  ts: number
-}
+import type { TaskStatusResult, TaskLogResult } from '@/types/api'
 
 export const useTaskStore = defineStore('task', () => {
   const taskId = ref('')
-  const status = ref('')
+  const rawStatus = ref<TaskStatusResult | null>(null)
+  const status = ref('queued')
   const progress = ref(0)
   const currentStep = ref('')
-  const logs = ref<TaskLog[]>([])
+  const logs = ref<TaskLogResult[]>([])
 
   const isFinished = computed(() => status.value === 'finished')
-  const isFailed = computed(() => status.value === 'failed' || status.value === 'timeout')
+  const isFailed = computed(() => status.value === 'failed')
 
   const setFromStatus = (s: TaskStatusResult) => {
+    rawStatus.value = s
     status.value = s.status
     progress.value = s.progress
     currentStep.value = s.current_step ?? s.step ?? ''
@@ -28,19 +24,25 @@ export const useTaskStore = defineStore('task', () => {
 
   const loadStatus = async (id: string) => {
     taskId.value = id
-    const s = await taskApi.status(id)
-    setFromStatus(s)
-    logs.value.push({
-      id: `l_${Math.random().toString(36).slice(2, 10)}`,
-      level: 'info',
-      content: `状态更新：${s.status} ${s.progress}% ${s.current_step ?? s.step ?? ''}`,
-      ts: Date.now(),
-    })
+    try {
+      const s = await taskApi.status(id)
+      if (s.data) {
+        setFromStatus(s.data)
+        // Load real logs
+        const logsRes = await taskApi.logs(id)
+        if (logsRes.data) {
+          logs.value = logsRes.data
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load task status', error)
+    }
   }
 
   const reset = () => {
     taskId.value = ''
-    status.value = ''
+    rawStatus.value = null
+    status.value = 'queued'
     progress.value = 0
     currentStep.value = ''
     logs.value = []
@@ -48,6 +50,7 @@ export const useTaskStore = defineStore('task', () => {
 
   return {
     taskId,
+    rawStatus,
     status,
     progress,
     currentStep,
@@ -55,7 +58,7 @@ export const useTaskStore = defineStore('task', () => {
     isFinished,
     isFailed,
     loadStatus,
-    reset,
+    reset
   }
 })
 

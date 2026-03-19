@@ -1,10 +1,26 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { TaskLog } from '@/stores/task'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import type { TaskLogResult } from '@/types/api'
 
-const props = defineProps<{ logs: TaskLog[]; showHint?: boolean }>()
+const props = defineProps<{ logs: TaskLogResult[]; showHint?: boolean }>()
 
 const sorted = computed(() => [...props.logs].sort((a, b) => a.ts - b.ts))
+const logContainerRef = ref<HTMLDivElement | null>(null)
+
+const scrollToBottom = async () => {
+  await nextTick()
+  if (logContainerRef.value) {
+    logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
+  }
+}
+
+watch(() => props.logs, () => {
+  void scrollToBottom()
+}, { deep: true })
+
+onMounted(() => {
+  void scrollToBottom()
+})
 </script>
 
 <template>
@@ -13,7 +29,7 @@ const sorted = computed(() => [...props.logs].sort((a, b) => a.ts - b.ts))
       <div class="text-sm font-semibold">实时日志</div>
       <div v-if="props.showHint" class="text-xs text-slate-500">当前已降级为轮询</div>
     </div>
-    <div class="h-[260px] overflow-auto p-3">
+    <div ref="logContainerRef" class="h-[260px] overflow-auto p-3 scroll-smooth">
       <div v-if="sorted.length === 0" class="py-10 text-center text-sm text-slate-500">暂无日志</div>
       <div v-else class="flex flex-col gap-2">
         <div

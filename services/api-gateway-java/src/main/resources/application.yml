@@ -28,6 +28,8 @@ spring:
         enabled: false
 
 smartark:
+  agent:
+    workspace-root: /tmp/smartark/
   cors:
     allowed-origins: "*"
   auth:

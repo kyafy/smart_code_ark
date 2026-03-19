@@ -20,10 +20,13 @@ const poll = async () => {
   isPolling.value = true
   try {
     await task.loadStatus(taskId.value)
-    if (task.isFinished) {
+    if (task.isFinished || task.isFailed) {
       if (pollTimer) {
         window.clearInterval(pollTimer)
         pollTimer = null
+      }
+      if (task.isFinished && projectId.value) {
+        onViewResult()
       }
     }
   } catch (e) {
@@ -46,8 +49,7 @@ onBeforeUnmount(() => {
 })
 
 // Extract projectId if backend returns it in task status, else fallback to projects
-// In a real app, we should add projectId to TaskStatusResult
-const projectId = ref('')
+const projectId = computed(() => task.rawStatus?.projectId || '')
 
 const onViewResult = () => {
   if (projectId.value) {
@@ -73,8 +75,11 @@ const onViewResult = () => {
       </div>
 
       <div class="mt-4">
-        <el-progress :percentage="task.progress" :stroke-width="10" />
+        <el-progress :percentage="task.progress" :stroke-width="10" :status="task.status === 'failed' ? 'exception' : (task.status === 'finished' ? 'success' : '')" />
         <div class="mt-2 text-xs text-slate-500">当前步骤：{{ task.currentStep || '—' }}</div>
+        <div v-if="task.status === 'failed' && task.rawStatus?.errorMessage" class="mt-2 text-xs text-red-500">
+          错误信息：{{ task.rawStatus.errorMessage }}
+        </div>
       </div>
 
       <div class="mt-6">

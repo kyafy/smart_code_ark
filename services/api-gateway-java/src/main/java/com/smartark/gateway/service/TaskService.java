@@ -23,10 +23,16 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import com.smartark.gateway.db.entity.TaskLogEntity;
+import com.smartark.gateway.db.repo.TaskLogRepository;
+import com.smartark.gateway.dto.TaskLogDto;
+import java.time.ZoneId;
+
 @Service
 public class TaskService {
     private final TaskRepository taskRepository;
     private final TaskStepRepository taskStepRepository;
+    private final TaskLogRepository taskLogRepository;
     private final ProjectRepository projectRepository;
     private final ArtifactRepository artifactRepository;
     private final TaskExecutorService taskExecutorService;
@@ -34,12 +40,14 @@ public class TaskService {
 
     public TaskService(TaskRepository taskRepository,
                        TaskStepRepository taskStepRepository,
+                       TaskLogRepository taskLogRepository,
                        ProjectRepository projectRepository,
                        ArtifactRepository artifactRepository,
                        TaskExecutorService taskExecutorService,
                        BillingService billingService) {
         this.taskRepository = taskRepository;
         this.taskStepRepository = taskStepRepository;
+        this.taskLogRepository = taskLogRepository;
         this.projectRepository = projectRepository;
         this.artifactRepository = artifactRepository;
         this.taskExecutorService = taskExecutorService;
@@ -90,6 +98,7 @@ public class TaskService {
         task.setProjectId(projectId);
         task.setUserId(userId);
         task.setTaskType(taskType);
+        task.setInstructions(instructions);
         task.setStatus("queued");
         task.setProgress(0);
         task.setCreatedAt(now);
@@ -130,11 +139,27 @@ public class TaskService {
             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
         }
 
+        // Find startedAt and finishedAt from steps
+        List<TaskStepEntity> steps = taskStepRepository.findByTaskIdOrderByStepOrderAsc(taskId);
+        String startedAt = null;
+        String finishedAt = null;
+        if (!steps.isEmpty()) {
+            LocalDateTime firstStart = steps.get(0).getStartedAt();
+            if (firstStart != null) startedAt = firstStart.toString();
+            LocalDateTime lastFinish = steps.get(steps.size() - 1).getFinishedAt();
+            if (lastFinish != null) finishedAt = lastFinish.toString();
+        }
+
         return new TaskStatusResult(
                 task.getStatus(),
                 task.getProgress(),
                 task.getCurrentStep(),
-                task.getCurrentStep()
+                task.getCurrentStep(),
+                task.getProjectId(),
+                task.getErrorCode(),
+                task.getErrorMessage(),
+                startedAt,
+                finishedAt
         );
     }
 
@@ -176,5 +201,23 @@ public class TaskService {
         }
         
         throw new BusinessException(ErrorCodes.INTERNAL_ERROR, "不支持的存储协议: " + url);
+    }
+
+    public List<TaskLogDto> getLogs(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+        }
+
+        List<TaskLogEntity> logs = taskLogRepository.findByTaskIdOrderByCreatedAtAsc(taskId);
+        return logs.stream().map(log -> new TaskLogDto(
+                log.getId(),
+                log.getLevel(),
+                log.getContent(),
+                log.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        )).toList();
     }
 }
