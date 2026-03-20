@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ChatComposer from '@/components/ChatComposer.vue'
@@ -27,6 +27,18 @@ type SessionSummary = {
 }
 
 const sessions = ref<SessionSummary[]>([])
+
+const ensureViewportTop = async () => {
+  await nextTick()
+  window.scrollTo({ top: 0, behavior: 'auto' })
+  document.documentElement.scrollTop = 0
+  document.body.scrollTop = 0
+}
+
+const canAutoOpenLatest = () =>
+  sessionId.value === 'new'
+  && !String(route.query.initialMessage ?? '').trim()
+  && route.query.forceNew !== '1'
 
 const loadLocalSessions = async () => {
   if (import.meta.env.VITE_USE_MOCK === 'false') {
@@ -111,11 +123,22 @@ const overviewText = computed(() => {
 
 onMounted(async () => {
   if (!sessionId.value) return
-  loadLocalSessions()
+  await ensureViewportTop()
+  await loadLocalSessions()
   
   if (sessionId.value === 'new') {
+    if (canAutoOpenLatest() && sessions.value.length > 0) {
+      await router.replace({ name: 'chat', params: { sessionId: sessions.value[0].sessionId }, query: {} })
+      return
+    }
     chat.reset()
     isReady.value = true
+    await ensureViewportTop()
+    const initialMessage = route.query.initialMessage as string
+    if (initialMessage) {
+      await router.replace({ query: {} })
+      await onSend(initialMessage)
+    }
     return
   }
 
@@ -137,10 +160,23 @@ onMounted(async () => {
   }
 })
 
-watch(sessionId, async (newSid) => {
-  if (newSid && newSid !== chat.sessionId) {
+watch(sessionId, async (newSid, oldSid) => {
+  if (newSid && newSid !== oldSid) {
+    await ensureViewportTop()
     if (newSid === 'new') {
+      await loadLocalSessions()
+      if (canAutoOpenLatest() && sessions.value.length > 0) {
+        await router.replace({ name: 'chat', params: { sessionId: sessions.value[0].sessionId }, query: {} })
+        return
+      }
       chat.reset()
+      activeStep.value = 2
+      await ensureViewportTop()
+      const initialMessage = route.query.initialMessage as string
+      if (initialMessage) {
+        await router.replace({ query: {} })
+        await onSend(initialMessage)
+      }
       return
     }
     if (import.meta.env.VITE_USE_MOCK === 'false') {
@@ -208,7 +244,17 @@ const onConfirm = async () => {
 }
 
 const onNewChat = async () => {
-  await router.push({ name: 'chat', params: { sessionId: 'new' } })
+  if (sessionId.value === 'new') {
+    chat.reset()
+    activeStep.value = 2
+    await loadLocalSessions()
+    await router.replace({ name: 'chat', params: { sessionId: 'new' }, query: { forceNew: '1' } })
+    await ensureViewportTop()
+    ElMessage.success('已新建对话')
+    return
+  }
+  await router.push({ name: 'chat', params: { sessionId: 'new' }, query: { forceNew: '1' } })
+  await ensureViewportTop()
 }
 
 const onOpenSession = async (sid: string) => {
@@ -441,8 +487,8 @@ const onDeleteSession = async (sid: string) => {
       </div>
     </div>
 
-    <div class="col-span-12 lg:col-span-3">
-      <div v-if="sessionId !== 'new'" class="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-900 dark:bg-slate-950">
+    <div class="col-span-12 lg:col-span-3 lg:self-start">
+      <div v-if="sessionId !== 'new'" class="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-900 dark:bg-slate-950 lg:sticky lg:top-6">
         <div class="flex items-start justify-between gap-3">
           <div>
             <div class="text-sm font-semibold">需求文档</div>

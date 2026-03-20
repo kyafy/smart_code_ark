@@ -25,6 +25,7 @@ import com.smartark.gateway.dto.PaperOutlineGenerateRequest;
 import com.smartark.gateway.dto.PaperOutlineGenerateResult;
 import com.smartark.gateway.dto.PaperManuscriptResult;
 import com.smartark.gateway.dto.PaperOutlineResult;
+import com.smartark.gateway.dto.PaperProjectSummary;
 import com.smartark.gateway.dto.TaskModifyRequest;
 import com.smartark.gateway.dto.TaskPreviewResult;
 import com.smartark.gateway.dto.TaskStatusResult;
@@ -395,6 +396,27 @@ public class TaskService {
                 outlineVersion.getQualityScore(),
                 outlineVersion.getRewriteRound()
         );
+    }
+
+    public List<PaperProjectSummary> listPaperProjects() {
+        Long userId = requireUserId();
+        List<TaskEntity> tasks = taskRepository.findByUserIdAndTaskTypeOrderByUpdatedAtDesc(userId, "paper_outline");
+        List<PaperProjectSummary> result = new ArrayList<>();
+        for (TaskEntity task : tasks) {
+            PaperTopicSessionEntity session = paperTopicSessionRepository.findByTaskId(task.getId()).orElse(null);
+            if (session == null) {
+                continue;
+            }
+            result.add(new PaperProjectSummary(
+                    task.getId(),
+                    session.getTopic(),
+                    session.getDiscipline(),
+                    session.getDegreeLevel(),
+                    task.getStatus(),
+                    task.getUpdatedAt() == null ? null : task.getUpdatedAt().toString()
+            ));
+        }
+        return result;
     }
 
     public PaperManuscriptResult getPaperManuscript(String taskId) {

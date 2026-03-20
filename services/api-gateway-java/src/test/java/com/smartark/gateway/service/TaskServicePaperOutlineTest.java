@@ -14,6 +14,7 @@ import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.db.repo.ProjectRepository;
 import com.smartark.gateway.db.repo.TaskLogRepository;
+import com.smartark.gateway.db.repo.TaskPreviewRepository;
 import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
 import com.smartark.gateway.dto.PaperOutlineGenerateRequest;
@@ -53,11 +54,15 @@ class TaskServicePaperOutlineTest {
     @Mock
     private ArtifactRepository artifactRepository;
     @Mock
+    private TaskPreviewRepository taskPreviewRepository;
+    @Mock
     private PaperTopicSessionRepository paperTopicSessionRepository;
     @Mock
     private PaperOutlineVersionRepository paperOutlineVersionRepository;
     @Mock
     private TaskExecutorService taskExecutorService;
+    @Mock
+    private PreviewDeployService previewDeployService;
     @Mock
     private BillingService billingService;
 
@@ -71,9 +76,11 @@ class TaskServicePaperOutlineTest {
                 taskLogRepository,
                 projectRepository,
                 artifactRepository,
+                taskPreviewRepository,
                 paperTopicSessionRepository,
                 paperOutlineVersionRepository,
                 taskExecutorService,
+                previewDeployService,
                 billingService,
                 new ObjectMapper()
         );

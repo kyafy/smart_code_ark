@@ -6,6 +6,7 @@ const props = defineProps<{ disabled?: boolean }>()
 const emit = defineEmits<{ (e: 'send', value: string): void }>()
 
 const input = ref('')
+const inputEl = ref<HTMLInputElement>()
 
 const onSend = () => {
   const text = input.value.trim()
@@ -13,6 +14,14 @@ const onSend = () => {
   emit('send', text)
   input.value = ''
 }
+
+const focusInput = () => {
+  inputEl.value?.focus()
+}
+
+defineExpose({
+  focusInput,
+})
 </script>
 
 <template>
@@ -27,6 +36,7 @@ const onSend = () => {
         <Paperclip class="h-5 w-5" />
       </button>
       <input
+        ref="inputEl"
         v-model="input"
         class="h-10 w-full bg-transparent text-sm outline-none placeholder:text-slate-400 dark:placeholder:text-slate-600"
         placeholder="输入消息..."

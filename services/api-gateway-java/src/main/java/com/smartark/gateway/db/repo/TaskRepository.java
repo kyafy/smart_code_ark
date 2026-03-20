@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface TaskRepository extends JpaRepository<TaskEntity, String> {
     List<TaskEntity> findByProjectIdOrderByCreatedAtDesc(String projectId);
+    List<TaskEntity> findByUserIdAndTaskTypeOrderByUpdatedAtDesc(Long userId, String taskType);
 }

@@ -176,3 +176,12 @@ export type PaperManuscriptResult = {
   qualityScore?: number
   rewriteRound?: number
 }
+
+export type PaperProjectSummary = {
+  taskId: string
+  topic: string
+  discipline: string
+  degreeLevel: string
+  status: string
+  updatedAt?: string | null
+}

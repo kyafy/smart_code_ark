@@ -4,12 +4,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   CreditCard,
+  GraduationCap,
   HelpCircle,
   LayoutDashboard,
   LogOut,
   Moon,
   Settings,
-  Share2,
   User,
   Home,
   MessageSquare,
@@ -27,6 +27,7 @@ const activeKey = computed(() => {
   if (p.startsWith('/home')) return 'home'
   if (p.startsWith('/projects')) return 'projects'
   if (p.startsWith('/chat')) return 'chat'
+  if (p.startsWith('/paper')) return 'paper'
   if (p.startsWith('/recharge')) return 'recharge'
   if (p.startsWith('/profile')) return 'profile'
   if (p.startsWith('/tasks')) return 'tasks'
@@ -50,7 +51,7 @@ const toastSoon = () => {
         <div class="flex items-center justify-between px-4 py-4">
           <div class="flex items-center gap-2">
             <div class="h-8 w-8 rounded-lg bg-gradient-to-br from-teal-400 to-blue-600" />
-            <div class="text-sm font-semibold">智码方舟</div>
+            <div class="text-sm font-semibold">智研方舟</div>
           </div>
           <button
             type="button"
@@ -72,12 +73,6 @@ const toastSoon = () => {
                 : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
               @click="router.push({ name: 'home' })"
             >
-              <span class="relative flex h-2 w-2 items-center justify-center">
-                <span
-                  v-if="activeKey === 'home'"
-                  class="absolute inline-flex h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-300"
-                />
-              </span>
               <Home class="h-4 w-4 text-slate-500" />
               <span>首页</span>
             </button>
@@ -90,12 +85,6 @@ const toastSoon = () => {
                 : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
               @click="router.push({ name: 'projects' })"
             >
-              <span class="relative flex h-2 w-2 items-center justify-center">
-                <span
-                  v-if="activeKey === 'projects'"
-                  class="absolute inline-flex h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-300"
-                />
-              </span>
               <LayoutDashboard class="h-4 w-4 text-slate-500" />
               <span>我的项目</span>
             </button>
@@ -108,23 +97,20 @@ const toastSoon = () => {
                 : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
               @click="router.push({ name: 'chat', params: { sessionId: 'new' } })"
             >
-              <span class="relative flex h-2 w-2 items-center justify-center">
-                <span
-                  v-if="activeKey === 'chat'"
-                  class="absolute inline-flex h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-300"
-                />
-              </span>
               <MessageSquare class="h-4 w-4 text-slate-500" />
               <span>对话</span>
             </button>
 
             <button
               type="button"
-              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900"
-              @click="toastSoon"
+              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm"
+              :class="activeKey === 'paper'
+                ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'
+                : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
+              @click="router.push({ name: 'paper-topic' })"
             >
-              <Share2 class="h-4 w-4 text-slate-500" />
-              <span>分销中心</span>
+              <GraduationCap class="h-4 w-4 text-slate-500" />
+              <span>论文生成</span>
             </button>
 
             <button
@@ -149,7 +135,7 @@ const toastSoon = () => {
             </button>
           </div>
 
-          <div class="mt-10 space-y-1">
+          <div class="mt-4 space-y-1 border-t border-slate-200 pt-4 dark:border-slate-800">
             <button
               type="button"
               class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm"

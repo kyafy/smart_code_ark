@@ -38,7 +38,7 @@ watch(
 </script>
 
 <template>
-  <div ref="rootRef" class="h-[520px] overflow-auto rounded-2xl border bg-slate-50/50 p-4 dark:bg-slate-900/50 dark:border-slate-800">
+  <div ref="rootRef" class="h-[min(520px,calc(100dvh-280px))] overflow-y-auto rounded-2xl border bg-slate-50/50 p-4 dark:bg-slate-900/50 dark:border-slate-800">
     <div class="flex flex-col gap-6">
       <div
         v-for="m in sorted"
@@ -97,4 +97,3 @@ watch(
     </div>
   </div>
 </template>
-

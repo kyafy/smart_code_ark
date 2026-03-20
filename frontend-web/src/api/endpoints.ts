@@ -6,6 +6,11 @@ import type {
   ChatReplyResult,
   ChatStartResult,
   GenerateResult,
+  PaperOutlineGenerateRequest,
+  PaperOutlineGenerateResult,
+  PaperManuscriptResult,
+  PaperOutlineResult,
+  PaperProjectSummary,
   ProjectConfirmResult,
   ProjectSummary,
   RechargeOrderResult,
@@ -98,4 +103,12 @@ export const billingApi = {
     requestJson<RechargeOrderResult>({ method: 'GET', url: `/api/billing/recharge/orders/${orderId}` }),
   callbackRecharge: (payload: { orderId: string; paymentNo: string; signature: string; paidAmount?: number; payChannel?: string }) =>
     requestJson<RechargeOrderResult>({ method: 'POST', url: '/api/billing/recharge/callback', data: payload }),
+}
+
+export const paperApi = {
+  generateOutline: (payload: PaperOutlineGenerateRequest) =>
+    requestJson<PaperOutlineGenerateResult>({ method: 'POST', url: '/api/paper/outline', data: payload }),
+  getOutline: (taskId: string) => requestJson<PaperOutlineResult>({ method: 'GET', url: `/api/paper/outline/${taskId}` }),
+  getManuscript: (taskId: string) => requestJson<PaperManuscriptResult>({ method: 'GET', url: `/api/paper/manuscript/${taskId}` }),
+  list: () => requestJson<PaperProjectSummary[]>({ method: 'GET', url: '/api/paper/list' }),
 }

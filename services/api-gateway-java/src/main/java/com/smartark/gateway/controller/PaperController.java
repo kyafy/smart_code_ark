@@ -5,6 +5,7 @@ import com.smartark.gateway.dto.PaperOutlineGenerateRequest;
 import com.smartark.gateway.dto.PaperOutlineGenerateResult;
 import com.smartark.gateway.dto.PaperManuscriptResult;
 import com.smartark.gateway.dto.PaperOutlineResult;
+import com.smartark.gateway.dto.PaperProjectSummary;
 import com.smartark.gateway.service.TaskService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,6 +14,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/paper")
@@ -36,5 +39,10 @@ public class PaperController {
     @GetMapping("/manuscript/{taskId}")
     public ApiResponse<PaperManuscriptResult> getManuscript(@PathVariable("taskId") String taskId) {
         return ApiResponse.success(taskService.getPaperManuscript(taskId));
+    }
+
+    @GetMapping("/list")
+    public ApiResponse<List<PaperProjectSummary>> listPaperProjects() {
+        return ApiResponse.success(taskService.listPaperProjects());
     }
 }

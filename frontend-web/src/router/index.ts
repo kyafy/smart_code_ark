@@ -13,6 +13,10 @@ import TaskResultPage from '@/pages/TaskResultPage.vue'
 import PreviewPage from '@/pages/PreviewPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
 import RechargePage from '@/pages/RechargePage.vue'
+import PaperTopicPage from '@/pages/paper/PaperTopicPage.vue'
+import PaperOutlineProgressPage from '@/pages/paper/PaperOutlineProgressPage.vue'
+import PaperOutlineResultPage from '@/pages/paper/PaperOutlineResultPage.vue'
+import PaperManuscriptPage from '@/pages/paper/PaperManuscriptPage.vue'
 
 type RouteMeta = {
   requiresAuth?: boolean
@@ -101,6 +105,35 @@ const routes: RouteRecordRaw[] = [
     name: 'preview',
     component: PreviewPage,
     meta: { layout: 'blank' } satisfies RouteMeta,
+  },
+  {
+    path: '/paper',
+    redirect: '/paper/topic',
+    meta: { requiresAuth: true } satisfies RouteMeta,
+  },
+  {
+    path: '/paper/topic',
+    name: 'paper-topic',
+    component: PaperTopicPage,
+    meta: { requiresAuth: true } satisfies RouteMeta,
+  },
+  {
+    path: '/paper/outline/:taskId/progress',
+    name: 'paper-outline-progress',
+    component: PaperOutlineProgressPage,
+    meta: { requiresAuth: true } satisfies RouteMeta,
+  },
+  {
+    path: '/paper/outline/:taskId/result',
+    name: 'paper-outline-result',
+    component: PaperOutlineResultPage,
+    meta: { requiresAuth: true } satisfies RouteMeta,
+  },
+  {
+    path: '/paper/manuscript/:taskId',
+    name: 'paper-manuscript',
+    component: PaperManuscriptPage,
+    meta: { requiresAuth: true } satisfies RouteMeta,
   },
 ]
 
