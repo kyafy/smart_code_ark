@@ -11,6 +11,8 @@ import {
   Settings,
   Share2,
   User,
+  Home,
+  MessageSquare,
 } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useTheme } from '@/composables/useTheme'
@@ -22,7 +24,11 @@ const theme = useTheme()
 
 const activeKey = computed(() => {
   const p = String(route.path)
-  if (p.startsWith('/chat') || p.startsWith('/projects')) return 'chat'
+  if (p.startsWith('/home')) return 'home'
+  if (p.startsWith('/projects')) return 'projects'
+  if (p.startsWith('/chat')) return 'chat'
+  if (p.startsWith('/recharge')) return 'recharge'
+  if (p.startsWith('/profile')) return 'profile'
   if (p.startsWith('/tasks')) return 'tasks'
   return p
 })
@@ -61,10 +67,46 @@ const toastSoon = () => {
             <button
               type="button"
               class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm"
-              :class="activeKey === 'chat'
+              :class="activeKey === 'home'
+                ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'
+                : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
+              @click="router.push({ name: 'home' })"
+            >
+              <span class="relative flex h-2 w-2 items-center justify-center">
+                <span
+                  v-if="activeKey === 'home'"
+                  class="absolute inline-flex h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-300"
+                />
+              </span>
+              <Home class="h-4 w-4 text-slate-500" />
+              <span>首页</span>
+            </button>
+
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm"
+              :class="activeKey === 'projects'
                 ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'
                 : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
               @click="router.push({ name: 'projects' })"
+            >
+              <span class="relative flex h-2 w-2 items-center justify-center">
+                <span
+                  v-if="activeKey === 'projects'"
+                  class="absolute inline-flex h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-300"
+                />
+              </span>
+              <LayoutDashboard class="h-4 w-4 text-slate-500" />
+              <span>我的项目</span>
+            </button>
+
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm"
+              :class="activeKey === 'chat'
+                ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'
+                : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
+              @click="router.push({ name: 'chat', params: { sessionId: 'new' } })"
             >
               <span class="relative flex h-2 w-2 items-center justify-center">
                 <span
@@ -72,8 +114,8 @@ const toastSoon = () => {
                   class="absolute inline-flex h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-300"
                 />
               </span>
-              <LayoutDashboard class="h-4 w-4 text-slate-500" />
-              <span>我的项目</span>
+              <MessageSquare class="h-4 w-4 text-slate-500" />
+              <span>对话</span>
             </button>
 
             <button
@@ -87,8 +129,11 @@ const toastSoon = () => {
 
             <button
               type="button"
-              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900"
-              @click="toastSoon"
+              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm"
+              :class="activeKey === 'recharge'
+                ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'
+                : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
+              @click="router.push({ name: 'recharge' })"
             >
               <CreditCard class="h-4 w-4 text-slate-500" />
               <span>积分充值</span>
@@ -107,8 +152,11 @@ const toastSoon = () => {
           <div class="mt-10 space-y-1">
             <button
               type="button"
-              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900"
-              @click="toastSoon"
+              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm"
+              :class="activeKey === 'profile'
+                ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'
+                : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
+              @click="router.push({ name: 'profile' })"
             >
               <User class="h-4 w-4 text-slate-500" />
               <span>用户中心</span>

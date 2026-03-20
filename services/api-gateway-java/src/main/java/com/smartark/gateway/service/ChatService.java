@@ -80,7 +80,7 @@ public class ChatService {
 
     public List<Map<String, Object>> getHistorySessions() {
         Long userId = requireUserId();
-        return chatSessionRepository.findByUserIdOrderByUpdatedAtDesc(userId).stream()
+        return chatSessionRepository.findByUserIdAndStatusNotOrderByUpdatedAtDesc(userId, "deleted").stream()
                 .map(s -> {
                     Map<String, Object> map = new java.util.HashMap<>();
                     map.put("sessionId", s.getId());
@@ -95,11 +95,7 @@ public class ChatService {
 
     public ChatReplyResult getSessionMessages(String sessionId) {
         Long userId = requireUserId();
-        ChatSessionEntity session = chatSessionRepository.findById(sessionId)
-                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "会话不存在"));
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该会话");
-        }
+        ChatSessionEntity session = requireActiveOwnedSession(sessionId, userId);
 
         List<ChatMessageEntity> historyEntities = chatMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
         List<Map<String, String>> history = new ArrayList<>();
@@ -130,11 +126,7 @@ public class ChatService {
     @Transactional
     public ChatReplyResult chat(ChatSendRequest request) {
         Long userId = requireUserId();
-        ChatSessionEntity session = chatSessionRepository.findById(request.sessionId())
-                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "会话不存在"));
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该会话");
-        }
+        ChatSessionEntity session = requireActiveOwnedSession(request.sessionId(), userId);
 
         LocalDateTime now = LocalDateTime.now();
 
@@ -192,11 +184,7 @@ public class ChatService {
 
     public SseEmitter streamChat(ChatSendRequest request) {
         Long userId = requireUserId();
-        ChatSessionEntity session = chatSessionRepository.findById(request.sessionId())
-                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "会话不存在"));
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该会话");
-        }
+        ChatSessionEntity session = requireActiveOwnedSession(request.sessionId(), userId);
 
         LocalDateTime now = LocalDateTime.now();
         ChatMessageEntity userMsg = new ChatMessageEntity();
@@ -216,10 +204,25 @@ public class ChatService {
 
         SseEmitter emitter = new SseEmitter(180000L);
         AtomicBoolean closed = new AtomicBoolean(false);
-        emitter.onCompletion(() -> closed.set(true));
-        emitter.onTimeout(() -> closed.set(true));
-        emitter.onError(t -> closed.set(true));
+        AtomicBoolean isFirstToken = new AtomicBoolean(true);
         long t0 = System.nanoTime();
+        final long[] firstTokenTime = {0};
+
+        emitter.onCompletion(() -> closed.set(true));
+        emitter.onTimeout(() -> {
+            closed.set(true);
+            int latencyMs = (int) ((System.nanoTime() - t0) / 1_000_000L);
+            writePromptHistory(session, request.message(), history, new ModelService.ModelResult(
+                    "unknown", "", new ArrayList<>(), 0, 0
+            ), latencyMs, "failed", "504", "SSE 连接超时");
+            try {
+                emitter.send(SseEmitter.event().name("error").data(Map.of(
+                        "code", "504",
+                        "message", "对话请求超时"
+                )));
+            } catch (IOException ignored) {}
+        });
+        emitter.onError(t -> closed.set(true));
         
         Executors.newSingleThreadExecutor().submit(() -> {
             try {
@@ -229,6 +232,9 @@ public class ChatService {
                         content -> {
                             if (closed.get()) {
                                 return;
+                            }
+                            if (isFirstToken.getAndSet(false)) {
+                                firstTokenTime[0] = System.nanoTime();
                             }
                             try {
                                 logger.debug("Sending delta content: {}", content);
@@ -270,6 +276,10 @@ public class ChatService {
                                 chatSessionRepository.save(session);
                                 
                                 int latencyMs = (int) ((System.nanoTime() - t0) / 1_000_000L);
+                                int firstTokenLatencyMs = firstTokenTime[0] > 0 ? (int) ((firstTokenTime[0] - t0) / 1_000_000L) : latencyMs;
+                                
+                                logger.info("Chat stream completed. Request latency: {}ms, First token latency: {}ms", latencyMs, firstTokenLatencyMs);
+                                
                                 writePromptHistory(session, request.message(), history, new ModelService.ModelResult(
                                         "qwen-plus", cleanReply, new ArrayList<>(), 0, assistantMsg.getTokenUsed()
                                 ), latencyMs, "success", null, null);
@@ -295,7 +305,28 @@ public class ChatService {
                             if (closed.get()) {
                                 return;
                             }
-                            logger.error("Error in stream chat", e);
+                            int latencyMs = (int) ((System.nanoTime() - t0) / 1_000_000L);
+                            int firstTokenLatencyMs = firstTokenTime[0] > 0 ? (int) ((firstTokenTime[0] - t0) / 1_000_000L) : latencyMs;
+                            logger.error("Error in stream chat. Request latency: {}ms, First token latency: {}ms", latencyMs, firstTokenLatencyMs, e);
+                            
+                            String errorCode = "500";
+                            String errorMessage = e.getMessage();
+                            if (e instanceof BusinessException be) {
+                                errorCode = String.valueOf(be.getCode());
+                            } else if (e instanceof java.net.SocketTimeoutException) {
+                                errorCode = "504";
+                                errorMessage = "大模型响应超时";
+                            }
+                            writePromptHistory(session, request.message(), history, new ModelService.ModelResult(
+                                    "unknown", "", new ArrayList<>(), 0, 0
+                            ), latencyMs, "failed", errorCode, errorMessage);
+                            
+                            try {
+                                emitter.send(SseEmitter.event().name("error").data(Map.of(
+                                        "code", errorCode,
+                                        "message", errorMessage != null ? errorMessage : "内部服务器错误"
+                                )));
+                            } catch (IOException ignored) {}
                             emitter.completeWithError(e);
                         }
                 );
@@ -306,6 +337,20 @@ public class ChatService {
         });
 
         return emitter;
+    }
+
+    @Transactional
+    public void deleteSession(String sessionId) {
+        Long userId = requireUserId();
+        ChatSessionEntity session = requireOwnedSession(sessionId, userId);
+        if ("deleted".equalsIgnoreCase(session.getStatus())) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        session.setStatus("deleted");
+        session.setDeletedAt(now);
+        session.setUpdatedAt(now);
+        chatSessionRepository.save(session);
     }
 
     private void writePromptHistory(
@@ -369,5 +414,22 @@ public class ChatService {
         } catch (Exception e) {
             throw new BusinessException(ErrorCodes.UNAUTHORIZED, "未登录");
         }
+    }
+
+    private ChatSessionEntity requireOwnedSession(String sessionId, Long userId) {
+        ChatSessionEntity session = chatSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "会话不存在"));
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该会话");
+        }
+        return session;
+    }
+
+    private ChatSessionEntity requireActiveOwnedSession(String sessionId, Long userId) {
+        ChatSessionEntity session = requireOwnedSession(sessionId, userId);
+        if ("deleted".equalsIgnoreCase(session.getStatus())) {
+            throw new BusinessException(ErrorCodes.NOT_FOUND, "会话不存在");
+        }
+        return session;
     }
 }

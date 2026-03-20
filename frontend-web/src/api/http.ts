@@ -59,7 +59,7 @@ export const requestJson = async <T>(config: AxiosRequestConfig): Promise<T> => 
     const method = (config.method ?? 'GET').toString().toUpperCase()
     const url = String(config.url ?? '')
     const out = await handleMock({
-      method: method === 'POST' ? 'POST' : 'GET',
+      method: (['GET', 'POST', 'DELETE'].includes(method) ? method : 'GET') as 'GET' | 'POST' | 'DELETE',
       url,
       body: config.data,
       params: (config.params ?? undefined) as any,
@@ -79,7 +79,7 @@ export const requestBlob = async (config: AxiosRequestConfig): Promise<Blob> => 
     const method = (config.method ?? 'GET').toString().toUpperCase()
     const url = String(config.url ?? '')
     const out = await handleMock({
-      method: method === 'POST' ? 'POST' : 'GET',
+      method: (['GET', 'POST', 'DELETE'].includes(method) ? method : 'GET') as 'GET' | 'POST' | 'DELETE',
       url,
       body: config.data,
       params: (config.params ?? undefined) as any,
@@ -175,6 +175,10 @@ export const showApiError = (err: unknown) => {
   if (err instanceof ApiRequestError) {
     if (err.code === 2001 || err.httpStatus === 402) {
       ElMessage.warning('余额/积分不足')
+      return
+    }
+    if (err.code === 3106 || err.httpStatus === 429) {
+      ElMessage.warning('预览并发数已达上限，请关闭其他预览后重试')
       return
     }
     ElMessage.error(err.message)

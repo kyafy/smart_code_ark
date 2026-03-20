@@ -19,6 +19,12 @@ public final class ErrorCodes {
     public static final int TASK_IO_ERROR = 3005;
     public static final int TASK_VALIDATION_ERROR = 3006;
     public static final int TASK_CANCELLED = 3007;
+    public static final int PREVIEW_BUILD_FAILED = 3101;
+    public static final int PREVIEW_START_FAILED = 3102;
+    public static final int PREVIEW_PROXY_FAILED = 3103;
+    public static final int PREVIEW_TIMEOUT = 3104;
+    public static final int PREVIEW_REBUILD_STATE_INVALID = 3105;
+    public static final int PREVIEW_CONCURRENCY_LIMIT = 3106;
 
     public static final int INTERNAL_ERROR = 9000;
 

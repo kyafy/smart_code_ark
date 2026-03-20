@@ -12,6 +12,7 @@ import com.smartark.gateway.db.repo.ProjectSpecRepository;
 import com.smartark.gateway.db.repo.TaskLogRepository;
 import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
+import com.smartark.gateway.service.PreviewDeployService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,6 +37,7 @@ public class AgentOrchestrator {
     private final TaskStepRepository taskStepRepository;
     private final TaskLogRepository taskLogRepository;
     private final ProjectSpecRepository projectSpecRepository;
+    private final PreviewDeployService previewDeployService;
     private final Map<String, AgentStep> stepMap;
     private final ObjectMapper objectMapper;
 
@@ -50,12 +52,14 @@ public class AgentOrchestrator {
                              TaskStepRepository taskStepRepository,
                              TaskLogRepository taskLogRepository,
                              ProjectSpecRepository projectSpecRepository,
+                             PreviewDeployService previewDeployService,
                              ObjectMapper objectMapper,
                              List<AgentStep> agentSteps) {
         this.taskRepository = taskRepository;
         this.taskStepRepository = taskStepRepository;
         this.taskLogRepository = taskLogRepository;
         this.projectSpecRepository = projectSpecRepository;
+        this.previewDeployService = previewDeployService;
         this.objectMapper = objectMapper;
         this.stepMap = agentSteps.stream().collect(Collectors.toMap(AgentStep::getStepCode, step -> step));
     }
@@ -163,6 +167,9 @@ public class AgentOrchestrator {
             taskRepository.save(task);
 
             log(taskId, "info", "Task finished successfully");
+            if (shouldTriggerPreviewDeploy(task)) {
+                previewDeployService.deployPreviewAsync(taskId);
+            }
 
         } catch (Exception e) {
             logger.error("Task execution failed", e);
@@ -263,6 +270,11 @@ public class AgentOrchestrator {
             return normalized.substring(0, maxLen);
         }
         return normalized;
+    }
+
+    private boolean shouldTriggerPreviewDeploy(TaskEntity task) {
+        return "finished".equals(task.getStatus())
+                && ("generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType()));
     }
 
     private void fillPaperContext(AgentExecutionContext context, String instructionsJson) {

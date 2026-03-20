@@ -1,0 +1,137 @@
+Smart Code Ark v2.0 项目需求文档（MVP）
+文档版本：v2.0
+文档日期：2026-03-20
+适用范围：项目生成链路（generate / modify）
+关联系统：frontend-web、services/api-gateway-java
+1. 背景与目标
+当前系统已有任务生成、进度查看、ZIP 下载能力，但预览仍是占位链接，无法稳定展示真实项目页面。
+v2.0 目标是在不大改现有架构前提下，提供可用、可控、可回收的项目预览能力。
+
+本期仅支持两个触发节点：
+
+项目首次生成完成（taskType=generate 且任务状态 finished）。
+项目修改生成完成（taskType=modify 且任务状态 finished）。
+2. 产品范围
+2.1 In Scope
+任务完成后自动触发预览部署（异步）。
+后端可查询预览状态：provisioning / ready / failed / expired。
+前端结果页展示状态与预览入口，ready 后 iframe 加载。
+预览实例 TTL 到期自动回收。
+失败或过期后支持手动重建。
+2.2 Out of Scope
+任务执行过程中的实时热更新预览。
+多人协同批注/评论。
+跨任务页面差异对比。
+复杂弹性平台（K8s/gVisor/Firecracker）本期不强制。
+3. 用户与核心场景
+用户生成项目完成后，在结果页直接打开预览。
+用户发起修改生成完成后，查看新版本预览。
+用户打开历史任务，若预览过期可一键重建。
+4. 功能需求
+4.1 预览触发规则
+任务状态变为 finished 且 taskType in (generate, modify) 时触发 PreviewDeployService。
+paper_outline 等任务不触发预览。
+同一 taskId 保留一个当前有效预览记录。
+4.2 预览状态机
+provisioning：部署中。
+ready：可访问，返回 previewUrl。
+failed：部署失败，返回 lastError。
+expired：超过 TTL，实例已回收。
+流转：
+
+provisioning -> ready -> expired
+provisioning -> failed
+4.3 前端（结果页）
+进入页面自动调用 GET /api/task/{taskId}/preview。
+provisioning 时 2-3 秒轮询。
+ready 时 iframe 加载并支持新窗口打开。
+failed/expired 显示“重建预览”按钮。
+保持“下载 ZIP”“继续修改生成”原流程不变。
+4.4 后端接口
+GET /api/task/{taskId}/preview
+返回：taskId、status、previewUrl、expireAt、lastError。
+
+POST /api/task/{taskId}/preview/rebuild
+触发条件：failed/expired 或链接不可用。
+返回：status=provisioning。
+
+任务完成回调触发部署
+挂在 AgentOrchestrator 任务完成节点，异步执行，不阻塞任务主流程。
+
+4.5 数据模型（新增）
+建议新增 task_preview 表：
+
+id bigint PK
+task_id varchar(64) unique
+project_id varchar(64)
+user_id bigint
+status varchar(32)
+preview_url varchar(512)
+runtime_id varchar(128)
+expire_at datetime
+last_error varchar(1024)
+created_at datetime
+updated_at datetime
+索引建议：
+
+uk_task_id(task_id)
+idx_user_status(user_id, status)
+idx_expire_at(expire_at)
+5. 非功能需求
+资源与权限隔离（CPU/内存/超时限制）。
+查询接口稳定（GET preview p95 < 300ms，不含部署耗时）。
+部署链路可观测（开始/成功/失败/耗时日志）。
+默认 TTL=24h（可配 1h-72h）。
+6. MVP 迭代计划
+6.1 v2.0.0（基础可用）
+建 task_preview 表与仓储层。
+实现 PreviewDeployService。
+在任务 finished 节点自动触发部署。
+GET preview 返回真实状态。
+前端结果页状态展示+轮询。
+验收：
+
+generate/modify 完成后 3 分钟内可进入 ready（测试环境）。
+成功率 >= 90%（10 次样本）。
+6.2 v2.0.1（可恢复）
+增加 POST preview/rebuild。
+前端失败/过期状态支持一键重建。
+标准化失败原因与错误码。
+验收：
+
+失败任务可触发重建并进入 provisioning。
+重建成功率 >= 80%。
+6.3 v2.0.2（资源治理）
+TTL 自动回收并置 expired。
+每用户并发预览上限（默认 2）。
+部署/回收任务日志可追踪。
+验收：
+
+到期实例 10 分钟内清理完成。
+超限提示清晰可见。
+6.4 v2.0.3（体验增强）
+provisioning 阶段文案细化（拉起/部署/即将完成）。
+可选接入 SSE 推送（失败自动回退轮询）。
+验收：
+
+长等待无“假死”体验。
+SSE 异常自动降级可用。
+7. DoD（完成定义）
+仅在两个完成节点触发预览。
+用户可在结果页查看状态并打开真实预览。
+过期可重建且不影响 ZIP 下载和修改生成。
+关键日志、错误码、回收流程可追踪。
+文档、接口、数据库迁移脚本齐备。
+8. 风险与应对
+部署耗时波动：异步状态查询，不阻塞主任务完成。
+安全风险：独立预览域 + 容器资源/网络限制。
+成本上升：TTL + 并发上限 + 自动回收。
+9. 发布策略
+测试环境 -> 内部灰度 -> 全量。
+增加配置开关：preview.enabled、preview.autoDeployOnFinish。
+发生异常时可一键关闭自动部署，保留现有下载链路。
+10. 成功指标
+触发覆盖率（generate/modify finished）>= 95%。
+预览成功率（provisioning -> ready）>= 90%。
+首次可预览耗时 P50 <= 120s（测试/预发基线）。
+结果页预览点击率 >= 40%。

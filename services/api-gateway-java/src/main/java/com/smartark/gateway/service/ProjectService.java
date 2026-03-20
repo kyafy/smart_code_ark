@@ -67,6 +67,9 @@ public class ProjectService {
         if (!userId.equals(session.getUserId())) {
             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该会话");
         }
+        if ("deleted".equalsIgnoreCase(session.getStatus())) {
+            throw new BusinessException(ErrorCodes.NOT_FOUND, "会话不存在");
+        }
 
         if (session.getProjectId() != null && !session.getProjectId().isBlank()) {
             ProjectEntity existing = projectRepository.findById(session.getProjectId())

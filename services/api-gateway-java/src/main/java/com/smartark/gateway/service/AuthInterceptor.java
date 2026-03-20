@@ -21,6 +21,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         String path = request.getRequestURI();
         if (path.startsWith("/api/auth/") || path.startsWith("/api/v1/auth/")
                 || path.equals("/api/health") || path.equals("/api/v1/health")
+                || path.equals("/api/billing/recharge/callback")
                 || path.equals("/error")) {
             return true;
         }

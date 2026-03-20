@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import HomePage from '@/pages/HomePage.vue'
 import ChatPage from '@/pages/ChatPage.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import ProjectListPage from '@/pages/ProjectListPage.vue'
@@ -10,6 +11,8 @@ import StackConfirmPage from '@/pages/StackConfirmPage.vue'
 import TaskProgressPage from '@/pages/TaskProgressPage.vue'
 import TaskResultPage from '@/pages/TaskResultPage.vue'
 import PreviewPage from '@/pages/PreviewPage.vue'
+import ProfilePage from '@/pages/ProfilePage.vue'
+import RechargePage from '@/pages/RechargePage.vue'
 
 type RouteMeta = {
   requiresAuth?: boolean
@@ -19,7 +22,13 @@ type RouteMeta = {
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    redirect: '/projects',
+    redirect: '/home',
+  },
+  {
+    path: '/home',
+    name: 'home',
+    component: HomePage,
+    meta: { requiresAuth: true } satisfies RouteMeta,
   },
   {
     path: '/login',
@@ -73,6 +82,18 @@ const routes: RouteRecordRaw[] = [
     path: '/tasks/:taskId/result',
     name: 'task-result',
     component: TaskResultPage,
+    meta: { requiresAuth: true } satisfies RouteMeta,
+  },
+  {
+    path: '/profile',
+    name: 'profile',
+    component: ProfilePage,
+    meta: { requiresAuth: true } satisfies RouteMeta,
+  },
+  {
+    path: '/recharge',
+    name: 'recharge',
+    component: RechargePage,
     meta: { requiresAuth: true } satisfies RouteMeta,
   },
   {

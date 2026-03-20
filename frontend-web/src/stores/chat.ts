@@ -7,6 +7,8 @@ export type ChatMessage = {
   speaker: 'user' | 'assistant'
   message: string
   createdAt: number
+  status?: 'pending' | 'streaming' | 'done' | 'error'
+  errorMessage?: string
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -57,6 +59,7 @@ export const useChatStore = defineStore('chat', () => {
           speaker,
           message: String(m.message ?? ''),
           createdAt: baseTs - (rawMessages.length - idx) * 2000,
+          status: 'done',
         } satisfies ChatMessage
       })
     } catch {
@@ -79,6 +82,7 @@ export const useChatStore = defineStore('chat', () => {
             speaker: m.role === 'user' ? 'user' : 'assistant',
             message: m.content || '',
             createdAt: baseTs - (res.messages.length - idx) * 2000,
+            status: 'done',
           } satisfies ChatMessage
         })
       } else {
@@ -102,6 +106,7 @@ export const useChatStore = defineStore('chat', () => {
         speaker: 'user',
         message: text,
         createdAt: Date.now(),
+        status: 'done',
       }
       messages.value.push(userMsg)
 
@@ -111,14 +116,17 @@ export const useChatStore = defineStore('chat', () => {
         speaker: 'assistant',
         message: '',
         createdAt: Date.now(),
+        status: 'pending',
       }
       messages.value.push(aiMsg)
       const aiMsgIndex = messages.value.length - 1
 
       await chatApi.send({ sessionId: sessionId.value, message: text }, (event, data) => {
         if (event === 'delta') {
+          messages.value[aiMsgIndex].status = 'streaming'
           messages.value[aiMsgIndex].message += String(data)
         } else if (event === 'result') {
+          messages.value[aiMsgIndex].status = 'done'
           if (data.extractedRequirements) {
             extractedRequirements.value = data.extractedRequirements
           }
@@ -128,8 +136,20 @@ export const useChatStore = defineStore('chat', () => {
                  messages.value[aiMsgIndex].message = lastMsg.content
              }
           }
+        } else if (event === 'error') {
+          messages.value[aiMsgIndex].status = 'error'
+          messages.value[aiMsgIndex].errorMessage = String(data.message || '生成出错')
         }
       })
+    } catch (e) {
+      if (messages.value.length > 0) {
+        const lastMsg = messages.value[messages.value.length - 1]
+        if (lastMsg.speaker === 'assistant') {
+          lastMsg.status = 'error'
+          lastMsg.errorMessage = e instanceof Error ? e.message : '发送失败'
+        }
+      }
+      throw e
     } finally {
       isSending.value = false
     }

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import ChatComposer from '@/components/ChatComposer.vue'
 import ChatMessageList from '@/components/ChatMessageList.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
-import { showApiError } from '@/api/http'
+import { ApiRequestError, showApiError } from '@/api/http'
+import { chatApi } from '@/api/endpoints'
 import { useChatStore } from '@/stores/chat'
-import { ArrowRight, CheckCircle2, Plus, Sparkles } from 'lucide-vue-next'
+import { ArrowRight, CheckCircle2, MoreVertical, Plus, Sparkles, Trash2 } from 'lucide-vue-next'
 
 const router = useRouter()
 const route = useRoute()
@@ -30,11 +31,12 @@ const sessions = ref<SessionSummary[]>([])
 const loadLocalSessions = async () => {
   if (import.meta.env.VITE_USE_MOCK === 'false') {
     try {
-      const { chatApi } = await import('@/api/endpoints')
       const list = await chatApi.getSessions()
       sessions.value = list
         .map((s: any) => {
-          const updatedAt = typeof s.updatedAt === 'number' ? s.updatedAt : Date.now()
+          const updatedAt = typeof s.updatedAt === 'number'
+            ? s.updatedAt
+            : (Date.parse(String(s.updatedAt ?? '')) || Date.now())
           const messageCount = typeof s.messageCount === 'number' ? s.messageCount : 0
           return {
             sessionId: String(s.sessionId ?? ''),
@@ -45,6 +47,7 @@ const loadLocalSessions = async () => {
           } satisfies SessionSummary
         })
         .filter((s: SessionSummary) => Boolean(s.sessionId))
+        .sort((a, b) => b.updatedAt - a.updatedAt)
     } catch (e) {
       console.error('Failed to load history sessions', e)
       sessions.value = []
@@ -71,6 +74,7 @@ const loadLocalSessions = async () => {
           } satisfies SessionSummary
         })
         .filter((s: SessionSummary) => Boolean(s.sessionId))
+        .sort((a, b) => b.updatedAt - a.updatedAt)
     } catch {
       sessions.value = []
     }
@@ -108,6 +112,13 @@ const overviewText = computed(() => {
 onMounted(async () => {
   if (!sessionId.value) return
   loadLocalSessions()
+  
+  if (sessionId.value === 'new') {
+    chat.reset()
+    isReady.value = true
+    return
+  }
+
   if (import.meta.env.VITE_USE_MOCK === 'false') {
     await chat.loadSession(sessionId.value)
   } else {
@@ -128,17 +139,34 @@ onMounted(async () => {
 
 watch(sessionId, async (newSid) => {
   if (newSid && newSid !== chat.sessionId) {
+    if (newSid === 'new') {
+      chat.reset()
+      return
+    }
     if (import.meta.env.VITE_USE_MOCK === 'false') {
       await chat.loadSession(newSid)
     } else {
       chat.hydrateFromMock(newSid)
     }
     activeStep.value = 2
+
+    const initialMessage = route.query.initialMessage as string
+    if (initialMessage && chat.messages.length === 0) {
+      router.replace({ query: {} })
+      await onSend(initialMessage)
+    }
   }
 })
 
 const onSend = async (text: string) => {
   try {
+    if (sessionId.value === 'new') {
+      const title = text.length > 12 ? `${text.slice(0, 12)}...` : text
+      const newSid = await chat.startSession({ title, projectType: 'web', description: text })
+      await router.replace({ name: 'chat', params: { sessionId: newSid }, query: { initialMessage: text } })
+      return
+    }
+
     if (activeStep.value === 1) {
       const sid = await chat.startSession({
         title: chat.title || text.slice(0, 10),
@@ -155,6 +183,22 @@ const onSend = async (text: string) => {
   }
 }
 
+const onRetryMessage = async (index: number) => {
+  if (index <= 0) return
+  // Find the user message before this assistant message
+  const userMsg = chat.messages[index - 1]
+  if (!userMsg || userMsg.speaker !== 'user') {
+    ElMessage.warning('无法找到要重试的用户消息')
+    return
+  }
+  
+  // Remove the failed assistant message and the user message
+  chat.messages.splice(index - 1, 2)
+  
+  // Resend the user message
+  await onSend(userMsg.message)
+}
+
 const onConfirm = async () => {
   if (!chat.sessionId) {
     ElMessage.warning('会话未初始化')
@@ -164,13 +208,61 @@ const onConfirm = async () => {
 }
 
 const onNewChat = async () => {
-  await router.push({ name: 'projects' })
+  await router.push({ name: 'chat', params: { sessionId: 'new' } })
 }
 
 const onOpenSession = async (sid: string) => {
   if (!sid) return
-  chat.hydrateFromMock(sid)
+  if (import.meta.env.VITE_USE_MOCK === 'false') {
+    await chat.loadSession(sid)
+  } else {
+    chat.hydrateFromMock(sid)
+  }
   await router.push({ name: 'chat', params: { sessionId: sid } })
+}
+
+const showDeleteConfirm = async () => {
+  await ElMessageBox.confirm('仅删除当前会话，不影响项目数据。', '确认删除会话', {
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
+}
+
+const onDeleteSession = async (sid: string) => {
+  if (!sid) return
+  try {
+    await showDeleteConfirm()
+    await chatApi.deleteSession(sid)
+    if (sid === sessionId.value) {
+      chat.reset()
+      await router.push({ name: 'chat', params: { sessionId: 'new' } })
+    }
+    await loadLocalSessions()
+    ElMessage.success('会话已删除')
+  } catch (err) {
+    if (String((err as any)?.message || '').includes('cancel')) return
+    if (err instanceof ApiRequestError) {
+      if (err.code === 1003 || err.httpStatus === 403) {
+        ElMessage.error('无权限删除该会话')
+        return
+      }
+      if (err.code === 1004 || err.httpStatus === 404) {
+        ElMessage.warning('会话不存在或已删除')
+        await loadLocalSessions()
+        if (sid === sessionId.value) {
+          chat.reset()
+          await router.push({ name: 'chat', params: { sessionId: 'new' } })
+        }
+        return
+      }
+      if (err.httpStatus === 500 || err.code === 9000) {
+        ElMessage.error('删除失败，请稍后重试')
+        return
+      }
+    }
+    showApiError(err)
+  }
 }
 </script>
 
@@ -187,32 +279,66 @@ const onOpenSession = async (sid: string) => {
       </button>
 
       <div class="mt-4 space-y-3">
-        <button
+        <div
           v-for="s in sessions"
           :key="s.sessionId"
-          type="button"
-          class="w-full rounded-2xl border p-4 text-left shadow-sm transition dark:border-slate-900"
+          class="group w-full rounded-2xl border p-4 text-left shadow-sm transition dark:border-slate-900"
           :class="s.sessionId === sessionId
             ? 'bg-blue-600 text-white hover:bg-blue-700'
             : 'bg-white hover:shadow-md dark:bg-slate-950'"
-          @click="onOpenSession(s.sessionId)"
         >
-          <div class="flex items-start justify-between gap-3">
-            <div class="min-w-0">
+          <div class="flex items-start justify-between gap-2">
+            <button type="button" class="min-w-0 flex-1 text-left" @click="onOpenSession(s.sessionId)">
               <div class="truncate text-sm font-semibold">{{ s.title }}</div>
+              <div class="mt-2 flex items-center justify-between text-xs" :class="s.sessionId === sessionId ? 'text-white/80' : 'text-slate-500 dark:text-slate-400'">
+                <div>{{ s.messageCount }}条消息</div>
+                <div>{{ formatAgo(s.updatedAt) }}</div>
+              </div>
+            </button>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="hidden h-7 w-7 items-center justify-center rounded-md transition md:flex"
+                :class="s.sessionId === sessionId
+                  ? 'text-white/80 hover:bg-white/15 hover:text-white opacity-0 group-hover:opacity-100'
+                  : 'text-slate-400 hover:bg-slate-100 hover:text-rose-500 dark:hover:bg-slate-900 opacity-0 group-hover:opacity-100'"
+                @click.stop="onDeleteSession(s.sessionId)"
+              >
+                <Trash2 class="h-4 w-4" />
+              </button>
+              <el-dropdown trigger="click" class="md:hidden" @command="(cmd) => cmd === 'delete' && onDeleteSession(s.sessionId)">
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-md"
+                  :class="s.sessionId === sessionId
+                    ? 'text-white/80 hover:bg-white/15'
+                    : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900'"
+                  @click.stop
+                >
+                  <MoreVertical class="h-4 w-4" />
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="delete">
+                      删除会话
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
-            <span
-              class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
-              :class="s.sessionId === sessionId ? 'bg-white/15 text-white' : 'bg-blue-600 text-white'"
-            >
-              {{ s.status }}
-            </span>
           </div>
-          <div class="mt-2 flex items-center justify-between text-xs" :class="s.sessionId === sessionId ? 'text-white/80' : 'text-slate-500 dark:text-slate-400'">
-            <div>{{ s.messageCount }}条消息</div>
-            <div>{{ formatAgo(s.updatedAt) }}</div>
+          <div class="mt-2 flex items-start justify-between gap-3">
+            <div class="min-w-0" />
+            <div>
+              <span
+                class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                :class="s.sessionId === sessionId ? 'bg-white/15 text-white' : 'bg-blue-600 text-white'"
+              >
+                {{ s.status }}
+              </span>
+            </div>
           </div>
-        </button>
+        </div>
 
         <div v-if="sessions.length === 0" class="rounded-2xl border bg-white p-6 text-sm text-slate-500 dark:border-slate-900 dark:bg-slate-950 dark:text-slate-400">
           暂无对话记录
@@ -221,7 +347,17 @@ const onOpenSession = async (sid: string) => {
     </div>
 
     <div class="col-span-12 lg:col-span-6">
-      <div class="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-900 dark:bg-slate-950">
+      <div v-if="sessionId === 'new'" class="flex h-full flex-col items-center justify-center text-center py-20">
+        <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 shadow-sm dark:bg-blue-950/40 dark:text-blue-300">
+          <Sparkles class="h-7 w-7" />
+        </div>
+        <div class="mt-5 text-2xl font-semibold tracking-tight">开启新的项目对话</div>
+        <div class="mt-2 max-w-xl text-sm text-slate-500 dark:text-slate-400">
+          在下方输入框描述你的需求，AI 将为你梳理功能并生成项目
+        </div>
+      </div>
+      
+      <div v-else class="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-900 dark:bg-slate-950">
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0">
             <div class="truncate text-base font-semibold">{{ headerTitle }}</div>
@@ -288,7 +424,7 @@ const onOpenSession = async (sid: string) => {
 
           <div v-else-if="activeStep === 2" class="text-sm leading-relaxed">
             <div class="text-sm font-semibold mb-3">AI确认需求</div>
-            <ChatMessageList :messages="chat.messages" />
+            <ChatMessageList :messages="chat.messages" @retry="onRetryMessage" />
           </div>
 
           <div v-else class="text-sm leading-relaxed">
@@ -306,7 +442,7 @@ const onOpenSession = async (sid: string) => {
     </div>
 
     <div class="col-span-12 lg:col-span-3">
-      <div class="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-900 dark:bg-slate-950">
+      <div v-if="sessionId !== 'new'" class="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-900 dark:bg-slate-950">
         <div class="flex items-start justify-between gap-3">
           <div>
             <div class="text-sm font-semibold">需求文档</div>

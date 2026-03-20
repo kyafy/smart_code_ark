@@ -1,17 +1,21 @@
 import { requestBlob, requestJson, requestSse } from '@/api/http'
 import type {
   AuthLoginResult,
+  BalanceResult,
+  BillingRecordResult,
   ChatReplyResult,
   ChatStartResult,
   GenerateResult,
   ProjectConfirmResult,
   ProjectSummary,
+  RechargeOrderResult,
   ProjectDetail,
   SmsSendResult,
   StackConfig,
   TaskLogResult,
   TaskPreviewResult,
   TaskStatusResult,
+  UserProfileResult,
 } from '@/types/api'
 
 export const authApi = {
@@ -23,6 +27,10 @@ export const authApi = {
     requestJson<SmsSendResult>({ method: 'POST', url: '/api/auth/sms/send', data: payload }),
   loginSms: (payload: { phone: string; captcha: string }) =>
     requestJson<AuthLoginResult>({ method: 'POST', url: '/api/auth/login/sms', data: payload }),
+}
+
+export const userApi = {
+  profile: () => requestJson<UserProfileResult>({ method: 'GET', url: '/api/user/profile' }),
 }
 
 export const chatApi = {
@@ -38,6 +46,8 @@ export const chatApi = {
   getSessions: () => requestJson<any[]>({ method: 'GET', url: '/api/chat/sessions' }),
   getSessionMessages: (sessionId: string) =>
     requestJson<ChatReplyResult>({ method: 'GET', url: `/api/chat/sessions/${sessionId}/messages` }),
+  deleteSession: (sessionId: string) =>
+    requestJson<boolean>({ method: 'DELETE', url: `/api/chat/sessions/${sessionId}` }),
 }
 
 export const projectApi = {
@@ -51,7 +61,10 @@ export const taskApi = {
   generate: (payload: { projectId: string; instructions?: string }) =>
     requestJson<GenerateResult>({ method: 'POST', url: '/api/generate', data: payload }),
   status: (taskId: string) => requestJson<TaskStatusResult>({ method: 'GET', url: `/api/task/${taskId}/status` }),
-  preview: (taskId: string) => requestJson<TaskPreviewResult>({ method: 'GET', url: `/api/task/${taskId}/preview` }),
+  preview: (taskId: string): Promise<TaskPreviewResult> =>
+    requestJson<TaskPreviewResult>({ method: 'GET', url: `/api/task/${taskId}/preview` }),
+  rebuildPreview: (taskId: string): Promise<TaskPreviewResult> =>
+    requestJson<TaskPreviewResult>({ method: 'POST', url: `/api/task/${taskId}/preview/rebuild` }),
   download: (taskId: string) => requestBlob({ method: 'GET', url: `/api/task/${taskId}/download` }),
   modify: (taskId: string, payload: { changeInstructions: string }) =>
     requestJson<GenerateResult>({
@@ -74,4 +87,15 @@ export const taskApi = {
       url: `/api/task/${taskId}/logs`,
       method: 'GET'
     })
+}
+
+export const billingApi = {
+  getBalance: () => requestJson<BalanceResult>({ method: 'GET', url: '/api/billing/balance' }),
+  getRecords: () => requestJson<BillingRecordResult[]>({ method: 'GET', url: '/api/billing/records' }),
+  createRechargeOrder: (payload: { amount: number; quota: number; payChannel: string }) =>
+    requestJson<RechargeOrderResult>({ method: 'POST', url: '/api/billing/recharge/orders', data: payload }),
+  getRechargeOrder: (orderId: string) =>
+    requestJson<RechargeOrderResult>({ method: 'GET', url: `/api/billing/recharge/orders/${orderId}` }),
+  callbackRecharge: (payload: { orderId: string; paymentNo: string; signature: string; paidAmount?: number; payChannel?: string }) =>
+    requestJson<RechargeOrderResult>({ method: 'POST', url: '/api/billing/recharge/callback', data: payload }),
 }

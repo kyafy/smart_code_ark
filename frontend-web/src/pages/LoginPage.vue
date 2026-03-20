@@ -18,7 +18,7 @@ const smsForm = ref({ phone: '', captcha: '' })
 const countdown = ref(0)
 let timer: number | null = null
 
-const redirect = computed(() => String(route.query.redirect ?? '/projects'))
+const redirect = computed(() => String(route.query.redirect ?? '/home'))
 
 const startCountdown = () => {
   countdown.value = 60

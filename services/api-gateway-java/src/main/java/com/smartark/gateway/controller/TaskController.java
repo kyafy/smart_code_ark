@@ -41,6 +41,11 @@ public class TaskController {
         return ApiResponse.success(taskService.getPreview(taskId));
     }
 
+    @PostMapping("/task/{taskId}/preview/rebuild")
+    public ApiResponse<TaskPreviewResult> rebuildPreview(@PathVariable("taskId") String taskId) {
+        return ApiResponse.success(taskService.rebuildPreview(taskId));
+    }
+
     @PostMapping("/task/{taskId}/modify")
     public ApiResponse<GenerateResult> modify(@PathVariable("taskId") String taskId, @RequestBody TaskModifyRequest request) {
         return ApiResponse.success(taskService.modify(taskId, request));

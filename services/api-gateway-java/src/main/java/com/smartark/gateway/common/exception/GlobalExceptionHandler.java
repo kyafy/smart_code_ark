@@ -26,6 +26,10 @@ public class GlobalExceptionHandler {
             case ErrorCodes.QUOTA_INSUFFICIENT -> HttpStatus.PAYMENT_REQUIRED;
             case ErrorCodes.MODEL_SERVICE_ERROR -> HttpStatus.BAD_GATEWAY;
             case ErrorCodes.TASK_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            case ErrorCodes.PREVIEW_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            case ErrorCodes.PREVIEW_REBUILD_STATE_INVALID -> HttpStatus.CONFLICT;
+            case ErrorCodes.PREVIEW_CONCURRENCY_LIMIT -> HttpStatus.TOO_MANY_REQUESTS;
+            case ErrorCodes.PREVIEW_BUILD_FAILED, ErrorCodes.PREVIEW_START_FAILED, ErrorCodes.PREVIEW_PROXY_FAILED -> HttpStatus.BAD_GATEWAY;
             case ErrorCodes.TASK_FAILED, ErrorCodes.INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
             default -> HttpStatus.BAD_REQUEST;
         };

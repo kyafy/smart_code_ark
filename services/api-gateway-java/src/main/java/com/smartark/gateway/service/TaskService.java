@@ -9,11 +9,13 @@ import com.smartark.gateway.db.entity.PaperOutlineVersionEntity;
 import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.entity.ProjectEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
+import com.smartark.gateway.db.entity.TaskPreviewEntity;
 import com.smartark.gateway.db.entity.TaskStepEntity;
 import com.smartark.gateway.db.entity.ArtifactEntity;
 import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.db.repo.ProjectRepository;
+import com.smartark.gateway.db.repo.TaskPreviewRepository;
 import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
 import com.smartark.gateway.db.repo.ArtifactRepository;
@@ -25,6 +27,7 @@ import com.smartark.gateway.dto.PaperOutlineResult;
 import com.smartark.gateway.dto.TaskModifyRequest;
 import com.smartark.gateway.dto.TaskPreviewResult;
 import com.smartark.gateway.dto.TaskStatusResult;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,14 +44,19 @@ import java.time.ZoneId;
 
 @Service
 public class TaskService {
+    @Value("${smartark.preview.max-concurrent-per-user:2}")
+    private int previewMaxConcurrentPerUser;
+
     private final TaskRepository taskRepository;
     private final TaskStepRepository taskStepRepository;
     private final TaskLogRepository taskLogRepository;
     private final ProjectRepository projectRepository;
     private final ArtifactRepository artifactRepository;
+    private final TaskPreviewRepository taskPreviewRepository;
     private final PaperTopicSessionRepository paperTopicSessionRepository;
     private final PaperOutlineVersionRepository paperOutlineVersionRepository;
     private final TaskExecutorService taskExecutorService;
+    private final PreviewDeployService previewDeployService;
     private final BillingService billingService;
     private final ObjectMapper objectMapper;
 
@@ -57,9 +65,11 @@ public class TaskService {
                        TaskLogRepository taskLogRepository,
                        ProjectRepository projectRepository,
                        ArtifactRepository artifactRepository,
+                       TaskPreviewRepository taskPreviewRepository,
                        PaperTopicSessionRepository paperTopicSessionRepository,
                        PaperOutlineVersionRepository paperOutlineVersionRepository,
                        TaskExecutorService taskExecutorService,
+                       PreviewDeployService previewDeployService,
                        BillingService billingService,
                        ObjectMapper objectMapper) {
         this.taskRepository = taskRepository;
@@ -67,9 +77,11 @@ public class TaskService {
         this.taskLogRepository = taskLogRepository;
         this.projectRepository = projectRepository;
         this.artifactRepository = artifactRepository;
+        this.taskPreviewRepository = taskPreviewRepository;
         this.paperTopicSessionRepository = paperTopicSessionRepository;
         this.paperOutlineVersionRepository = paperOutlineVersionRepository;
         this.taskExecutorService = taskExecutorService;
+        this.previewDeployService = previewDeployService;
         this.billingService = billingService;
         this.objectMapper = objectMapper;
     }
@@ -299,7 +311,44 @@ public class TaskService {
             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
         }
 
-        return new TaskPreviewResult("http://localhost:5173/preview/" + taskId);
+        TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId)
+                .orElseGet(() -> buildPreviewFallback(task));
+        return toPreviewResult(taskId, preview);
+    }
+
+    @Transactional
+    public TaskPreviewResult rebuildPreview(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+        }
+        if (!isPreviewTargetTask(task)) {
+            throw new BusinessException(ErrorCodes.CONFLICT, "当前任务类型不支持预览重建");
+        }
+        TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "预览记录不存在"));
+        if (!"failed".equals(preview.getStatus()) && !"expired".equals(preview.getStatus())) {
+            throw new BusinessException(ErrorCodes.PREVIEW_REBUILD_STATE_INVALID, "仅 failed 或 expired 状态允许重建预览");
+        }
+        long activeCount = taskPreviewRepository.countByUserIdAndStatusIn(userId, List.of("provisioning", "ready"));
+        if (activeCount >= Math.max(previewMaxConcurrentPerUser, 1)) {
+            throw new BusinessException(
+                    ErrorCodes.PREVIEW_CONCURRENCY_LIMIT,
+                    "预览并发数已达上限(" + Math.max(previewMaxConcurrentPerUser, 1) + ")"
+            );
+        }
+        LocalDateTime now = LocalDateTime.now();
+        preview.setStatus("provisioning");
+        preview.setPreviewUrl(null);
+        preview.setExpireAt(null);
+        preview.setLastError(null);
+        preview.setUpdatedAt(now);
+        taskPreviewRepository.save(preview);
+        appendTaskLog(taskId, "info", "Preview rebuild requested");
+        previewDeployService.deployPreviewAsync(taskId);
+        return toPreviewResult(taskId, preview);
     }
 
     public PaperOutlineResult getPaperOutline(String taskId) {
@@ -420,4 +469,42 @@ public class TaskService {
         });
         return result;
     }
+
+    private TaskPreviewEntity buildPreviewFallback(TaskEntity task) {
+        if (!isPreviewTargetTask(task)) {
+            return null;
+        }
+        if (!"finished".equals(task.getStatus())) {
+            return buildTransientPreview(task.getId(), "provisioning", null, null, null);
+        }
+        return buildTransientPreview(task.getId(), "provisioning", null, null, null);
+    }
+
+    private TaskPreviewResult toPreviewResult(String taskId, TaskPreviewEntity preview) {
+        if (preview == null) {
+            return new TaskPreviewResult(taskId, "failed", null, null, "当前任务类型不支持预览");
+        }
+        return new TaskPreviewResult(
+                taskId,
+                preview.getStatus(),
+                preview.getPreviewUrl(),
+                preview.getExpireAt() == null ? null : preview.getExpireAt().toString(),
+                preview.getLastError()
+        );
+    }
+
+    private TaskPreviewEntity buildTransientPreview(String taskId, String status, String previewUrl, LocalDateTime expireAt, String lastError) {
+        TaskPreviewEntity preview = new TaskPreviewEntity();
+        preview.setTaskId(taskId);
+        preview.setStatus(status);
+        preview.setPreviewUrl(previewUrl);
+        preview.setExpireAt(expireAt);
+        preview.setLastError(lastError);
+        return preview;
+    }
+
+    private boolean isPreviewTargetTask(TaskEntity task) {
+        return "generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType());
+    }
+
 }

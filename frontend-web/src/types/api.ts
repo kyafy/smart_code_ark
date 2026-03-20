@@ -15,6 +15,14 @@ export type AuthLoginResult = {
   userId: number | string
 }
 
+export type UserProfileResult = {
+  userId: number
+  username: string
+  balance: number
+  quota: number
+  createdAt: string
+}
+
 export type SmsSendResult = {
   requestId: string
   expireIn: number
@@ -99,5 +107,37 @@ export interface TaskLogResult {
 }
 
 export type TaskPreviewResult = {
-  previewUrl: string
+  taskId: string
+  status: 'provisioning' | 'ready' | 'failed' | 'expired' | string
+  previewUrl?: string | null
+  expireAt?: string | null
+  lastError?: string | null
+}
+
+export type BalanceResult = {
+  balance: number
+  quota: number
+}
+
+export type BillingRecordResult = {
+  id: number
+  projectId?: string | null
+  taskId?: string | null
+  changeAmount: number
+  currency: string
+  reason: string
+  balanceAfter: number
+  createdAt: string
+}
+
+export type RechargeOrderResult = {
+  orderId: string
+  status: 'pending' | 'paid' | string
+  amount: number
+  quota: number
+  payChannel: string
+  paymentNo?: string | null
+  paidAt?: string | null
+  createdAt: string
+  updatedAt: string
 }

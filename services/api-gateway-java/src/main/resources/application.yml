@@ -32,6 +32,12 @@ smartark:
     workspace-root: /tmp/smartark/
     max-retries: 2
     retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate
+  preview:
+    enabled: ${PREVIEW_ENABLED:false}
+    auto-deploy-on-finish: ${PREVIEW_AUTO_DEPLOY_ON_FINISH:true}
+    default-ttl-hours: ${PREVIEW_DEFAULT_TTL_HOURS:24}
+    max-concurrent-per-user: ${PREVIEW_MAX_CONCURRENT_PER_USER:2}
+    recycle-interval-ms: ${PREVIEW_RECYCLE_INTERVAL_MS:60000}
   cors:
     allowed-origins: "*"
   auth:
@@ -43,6 +49,10 @@ smartark:
     mock-enabled: ${MODEL_MOCK_ENABLED:false}
     chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
     code-model: ${CODE_MODEL:qwen-plus}
+  billing:
+    recharge:
+      callback-mock-sign-enabled: ${RECHARGE_CALLBACK_MOCK_SIGN_ENABLED:true}
+      callback-mock-sign-secret: ${RECHARGE_CALLBACK_MOCK_SIGN_SECRET:smartark-recharge-secret}
   paper:
     semantic-scholar:
       base-url: ${SEMANTIC_SCHOLAR_BASE_URL:https://api.semanticscholar.org}
