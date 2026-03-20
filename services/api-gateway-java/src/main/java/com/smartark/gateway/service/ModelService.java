@@ -2,6 +2,8 @@ package com.smartark.gateway.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.db.entity.PromptHistoryEntity;
@@ -12,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 
 import java.io.BufferedReader;
@@ -187,6 +190,10 @@ public class ModelService {
                     });
         } catch (Exception e) {
             logger.error("Failed to initiate stream request", e);
+            if (e instanceof ResourceAccessException) {
+                onError.accept(new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用超时"));
+                return;
+            }
             onError.accept(e);
         }
     }
@@ -565,12 +572,13 @@ public class ModelService {
                                              String citationStyle,
                                              JsonNode outlineJson) {
         if (baseUrl.isEmpty()) {
-            return objectMapper.valueToTree(Map.of(
+            return normalizeQualityReport(objectMapper.valueToTree(Map.of(
                     "logicClosedLoop", true,
                     "methodConsistency", "ok",
                     "citationVerifiability", "ok",
+                    "overallScore", 85,
                     "issues", List.of()
-            ));
+            )));
         }
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_quality_check";
@@ -584,15 +592,91 @@ public class ModelService {
             vars.put("outlineJson", outlineJson == null ? "{}" : objectMapper.writeValueAsString(outlineJson));
             String defaultSystemPrompt = "你是论文质量审查助手。请对大纲进行质检并输出JSON：logicClosedLoop,methodConsistency,citationVerifiability,issues。";
             String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n引文样式：{{citationStyle}}\n大纲：{{outlineJson}}";
-            return runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
+            JsonNode raw = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
+            return normalizeQualityReport(raw);
         } catch (Exception e) {
             logger.error("Failed to quality check paper outline", e);
-            return objectMapper.valueToTree(Map.of(
+            return normalizeQualityReport(objectMapper.valueToTree(Map.of(
                     "logicClosedLoop", false,
                     "methodConsistency", "unknown",
                     "citationVerifiability", "unknown",
+                    "overallScore", 60,
                     "issues", List.of("质检失败")
-            ));
+            )));
+        }
+    }
+
+    public JsonNode expandPaperOutline(String taskId,
+                                       String projectId,
+                                       String topic,
+                                       String topicRefined,
+                                       String discipline,
+                                       String degreeLevel,
+                                       String methodPreference,
+                                       String researchQuestionsJson,
+                                       JsonNode outlineJson,
+                                       JsonNode sources) {
+        if (baseUrl.isEmpty()) {
+            return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);
+        }
+        long start = System.currentTimeMillis();
+        String templateKey = "paper_outline_expand";
+        int versionNo = 1;
+        String modelName = codeModel;
+        try {
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("topic", topic);
+            vars.put("topicRefined", topicRefined == null ? "" : topicRefined);
+            vars.put("discipline", discipline == null ? "" : discipline);
+            vars.put("degreeLevel", degreeLevel == null ? "" : degreeLevel);
+            vars.put("methodPreference", methodPreference == null ? "" : methodPreference);
+            vars.put("researchQuestions", researchQuestionsJson == null ? "[]" : researchQuestionsJson);
+            vars.put("outlineJson", outlineJson == null ? "{}" : objectMapper.writeValueAsString(outlineJson));
+            vars.put("sources", sources == null ? "[]" : objectMapper.writeValueAsString(sources));
+            String defaultSystemPrompt = "你是论文写作助手。请基于输入的大纲与文献，输出 JSON：{topic:string,topicRefined:string,researchQuestions:string[],chapters:[{index:number,title:string,summary:string,sections:[{title:string,content:string,citations:string[]}]}]}。仅输出 JSON。";
+            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n大纲：{{outlineJson}}\n候选文献：{{sources}}";
+            JsonNode result = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
+            if (!result.has("chapters")) {
+                return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);
+            }
+            return result;
+        } catch (Exception e) {
+            logger.error("Failed to expand paper outline", e);
+            return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);
+        }
+    }
+
+    public JsonNode rewriteOutlineByQualityIssues(String taskId,
+                                                  String projectId,
+                                                  String topic,
+                                                  String topicRefined,
+                                                  String citationStyle,
+                                                  JsonNode qualityReportJson,
+                                                  JsonNode manuscriptJson) {
+        if (baseUrl.isEmpty()) {
+            return fallbackRewriteResult(manuscriptJson, qualityReportJson);
+        }
+        long start = System.currentTimeMillis();
+        String templateKey = "paper_outline_quality_rewrite";
+        int versionNo = 1;
+        String modelName = codeModel;
+        try {
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("topic", topic == null ? "" : topic);
+            vars.put("topicRefined", topicRefined == null ? "" : topicRefined);
+            vars.put("citationStyle", citationStyle == null ? "GB/T 7714" : citationStyle);
+            vars.put("qualityReportJson", qualityReportJson == null ? "{}" : objectMapper.writeValueAsString(qualityReportJson));
+            vars.put("manuscriptJson", manuscriptJson == null ? "{}" : objectMapper.writeValueAsString(manuscriptJson));
+            String defaultSystemPrompt = "你是论文改写助手。请根据质检问题修订文稿，输出 JSON：{manuscript:{...},appliedIssues:string[],summary:string}。仅输出 JSON。";
+            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n引用规范：{{citationStyle}}\n质检报告：{{qualityReportJson}}\n当前文稿：{{manuscriptJson}}";
+            JsonNode result = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
+            if (!result.has("manuscript")) {
+                return fallbackRewriteResult(manuscriptJson, qualityReportJson);
+            }
+            return result;
+        } catch (Exception e) {
+            logger.error("Failed to rewrite paper manuscript by quality issues", e);
+            return fallbackRewriteResult(manuscriptJson, qualityReportJson);
         }
     }
 
@@ -630,13 +714,19 @@ public class ModelService {
         Map<String, Object> payload = Map.of("model", modelName, "messages", messages);
         String requestJson = objectMapper.writeValueAsString(payload);
         String requestHash = hash(requestJson);
-        String response = callModelApi(payload);
-        JsonNode root = objectMapper.readTree(response);
-        String content = root.at("/choices/0/message/content").asText("");
-        String cleaned = cleanupJsonContent(content);
-        JsonNode parsed = objectMapper.readTree(cleaned);
-        savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
-        return parsed;
+        try {
+            String response = callModelApi(payload);
+            JsonNode root = objectMapper.readTree(response);
+            String content = root.at("/choices/0/message/content").asText("");
+            String cleaned = cleanupJsonContent(content);
+            JsonNode parsed = objectMapper.readTree(cleaned);
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
+            return parsed;
+        } catch (Exception e) {
+            String errorCode = e instanceof BusinessException be ? String.valueOf(be.getCode()) : String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR);
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", errorCode, e.getMessage());
+            throw e;
+        }
     }
 
     private String cleanupJsonContent(String content) {
@@ -668,17 +758,117 @@ public class ModelService {
         } else {
             url = baseUrl.endsWith("/") ? baseUrl + "v1/chat/completions" : baseUrl + "/v1/chat/completions";
         }
+        try {
+            return restClient.post()
+                    .uri(url)
+                    .headers(h -> {
+                        if (!apiKey.isEmpty()) {
+                            h.set("Authorization", "Bearer " + apiKey);
+                        }
+                    })
+                    .body(payload)
+                    .retrieve()
+                    .body(String.class);
+        } catch (ResourceAccessException e) {
+            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用超时");
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败");
+        }
+    }
 
-        return restClient.post()
-                .uri(url)
-                .headers(h -> {
-                    if (!apiKey.isEmpty()) {
-                        h.set("Authorization", "Bearer " + apiKey);
+    private JsonNode fallbackExpandedManuscript(String topic,
+                                                String topicRefined,
+                                                String researchQuestionsJson,
+                                                JsonNode outlineJson) {
+        try {
+            JsonNode questions = researchQuestionsJson == null || researchQuestionsJson.isBlank()
+                    ? objectMapper.createArrayNode()
+                    : objectMapper.readTree(researchQuestionsJson);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("topic", topic == null ? "" : topic);
+            result.put("topicRefined", topicRefined == null ? "" : topicRefined);
+            result.put("researchQuestions", questions);
+            result.put("chapters", outlineJson == null ? objectMapper.createArrayNode() : outlineJson.path("chapters"));
+            return objectMapper.valueToTree(result);
+        } catch (Exception e) {
+            return objectMapper.valueToTree(Map.of(
+                    "topic", topic == null ? "" : topic,
+                    "topicRefined", topicRefined == null ? "" : topicRefined,
+                    "researchQuestions", List.of(),
+                    "chapters", List.of()
+            ));
+        }
+    }
+
+    private JsonNode fallbackRewriteResult(JsonNode manuscriptJson, JsonNode qualityReportJson) {
+        JsonNode issues = qualityReportJson == null ? objectMapper.createArrayNode() : qualityReportJson.path("issues");
+        return objectMapper.valueToTree(Map.of(
+                "manuscript", manuscriptJson == null ? objectMapper.createObjectNode() : manuscriptJson,
+                "appliedIssues", issues.isArray() ? issues : objectMapper.createArrayNode(),
+                "summary", "质量回写降级：沿用原文稿"
+        ));
+    }
+
+    private JsonNode normalizeQualityReport(JsonNode raw) {
+        JsonNode node = raw == null ? objectMapper.createObjectNode() : raw;
+        boolean logicClosedLoop = node.path("logicClosedLoop").asBoolean(true);
+        String methodConsistency = node.path("methodConsistency").asText("ok");
+        String citationVerifiability = node.path("citationVerifiability").asText("ok");
+        int score = node.has("overallScore") ? node.path("overallScore").asInt(0) : node.path("score").asInt(0);
+        if (score < 0) {
+            score = 0;
+        }
+        if (score > 100) {
+            score = 100;
+        }
+        ArrayNode issues = objectMapper.createArrayNode();
+        JsonNode rawIssues = node.path("issues");
+        if (rawIssues.isArray()) {
+            for (JsonNode issueNode : rawIssues) {
+                ObjectNode issue = objectMapper.createObjectNode();
+                if (issueNode.isObject()) {
+                    String field = issueNode.path("field").asText("outline");
+                    String severity = issueNode.path("severity").asText("medium");
+                    String suggestion = issueNode.path("suggestion").asText("");
+                    String message = issueNode.path("message").asText("");
+                    if (message.isBlank()) {
+                        message = suggestion.isBlank() ? "发现可改进项" : suggestion;
                     }
-                })
-                .body(payload)
-                .retrieve()
-                .body(String.class);
+                    if (suggestion.isBlank()) {
+                        suggestion = message;
+                    }
+                    issue.put("field", field);
+                    issue.put("severity", normalizeSeverity(severity));
+                    issue.put("suggestion", suggestion);
+                    issue.put("message", message);
+                } else {
+                    String message = issueNode.asText("").isBlank() ? "发现可改进项" : issueNode.asText("");
+                    issue.put("field", "outline");
+                    issue.put("severity", "medium");
+                    issue.put("suggestion", message);
+                    issue.put("message", message);
+                }
+                issues.add(issue);
+            }
+        }
+
+        ObjectNode normalized = objectMapper.createObjectNode();
+        normalized.put("logicClosedLoop", logicClosedLoop);
+        normalized.put("methodConsistency", methodConsistency);
+        normalized.put("citationVerifiability", citationVerifiability);
+        normalized.put("overallScore", score);
+        normalized.set("issues", issues);
+        return normalized;
+    }
+
+    private String normalizeSeverity(String severity) {
+        String s = severity == null ? "" : severity.trim().toLowerCase();
+        if ("high".equals(s) || "medium".equals(s) || "low".equals(s)) {
+            return s;
+        }
+        return "medium";
     }
 
     private void savePromptHistory(String taskId,

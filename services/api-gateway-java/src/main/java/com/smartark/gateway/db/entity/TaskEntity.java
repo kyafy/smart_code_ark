@@ -119,7 +119,7 @@ public class TaskEntity {
     }
 
     public void setErrorMessage(String errorMessage) {
-        this.errorMessage = errorMessage;
+        this.errorMessage = truncate(errorMessage, 255);
     }
 
     public String getResultUrl() {
@@ -152,5 +152,15 @@ public class TaskEntity {
 
     public void setInstructions(String instructions) {
         this.instructions = instructions;
+    }
+
+    private static String truncate(String value, int maxLen) {
+        if (value == null) {
+            return null;
+        }
+        if (value.length() <= maxLen) {
+            return value;
+        }
+        return value.substring(0, maxLen);
     }
 }

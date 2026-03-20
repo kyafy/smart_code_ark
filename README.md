@@ -105,6 +105,22 @@ mvn spring-boot:run -DskipTests
 
 健康检查：`GET http://localhost:8080/actuator/health`
 
+### 实时查看后端日志
+
+如果你使用 `bash scripts/dev-up.sh` 启动服务，后端日志默认写入：`.logs/backend.log`。
+
+实时跟踪日志：
+
+```bash
+tail -f .logs/backend.log
+```
+
+只看最近错误/异常（便于快速定位 500/超时等问题）：
+
+```bash
+egrep -n "ERROR|Exception|Caused by|status=5[0-9]{2}" .logs/backend.log | tail -n 120
+```
+
 ### 3. 启动前端服务
 
 ```bash

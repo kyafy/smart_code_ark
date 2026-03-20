@@ -1,15 +1,36 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { showApiError } from '@/api/http'
 import { useChatStore } from '@/stores/chat'
+import { PAPER_CODEGEN_SEED_KEY, QUERY_FROM, QUERY_SOURCE_TASK_ID } from '@/constants/navigation'
+import type { CodegenSeedSpec } from '@/mappers/paperToCodegen'
 
 const router = useRouter()
+const route = useRoute()
 const chat = useChatStore()
 
 const isSubmitting = ref(false)
 const form = ref({ title: '', description: '', projectType: 'web' })
+const seedHint = ref('')
+
+onMounted(() => {
+  const from = String(route.query[QUERY_FROM] ?? '')
+  if (from !== 'paper') return
+  const raw = sessionStorage.getItem(PAPER_CODEGEN_SEED_KEY)
+  if (!raw) return
+  try {
+    const seed = JSON.parse(raw) as CodegenSeedSpec
+    form.value.title = seed.title || form.value.title
+    form.value.description = seed.description || form.value.description
+    form.value.projectType = seed.projectType || form.value.projectType
+    const sourceTaskId = String(route.query[QUERY_SOURCE_TASK_ID] ?? '')
+    seedHint.value = sourceTaskId ? `已从论文任务 ${sourceTaskId} 注入生成草案` : '已从论文结果注入生成草案'
+  } catch {
+    return
+  }
+})
 
 const onSubmit = async () => {
   const title = form.value.title.trim()
@@ -39,6 +60,9 @@ const onSubmit = async () => {
   <div class="rounded-2xl border bg-white p-5">
     <div class="text-base font-semibold">新建会话</div>
     <div class="mt-1 text-sm text-slate-500">先通过对话梳理需求，再选择技术栈生成项目工程</div>
+    <div v-if="seedHint" class="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
+      {{ seedHint }}
+    </div>
 
     <div class="mt-6 grid grid-cols-1 gap-4">
       <div>
@@ -68,4 +92,3 @@ const onSubmit = async () => {
     </div>
   </div>
 </template>
-

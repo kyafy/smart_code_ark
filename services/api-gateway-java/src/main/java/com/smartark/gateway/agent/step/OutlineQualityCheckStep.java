@@ -11,6 +11,7 @@ import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.service.ModelService;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Component
@@ -51,6 +52,15 @@ public class OutlineQualityCheckStep implements AgentStep {
                 objectMapper.readTree(version.getOutlineJson())
         );
         version.setQualityReportJson(objectMapper.writeValueAsString(qualityReport));
+        int score = 0;
+        if (qualityReport.has("overallScore")) {
+            score = qualityReport.path("overallScore").asInt(0);
+        } else if (qualityReport.has("score")) {
+            score = qualityReport.path("score").asInt(0);
+        }
+        if (score > 0) {
+            version.setQualityScore(BigDecimal.valueOf(score));
+        }
         paperOutlineVersionRepository.save(version);
 
         context.setQualityReportJson(version.getQualityReportJson());

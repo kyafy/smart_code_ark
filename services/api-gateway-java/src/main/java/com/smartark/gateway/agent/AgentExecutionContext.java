@@ -24,7 +24,10 @@ public class AgentExecutionContext {
     private String methodPreference;
     private List<PaperSourceItem> retrievedSources;
     private String outlineDraftJson;
+    private String expandedOutlineJson;
+    private String manuscriptJson;
     private String qualityReportJson;
+    private List<String> qualityIssues;
 
     public TaskEntity getTask() {
         return task;
@@ -152,5 +155,29 @@ public class AgentExecutionContext {
 
     public void setQualityReportJson(String qualityReportJson) {
         this.qualityReportJson = qualityReportJson;
+    }
+
+    public String getExpandedOutlineJson() {
+        return expandedOutlineJson;
+    }
+
+    public void setExpandedOutlineJson(String expandedOutlineJson) {
+        this.expandedOutlineJson = expandedOutlineJson;
+    }
+
+    public String getManuscriptJson() {
+        return manuscriptJson;
+    }
+
+    public void setManuscriptJson(String manuscriptJson) {
+        this.manuscriptJson = manuscriptJson;
+    }
+
+    public List<String> getQualityIssues() {
+        return qualityIssues;
+    }
+
+    public void setQualityIssues(List<String> qualityIssues) {
+        this.qualityIssues = qualityIssues;
     }
 }

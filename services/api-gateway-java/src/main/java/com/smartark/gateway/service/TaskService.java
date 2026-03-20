@@ -23,6 +23,7 @@ import com.smartark.gateway.dto.GenerateRequest;
 import com.smartark.gateway.dto.GenerateResult;
 import com.smartark.gateway.dto.PaperOutlineGenerateRequest;
 import com.smartark.gateway.dto.PaperOutlineGenerateResult;
+import com.smartark.gateway.dto.PaperManuscriptResult;
 import com.smartark.gateway.dto.PaperOutlineResult;
 import com.smartark.gateway.dto.TaskModifyRequest;
 import com.smartark.gateway.dto.TaskPreviewResult;
@@ -248,7 +249,9 @@ public class TaskService {
         createStep(taskId, "topic_clarify", "主题澄清", 1);
         createStep(taskId, "academic_retrieve", "学术检索", 2);
         createStep(taskId, "outline_generate", "大纲生成", 3);
-        createStep(taskId, "outline_quality_check", "大纲质检", 4);
+        createStep(taskId, "outline_expand", "内容扩展", 4);
+        createStep(taskId, "outline_quality_check", "大纲质检", 5);
+        createStep(taskId, "quality_rewrite", "质量回写", 6);
 
         taskExecutorService.executeTask(taskId);
 
@@ -369,6 +372,7 @@ public class TaskService {
                 .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "论文大纲尚未生成"));
 
         JsonNode outlineRoot = parseJson(outlineVersion.getOutlineJson());
+        JsonNode manuscriptRoot = parseJson(outlineVersion.getManuscriptJson());
         JsonNode qualityRoot = parseJson(outlineVersion.getQualityReportJson());
 
         JsonNode chapters = outlineRoot.path("chapters");
@@ -385,8 +389,42 @@ public class TaskService {
                 session.getTopicRefined(),
                 researchQuestions,
                 chapters.isMissingNode() ? objectMapper.createArrayNode() : chapters,
+                manuscriptRoot.isMissingNode() ? objectMapper.createObjectNode() : manuscriptRoot,
                 qualityRoot.isMissingNode() ? objectMapper.createObjectNode() : qualityRoot,
-                references.isMissingNode() ? objectMapper.createArrayNode() : references
+                references.isMissingNode() ? objectMapper.createArrayNode() : references,
+                outlineVersion.getQualityScore(),
+                outlineVersion.getRewriteRound()
+        );
+    }
+
+    public PaperManuscriptResult getPaperManuscript(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+        }
+        if (!"paper_outline".equals(task.getTaskType())) {
+            throw new BusinessException(ErrorCodes.CONFLICT, "任务类型不匹配");
+        }
+
+        PaperTopicSessionEntity session = paperTopicSessionRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "论文会话不存在"));
+        PaperOutlineVersionEntity outlineVersion = paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(session.getId())
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "论文文稿尚未生成"));
+
+        JsonNode manuscriptRoot = parseJson(outlineVersion.getManuscriptJson());
+        if (manuscriptRoot.isMissingNode() || manuscriptRoot.isNull() || manuscriptRoot.isEmpty()) {
+            manuscriptRoot = parseJson(outlineVersion.getOutlineJson());
+        }
+
+        return new PaperManuscriptResult(
+                taskId,
+                session.getTopic(),
+                session.getTopicRefined(),
+                manuscriptRoot,
+                outlineVersion.getQualityScore(),
+                outlineVersion.getRewriteRound()
         );
     }
     

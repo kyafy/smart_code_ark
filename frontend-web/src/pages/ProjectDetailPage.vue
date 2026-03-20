@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { projectApi } from '@/api/endpoints'
 import { showApiError } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
-import type { ProjectDetail, TaskSummary } from '@/types/api'
+import type { ProjectDetail } from '@/types/api'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 const route = useRoute()

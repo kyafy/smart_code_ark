@@ -131,7 +131,7 @@ export const requestSse = async (
     let buffer = ''
     let currentEvent = 'message'
 
-    while (true) {
+    for (;;) {
       const { done, value } = await reader.read()
       
       if (value) {
@@ -150,13 +150,25 @@ export const requestSse = async (
           currentEvent = trimmed.substring(6).trim()
         } else if (trimmed.startsWith('data:')) {
           const dataStr = trimmed.substring(5).trim()
-          let parsedData: any = dataStr
-          try {
-            if ((dataStr.startsWith('{') && dataStr.endsWith('}')) || (dataStr.startsWith('[') && dataStr.endsWith(']'))) {
-                parsedData = JSON.parse(dataStr)
+          const parsedData: any = (() => {
+            const t = dataStr.trim()
+            const looksJson =
+              (t.startsWith('{') && t.endsWith('}')) ||
+              (t.startsWith('[') && t.endsWith(']'))
+            if (!looksJson) return dataStr
+            try {
+              return JSON.parse(t)
+            } catch {
+              return dataStr
             }
-          } catch {}
-          
+          })()
+
+          if (currentEvent === 'error') {
+            const code = typeof parsedData?.code === 'number' ? parsedData.code : 5000
+            const msg = typeof parsedData?.message === 'string' ? parsedData.message : '请求失败'
+            throw new ApiRequestError(msg, code)
+          }
+
           onMessage(currentEvent, parsedData)
           // Reset event name to default
           currentEvent = 'message'

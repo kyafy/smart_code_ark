@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
@@ -28,8 +29,17 @@ public class PaperOutlineVersionEntity {
     @Column(name = "outline_json", nullable = false, columnDefinition = "json")
     private String outlineJson;
 
+    @Column(name = "manuscript_json", columnDefinition = "json")
+    private String manuscriptJson;
+
     @Column(name = "quality_report_json", columnDefinition = "json")
     private String qualityReportJson;
+
+    @Column(name = "quality_score", precision = 5, scale = 2)
+    private java.math.BigDecimal qualityScore;
+
+    @Column(name = "rewrite_round", nullable = false)
+    private Integer rewriteRound = 0;
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
@@ -82,11 +92,42 @@ public class PaperOutlineVersionEntity {
         this.qualityReportJson = qualityReportJson;
     }
 
+    public String getManuscriptJson() {
+        return manuscriptJson;
+    }
+
+    public void setManuscriptJson(String manuscriptJson) {
+        this.manuscriptJson = manuscriptJson;
+    }
+
+    public java.math.BigDecimal getQualityScore() {
+        return qualityScore;
+    }
+
+    public void setQualityScore(java.math.BigDecimal qualityScore) {
+        this.qualityScore = qualityScore;
+    }
+
+    public Integer getRewriteRound() {
+        return rewriteRound;
+    }
+
+    public void setRewriteRound(Integer rewriteRound) {
+        this.rewriteRound = rewriteRound;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    @PrePersist
+    public void prePersist() {
+        if (rewriteRound == null) {
+            rewriteRound = 0;
+        }
     }
 }

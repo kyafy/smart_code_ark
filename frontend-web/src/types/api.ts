@@ -141,3 +141,38 @@ export type RechargeOrderResult = {
   createdAt: string
   updatedAt: string
 }
+
+export type PaperOutlineGenerateRequest = {
+  topic: string
+  discipline: string
+  degreeLevel: string
+  methodPreference?: string
+}
+
+export type PaperOutlineGenerateResult = {
+  taskId: string
+  status: string
+}
+
+export type PaperOutlineResult = {
+  taskId: string
+  citationStyle: string
+  topic: string
+  topicRefined: string
+  researchQuestions: string[]
+  chapters: unknown
+  manuscript?: unknown
+  qualityChecks: unknown
+  references: unknown
+  qualityScore?: number
+  rewriteRound?: number
+}
+
+export type PaperManuscriptResult = {
+  taskId: string
+  topic: string
+  topicRefined: string
+  manuscript: unknown
+  qualityScore?: number
+  rewriteRound?: number
+}

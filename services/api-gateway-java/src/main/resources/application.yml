@@ -58,6 +58,9 @@ smartark:
       base-url: ${SEMANTIC_SCHOLAR_BASE_URL:https://api.semanticscholar.org}
       api-key: ${SEMANTIC_SCHOLAR_API_KEY:}
       timeout-ms: ${SEMANTIC_SCHOLAR_TIMEOUT_MS:10000}
+    quality-rewrite:
+      score-threshold: ${PAPER_QUALITY_REWRITE_SCORE_THRESHOLD:75}
+      max-rounds: ${PAPER_QUALITY_REWRITE_MAX_ROUNDS:1}
 
 management:
   endpoints:

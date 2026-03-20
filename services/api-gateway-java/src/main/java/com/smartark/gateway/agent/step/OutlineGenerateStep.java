@@ -68,6 +68,7 @@ public class OutlineGenerateStep implements AgentStep {
         version.setVersionNo(nextVersion);
         version.setCitationStyle("GB/T 7714");
         version.setOutlineJson(objectMapper.writeValueAsString(outline));
+        version.setRewriteRound(0);
         version.setCreatedAt(LocalDateTime.now());
         paperOutlineVersionRepository.save(version);
 

@@ -3,6 +3,7 @@ package com.smartark.gateway.controller;
 import com.smartark.gateway.common.response.ApiResponse;
 import com.smartark.gateway.dto.PaperOutlineGenerateRequest;
 import com.smartark.gateway.dto.PaperOutlineGenerateResult;
+import com.smartark.gateway.dto.PaperManuscriptResult;
 import com.smartark.gateway.dto.PaperOutlineResult;
 import com.smartark.gateway.service.TaskService;
 import jakarta.validation.Valid;
@@ -30,5 +31,10 @@ public class PaperController {
     @GetMapping("/outline/{taskId}")
     public ApiResponse<PaperOutlineResult> getOutline(@PathVariable("taskId") String taskId) {
         return ApiResponse.success(taskService.getPaperOutline(taskId));
+    }
+
+    @GetMapping("/manuscript/{taskId}")
+    public ApiResponse<PaperManuscriptResult> getManuscript(@PathVariable("taskId") String taskId) {
+        return ApiResponse.success(taskService.getPaperManuscript(taskId));
     }
 }

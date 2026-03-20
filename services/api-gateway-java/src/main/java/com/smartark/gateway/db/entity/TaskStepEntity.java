@@ -140,7 +140,7 @@ public class TaskStepEntity {
     }
 
     public void setErrorMessage(String errorMessage) {
-        this.errorMessage = errorMessage;
+        this.errorMessage = truncate(errorMessage, 255);
     }
 
     public Integer getRetryCount() {
@@ -165,5 +165,15 @@ public class TaskStepEntity {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    private static String truncate(String value, int maxLen) {
+        if (value == null) {
+            return null;
+        }
+        if (value.length() <= maxLen) {
+            return value;
+        }
+        return value.substring(0, maxLen);
     }
 }
