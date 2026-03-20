@@ -91,6 +91,7 @@ public class RequirementAnalyzeStep implements AgentStep {
         if (dedup.isEmpty()) {
             dedup.addAll(fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb));
         }
+        ensureDeploymentArtifacts(dedup);
         return new ArrayList<>(dedup);
     }
 
@@ -100,6 +101,9 @@ public class RequirementAnalyzeStep implements AgentStep {
         files.add(".gitignore");
         files.add("docker-compose.yml");
         files.add("docs/prd.md");
+        files.add("docs/deploy.md");
+        files.add("scripts/deploy.sh");
+        files.add("scripts/start.sh");
 
         String backend = stackBackend == null ? "" : stackBackend.toLowerCase();
         List<String> modules = normalizeModules(modelService.guessModules("", prd, projectType));
@@ -211,8 +215,15 @@ public class RequirementAnalyzeStep implements AgentStep {
         if (p.contains("backend/")) return "backend";
         if (p.contains("frontend/")) return "frontend";
         if (p.endsWith(".sql") || p.contains("/db/") || p.contains("database")) return "database";
-        if (p.contains("docker") || p.contains(".yml")) return "infra";
-        if (p.endsWith("readme.md")) return "docs";
+        if (p.contains("docker") || p.contains(".yml") || p.startsWith("scripts/") || p.endsWith(".sh") || p.endsWith(".bat")) return "infra";
+        if (p.startsWith("docs/") || p.endsWith("readme.md")) return "docs";
         return "backend";
+    }
+
+    private void ensureDeploymentArtifacts(Set<String> files) {
+        files.add("docs/deploy.md");
+        files.add("scripts/deploy.sh");
+        files.add("scripts/start.sh");
+        files.add("docker-compose.yml");
     }
 }

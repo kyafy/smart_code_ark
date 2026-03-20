@@ -104,8 +104,8 @@ public abstract class AbstractCodegenStep implements AgentStep {
         if (p.contains("backend/")) return "backend";
         if (p.contains("frontend/")) return "frontend";
         if (p.endsWith(".sql") || p.contains("/db/") || p.contains("database")) return "database";
-        if (p.contains("docker") || p.contains(".yml")) return "infra";
-        if (p.endsWith("readme.md")) return "docs";
+        if (p.contains("docker") || p.contains(".yml") || p.startsWith("scripts/") || p.endsWith(".sh") || p.endsWith(".bat")) return "infra";
+        if (p.startsWith("docs/") || p.endsWith("readme.md")) return "docs";
         return "backend";
     }
 
