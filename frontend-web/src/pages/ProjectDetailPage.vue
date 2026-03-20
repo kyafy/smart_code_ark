@@ -158,6 +158,7 @@ onMounted(() => {
                     <el-tag :type="getStatusType(task.status)" size="small">{{ getStatusText(task.status) }}</el-tag>
                     <span class="text-xs text-text-tertiary">{{ new Date(task.createdAt).toLocaleString() }}</span>
                   </div>
+                  <div class="mt-1 text-xs text-text-tertiary">任务ID：{{ task.id }}</div>
                   <div v-if="task.status === 'running'" class="mt-2 w-64">
                     <el-progress :percentage="task.progress" />
                   </div>
@@ -167,8 +168,8 @@ onMounted(() => {
                 </div>
                 
                 <div class="flex gap-2">
-                  <el-button v-if="task.status === 'running'" type="primary" plain size="small" @click="onProgress(task.id)">
-                    查看进度
+                  <el-button v-if="task.status !== 'finished'" type="primary" plain size="small" @click="onProgress(task.id)">
+                    查看编排
                   </el-button>
                   <template v-if="task.status === 'finished'">
                     <el-button type="primary" plain size="small" @click="onPreview(task.id)">

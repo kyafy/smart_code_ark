@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -333,6 +334,8 @@ public class ModelService {
         String templateKey = "project_structure_plan";
         int versionNo = 1;
         String modelName = codeModel;
+        String requestJson = null;
+        String requestHash = null;
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("prd", prd);
@@ -374,8 +377,8 @@ public class ModelService {
                     "model", modelName,
                     "messages", messages
             );
-            String requestJson = objectMapper.writeValueAsString(payload);
-            String requestHash = hash(requestJson);
+            requestJson = objectMapper.writeValueAsString(payload);
+            requestHash = hash(requestJson);
             String response = callModelApi(payload);
             JsonNode root = objectMapper.readTree(response);
             String content = root.at("/choices/0/message/content").asText("");
@@ -398,7 +401,7 @@ public class ModelService {
             return result;
         } catch (Exception e) {
             logger.error("Failed to generate project structure", e);
-            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, null, null, null, 0, 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), e.getMessage());
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), detailMessage(e));
             throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "生成项目结构失败");
         }
     }
@@ -415,6 +418,8 @@ public class ModelService {
         String templateKey = "file_content_generate";
         int versionNo = 1;
         String modelName = codeModel;
+        String requestJson = null;
+        String requestHash = null;
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("prd", prd);
@@ -426,9 +431,11 @@ public class ModelService {
                     "你是一个全栈工程师。请根据PRD和技术栈，生成指定文件的完整代码内容。\n" +
                     "文件路径：{{filePath}}\n" +
                     "技术栈：{{techStack}}\n" +
+                    "必须将 PRD 中的业务对象、关键流程、约束规则落实到代码中，禁止仅输出空壳框架、占位 TODO 或示例模板。\n" +
+                    "如果目标是 Controller/Service/Repository/Entity/Page/Store/SQL 等业务文件，必须包含具体业务字段、接口、校验或流程实现。\n" +
                     "请直接输出文件内容，不要包含Markdown标记（如 ```java ... ```），除非文件本身是Markdown格式。\n" +
                     "如果文件是代码，请确保可以直接运行或编译。";
-            String defaultUserPrompt = "PRD内容：\n{{prd}}\n\n额外指令：\n{{instructions}}";
+            String defaultUserPrompt = "PRD内容：\n{{prd}}\n\n额外指令：\n{{instructions}}\n\n输出要求：\n1) 必须体现至少2个业务字段或业务规则；\n2) 如果是接口层需包含参数校验与错误处理；\n3) 如果是数据层需体现实体字段与约束；\n4) 不能只输出项目脚手架样例。";
 
             PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey).orElse(null);
             String systemPrompt = defaultSystemPrompt;
@@ -454,8 +461,8 @@ public class ModelService {
                     "model", modelName,
                     "messages", messages
             );
-            String requestJson = objectMapper.writeValueAsString(payload);
-            String requestHash = hash(requestJson);
+            requestJson = objectMapper.writeValueAsString(payload);
+            requestHash = hash(requestJson);
             String response = callModelApi(payload);
             JsonNode root = objectMapper.readTree(response);
             String content = root.at("/choices/0/message/content").asText("");
@@ -471,8 +478,9 @@ public class ModelService {
             return content;
         } catch (Exception e) {
             logger.error("Failed to generate file content for " + filePath, e);
-            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, null, null, null, 0, 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), e.getMessage());
-            return "// Failed to generate content: " + e.getMessage();
+            String detail = detailMessage(e);
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), detail);
+            return "// Failed to generate content: " + detail;
         }
     }
 
@@ -770,12 +778,38 @@ public class ModelService {
                     .retrieve()
                     .body(String.class);
         } catch (ResourceAccessException e) {
-            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用超时");
+            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败(ResourceAccessException): " + detailMessage(e));
+        } catch (RestClientResponseException e) {
+            String body = truncate(e.getResponseBodyAsString(), 300);
+            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败(HTTP " + e.getStatusCode().value() + "): " + body);
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
-            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败");
+            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败(" + e.getClass().getSimpleName() + "): " + detailMessage(e));
         }
+    }
+
+    private String detailMessage(Throwable throwable) {
+        if (throwable == null) {
+            return "unknown";
+        }
+        Throwable root = rootCause(throwable);
+        String msg = root.getMessage();
+        if (msg == null || msg.isBlank()) {
+            msg = throwable.getMessage();
+        }
+        if (msg == null || msg.isBlank()) {
+            msg = root.getClass().getSimpleName();
+        }
+        return truncate(msg.replace("\n", " ").replace("\r", " "), 400);
+    }
+
+    private Throwable rootCause(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     private JsonNode fallbackExpandedManuscript(String topic,
