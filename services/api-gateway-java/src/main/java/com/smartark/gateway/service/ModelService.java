@@ -533,7 +533,8 @@ public class ModelService {
                                          String degreeLevel,
                                          String methodPreference,
                                          String researchQuestionsJson,
-                                         JsonNode sources) {
+                                         JsonNode sources,
+                                         JsonNode ragEvidence) {
         if (baseUrl.isEmpty()) {
             return objectMapper.valueToTree(Map.of(
                     "researchQuestions", List.of("研究问题1", "研究问题2"),
@@ -541,7 +542,7 @@ public class ModelService {
                             Map.of("title", "绪论", "sections", List.of(
                                     Map.of("title", "研究背景", "subsections", List.of(
                                             Map.of("title", "问题提出", "evidence", List.of())
-                                    ))
+                                    ), "evidenceMapping", List.of())
                             ))
                     ),
                     "references", List.of()
@@ -549,7 +550,7 @@ public class ModelService {
         }
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_generate";
-        int versionNo = 1;
+        int versionNo = ragEvidence != null ? 2 : 1;
         String modelName = codeModel;
         try {
             Map<String, String> vars = new LinkedHashMap<>();
@@ -560,8 +561,9 @@ public class ModelService {
             vars.put("methodPreference", methodPreference == null ? "" : methodPreference);
             vars.put("researchQuestions", researchQuestionsJson == null ? "[]" : researchQuestionsJson);
             vars.put("sources", sources == null ? "[]" : objectMapper.writeValueAsString(sources));
-            String defaultSystemPrompt = "你是毕业论文结构专家。请输出JSON对象，包含researchQuestions、chapters、references。chapters需为章-节-小节三级结构，每个小节提供3条evidence，evidence包含paperId/title/url。";
-            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n候选文献：{{sources}}";
+            vars.put("ragEvidence", ragEvidence == null ? "[]" : objectMapper.writeValueAsString(ragEvidence));
+            String defaultSystemPrompt = "你是毕业论文结构专家。请输出JSON对象，包含researchQuestions、chapters、references。chapters需为章-节-小节三级结构，每个小节提供3条evidence，evidence包含paperId/title/url。每个section需包含evidenceMapping数组，其中每个元素包含chunkUid、title和relevance（0-1之间的相关度评分）。";
+            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n候选文献：{{sources}}\nRAG证据：{{ragEvidence}}";
             return runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
         } catch (Exception e) {
             logger.error("Failed to generate paper outline", e);
@@ -578,19 +580,23 @@ public class ModelService {
                                              String topic,
                                              String topicRefined,
                                              String citationStyle,
-                                             JsonNode outlineJson) {
+                                             JsonNode outlineJson,
+                                             JsonNode ragEvidence,
+                                             String chapterEvidenceMapJson) {
         if (baseUrl.isEmpty()) {
             return normalizeQualityReport(objectMapper.valueToTree(Map.of(
                     "logicClosedLoop", true,
                     "methodConsistency", "ok",
                     "citationVerifiability", "ok",
                     "overallScore", 85,
+                    "evidenceCoverage", 80,
+                    "uncoveredSections", List.of(),
                     "issues", List.of()
             )));
         }
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_quality_check";
-        int versionNo = 1;
+        int versionNo = ragEvidence != null ? 2 : 1;
         String modelName = codeModel;
         try {
             Map<String, String> vars = new LinkedHashMap<>();
@@ -598,8 +604,10 @@ public class ModelService {
             vars.put("topicRefined", topicRefined == null ? "" : topicRefined);
             vars.put("citationStyle", citationStyle == null ? "GB/T 7714" : citationStyle);
             vars.put("outlineJson", outlineJson == null ? "{}" : objectMapper.writeValueAsString(outlineJson));
-            String defaultSystemPrompt = "你是论文质量审查助手。请对大纲进行质检并输出JSON：logicClosedLoop,methodConsistency,citationVerifiability,issues。";
-            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n引文样式：{{citationStyle}}\n大纲：{{outlineJson}}";
+            vars.put("ragEvidence", ragEvidence == null ? "[]" : objectMapper.writeValueAsString(ragEvidence));
+            vars.put("chapterEvidenceMap", chapterEvidenceMapJson == null ? "{}" : chapterEvidenceMapJson);
+            String defaultSystemPrompt = "你是论文质量审查助手。请对大纲进行质检并输出JSON：logicClosedLoop,methodConsistency,citationVerifiability,overallScore,issues,evidenceCoverage(0-100),uncoveredSections(未被证据覆盖的章节标题数组)。";
+            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n引文样式：{{citationStyle}}\n大纲：{{outlineJson}}\nRAG证据：{{ragEvidence}}\n章节证据映射：{{chapterEvidenceMap}}";
             JsonNode raw = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
             return normalizeQualityReport(raw);
         } catch (Exception e) {
@@ -609,6 +617,8 @@ public class ModelService {
                     "methodConsistency", "unknown",
                     "citationVerifiability", "unknown",
                     "overallScore", 60,
+                    "evidenceCoverage", 0,
+                    "uncoveredSections", List.of(),
                     "issues", List.of("质检失败")
             )));
         }

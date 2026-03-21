@@ -7,6 +7,7 @@ import com.smartark.gateway.common.exception.GlobalExceptionHandler;
 import com.smartark.gateway.dto.PaperOutlineGenerateResult;
 import com.smartark.gateway.dto.PaperManuscriptResult;
 import com.smartark.gateway.dto.PaperOutlineResult;
+import com.smartark.gateway.service.RagService;
 import com.smartark.gateway.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,12 +30,14 @@ class PaperControllerTest {
 
     @Mock
     private TaskService taskService;
+    @Mock
+    private RagService ragService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        PaperController controller = new PaperController(taskService);
+        PaperController controller = new PaperController(taskService, ragService);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

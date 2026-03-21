@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 import { handleMock } from '@/api/mock'
 import type { ApiResponse } from '@/types/api'
 import { useAuthStore } from '@/stores/auth'
+import { CLIENT_HEADERS, DEFAULT_CLIENT_PLATFORM } from '@smartark/constants'
 
 export class ApiRequestError extends Error {
   code: number
@@ -22,13 +23,30 @@ const api = axios.create({
   timeout: 30_000,
 })
 
+const getClientMetaHeaders = () => {
+  const appVersion = import.meta.env.VITE_APP_VERSION ?? '3.0.0'
+  const deviceId = localStorage.getItem('__smartark_device_id__') || crypto.randomUUID()
+  localStorage.setItem('__smartark_device_id__', deviceId)
+  return {
+    [CLIENT_HEADERS.platform]: DEFAULT_CLIENT_PLATFORM,
+    [CLIENT_HEADERS.appVersion]: appVersion,
+    [CLIENT_HEADERS.deviceId]: deviceId,
+  }
+}
+
 api.interceptors.request.use((config) => {
   const auth = useAuthStore()
   const token = auth.token
   if (token) {
     config.headers = {
       ...(config.headers as any),
+      ...getClientMetaHeaders(),
       Authorization: `Bearer ${token}`,
+    }
+  } else {
+    config.headers = {
+      ...(config.headers as any),
+      ...getClientMetaHeaders(),
     }
   }
   return config
@@ -102,6 +120,7 @@ export const requestSse = async (
   const token = auth.token
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...getClientMetaHeaders(),
   }
   if (token) {
     headers['Authorization'] = `Bearer ${token}`

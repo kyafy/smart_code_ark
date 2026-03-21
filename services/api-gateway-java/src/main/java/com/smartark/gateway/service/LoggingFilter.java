@@ -1,5 +1,6 @@
 package com.smartark.gateway.service;
 
+import com.smartark.gateway.common.auth.RequestContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,10 +28,15 @@ public class LoggingFilter extends OncePerRequestFilter {
             long duration = System.currentTimeMillis() - startTime;
             int status = response.getStatus();
             if (uri.startsWith("/api/")) {
-                log.info("API Request: method={} uri={} status={} duration={}ms",
-                        request.getMethod(), uri, status, duration);
-                
-                // You could also record metrics to micrometer here
+                log.info("API Request: method={} uri={} status={} duration={}ms platform={} appVersion={} deviceId={} traceId={}",
+                        request.getMethod(),
+                        uri,
+                        status,
+                        duration,
+                        RequestContext.getClientPlatform(),
+                        RequestContext.getAppVersion(),
+                        RequestContext.getDeviceId(),
+                        RequestContext.getTraceId());
             }
         }
     }

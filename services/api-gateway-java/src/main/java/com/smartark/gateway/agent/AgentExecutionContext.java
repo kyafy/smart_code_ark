@@ -2,6 +2,7 @@ package com.smartark.gateway.agent;
 
 import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.agent.model.PaperSourceItem;
+import com.smartark.gateway.agent.model.RagEvidenceItem;
 import com.smartark.gateway.db.entity.ProjectEntity;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
@@ -28,6 +29,9 @@ public class AgentExecutionContext {
     private String manuscriptJson;
     private String qualityReportJson;
     private List<String> qualityIssues;
+    private int ragIndexedChunkCount;
+    private List<RagEvidenceItem> ragEvidenceItems;
+    private String chapterEvidenceMapJson;
 
     public TaskEntity getTask() {
         return task;
@@ -179,5 +183,29 @@ public class AgentExecutionContext {
 
     public void setQualityIssues(List<String> qualityIssues) {
         this.qualityIssues = qualityIssues;
+    }
+
+    public int getRagIndexedChunkCount() {
+        return ragIndexedChunkCount;
+    }
+
+    public void setRagIndexedChunkCount(int ragIndexedChunkCount) {
+        this.ragIndexedChunkCount = ragIndexedChunkCount;
+    }
+
+    public List<RagEvidenceItem> getRagEvidenceItems() {
+        return ragEvidenceItems;
+    }
+
+    public void setRagEvidenceItems(List<RagEvidenceItem> ragEvidenceItems) {
+        this.ragEvidenceItems = ragEvidenceItems;
+    }
+
+    public String getChapterEvidenceMapJson() {
+        return chapterEvidenceMapJson;
+    }
+
+    public void setChapterEvidenceMapJson(String chapterEvidenceMapJson) {
+        this.chapterEvidenceMapJson = chapterEvidenceMapJson;
     }
 }

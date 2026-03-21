@@ -66,7 +66,7 @@ class OutlineQualityCheckStepTest {
 
         when(paperTopicSessionRepository.findByTaskId("task-q")).thenReturn(Optional.of(session));
         when(paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(22L)).thenReturn(Optional.of(version));
-        when(modelService.qualityCheckPaperOutline(any(), any(), any(), any(), any(), any())).thenReturn(quality);
+        when(modelService.qualityCheckPaperOutline(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(quality);
 
         step.execute(context);
 

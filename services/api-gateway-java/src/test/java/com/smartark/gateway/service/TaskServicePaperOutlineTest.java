@@ -10,6 +10,8 @@ import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.db.entity.TaskStepEntity;
 import com.smartark.gateway.db.repo.ArtifactRepository;
+import com.smartark.gateway.db.repo.PaperCorpusChunkRepository;
+import com.smartark.gateway.db.repo.PaperCorpusDocRepository;
 import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.db.repo.ProjectRepository;
@@ -60,6 +62,10 @@ class TaskServicePaperOutlineTest {
     @Mock
     private PaperOutlineVersionRepository paperOutlineVersionRepository;
     @Mock
+    private PaperCorpusDocRepository paperCorpusDocRepository;
+    @Mock
+    private PaperCorpusChunkRepository paperCorpusChunkRepository;
+    @Mock
     private TaskExecutorService taskExecutorService;
     @Mock
     private PreviewDeployService previewDeployService;
@@ -79,6 +85,8 @@ class TaskServicePaperOutlineTest {
                 taskPreviewRepository,
                 paperTopicSessionRepository,
                 paperOutlineVersionRepository,
+                paperCorpusDocRepository,
+                paperCorpusChunkRepository,
                 taskExecutorService,
                 previewDeployService,
                 billingService,
@@ -114,9 +122,9 @@ class TaskServicePaperOutlineTest {
         assertTrue(savedTask.getInstructions().contains("\"methodPreference\":\"\""));
 
         ArgumentCaptor<TaskStepEntity> stepCaptor = ArgumentCaptor.forClass(TaskStepEntity.class);
-        verify(taskStepRepository, times(6)).save(stepCaptor.capture());
+        verify(taskStepRepository, times(8)).save(stepCaptor.capture());
         List<String> stepCodes = stepCaptor.getAllValues().stream().map(TaskStepEntity::getStepCode).toList();
-        assertEquals(List.of("topic_clarify", "academic_retrieve", "outline_generate", "outline_expand", "outline_quality_check", "quality_rewrite"), stepCodes);
+        assertEquals(List.of("topic_clarify", "academic_retrieve", "rag_index_enrich", "rag_retrieve_rerank", "outline_generate", "outline_expand", "outline_quality_check", "quality_rewrite"), stepCodes);
         verify(taskExecutorService).executeTask(result.taskId());
     }
 

@@ -34,3 +34,6 @@ pnpm-debug.log*
 
 .logs/
 .pids/
+
+.claude/
+.trae/

@@ -45,7 +45,7 @@ public class AgentOrchestrator {
     private String workspaceRoot;
     @Value("${smartark.agent.max-retries:2}")
     private int maxRetries;
-    @Value("${smartark.agent.retryable-step-codes:requirement_analyze,codegen_backend,codegen_frontend,sql_generate}")
+    @Value("${smartark.agent.retryable-step-codes:requirement_analyze,codegen_backend,codegen_frontend,sql_generate,rag_index_enrich,rag_retrieve_rerank}")
     private String retryableStepCodes;
 
     public AgentOrchestrator(TaskRepository taskRepository,
@@ -219,6 +219,9 @@ public class AgentOrchestrator {
         }
         if (businessCode == ErrorCodes.MODEL_SERVICE_ERROR) {
             return String.valueOf(ErrorCodes.TASK_MODEL_ERROR);
+        }
+        if (businessCode >= ErrorCodes.RAG_EMBEDDING_FAILED && businessCode <= ErrorCodes.RAG_RETRIEVE_FAILED) {
+            return String.valueOf(ErrorCodes.TASK_RAG_ERROR);
         }
         Throwable root = rootCause(throwable);
         if (root instanceof IOException) {

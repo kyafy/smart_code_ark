@@ -1,0 +1,2453 @@
+diff --git a/.env.example b/.env.example
+index 67abe7d..351f183 100644
+--- a/.env.example
++++ b/.env.example
+@@ -18,9 +18,11 @@ JWT_TTL_SECONDS=604800
+ 
+ ## OpenAI 兼容模型服务（DashScope Compatible Mode 示例）
+ MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+-MODEL_API_KEY=YOUR_MODEL_KEY
++MODEL_API_KEY=sk-62127047df334f8d9fab4483bb4a1c3e
+ MODEL_MOCK_ENABLED=false
+ 
+ ## 模型名称（示例）
+-CHAT_MODEL=qwen-plus
+-CODE_MODEL=qwen-plus
++CHAT_MODEL=qwen3.5-plus
++CODE_MODEL=qwen3-coder-next
++MODEL_CONNECT_TIMEOUT_MS=10000
++MODEL_READ_TIMEOUT_MS=120000
+diff --git a/frontend-web/src/api/endpoints.ts b/frontend-web/src/api/endpoints.ts
+index 11b6d3c..2fbbbd4 100644
+--- a/frontend-web/src/api/endpoints.ts
++++ b/frontend-web/src/api/endpoints.ts
+@@ -19,6 +19,7 @@ import type {
+   StackConfig,
+   TaskLogResult,
+   TaskPreviewResult,
++  TaskRelationChainResult,
+   TaskStatusResult,
+   UserProfileResult,
+ } from '@/types/api'
+@@ -70,6 +71,10 @@ export const taskApi = {
+     requestJson<TaskPreviewResult>({ method: 'GET', url: `/api/task/${taskId}/preview` }),
+   rebuildPreview: (taskId: string): Promise<TaskPreviewResult> =>
+     requestJson<TaskPreviewResult>({ method: 'POST', url: `/api/task/${taskId}/preview/rebuild` }),
++  releasePreview: (taskId: string): Promise<TaskPreviewResult> =>
++    requestJson<TaskPreviewResult>({ method: 'POST', url: `/api/task/${taskId}/preview/release` }),
++  relations: (sourceTaskId: string): Promise<TaskRelationChainResult> =>
++    requestJson<TaskRelationChainResult>({ method: 'GET', url: `/api/task/${sourceTaskId}/relations` }),
+   download: (taskId: string) => requestBlob({ method: 'GET', url: `/api/task/${taskId}/download` }),
+   modify: (taskId: string, payload: { changeInstructions: string }) =>
+     requestJson<GenerateResult>({
+@@ -77,6 +82,12 @@ export const taskApi = {
+       method: 'POST',
+       data: payload
+     }),
++  modifyFromPlan: (sourceTaskId: string, payload: { changeInstructions: string; iterationDoc?: string; chatSessionId?: string }) =>
++    requestJson<GenerateResult>({
++      url: `/api/task/${sourceTaskId}/modify/from-plan`,
++      method: 'POST',
++      data: payload
++    }),
+   cancel: (taskId: string) =>
+     requestJson<GenerateResult>({
+       url: `/api/task/${taskId}/cancel`,
+diff --git a/frontend-web/src/api/http.ts b/frontend-web/src/api/http.ts
+index 58718fa..e1aaa04 100644
+--- a/frontend-web/src/api/http.ts
++++ b/frontend-web/src/api/http.ts
+@@ -198,7 +198,15 @@ export const showApiError = (err: unknown) => {
+   }
+ 
+   if (err instanceof AxiosError) {
+-    ElMessage.error(err.message)
++    const status = err.response?.status
++    const data = err.response?.data as any
++    const code = typeof data?.code === 'number' ? data.code : undefined
++    const message = typeof data?.message === 'string' ? data.message : err.message
++    if (code === 3106 || status === 429) {
++      ElMessage.warning(message || '预览并发数已达上限，请关闭其他预览后重试')
++      return
++    }
++    ElMessage.error(message || '请求失败')
+     return
+   }
+ 
+diff --git a/frontend-web/src/api/mock/index.ts b/frontend-web/src/api/mock/index.ts
+index b6433da..af1c9cc 100644
+--- a/frontend-web/src/api/mock/index.ts
++++ b/frontend-web/src/api/mock/index.ts
+@@ -59,6 +59,14 @@ type Task = {
+   previewLastError?: string | null
+ }
+ 
++type TaskRelation = {
++  parentTaskId: string
++  childTaskId: string
++  relationType: string
++  chatSessionId?: string | null
++  createdAt: string
++}
++
+ type RechargeOrder = {
+   orderId: string
+   userId: string
+@@ -94,6 +102,7 @@ const getState = () => {
+       sessions: [] as Session[],
+       projects: [] as Project[],
+       tasks: [] as Task[],
++      taskRelations: [] as TaskRelation[],
+       rechargeOrders: [] as RechargeOrder[],
+       billingRecords: [] as BillingRecord[],
+     }
+@@ -105,6 +114,7 @@ const getState = () => {
+     sessions: Session[]
+     projects: Project[]
+     tasks: Task[]
++    taskRelations: TaskRelation[]
+     rechargeOrders: RechargeOrder[]
+     billingRecords: BillingRecord[]
+   }
+@@ -488,6 +498,27 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
+     return ok(r)
+   }
+ 
++  if (method === 'POST' && url.startsWith('/api/task/') && url.endsWith('/preview/release')) {
++    const taskId = url.replace('/api/task/', '').replace('/preview/release', '')
++    const data = getTask(taskId)
++    if (!data) return { code: 1004, message: 'task not found', data: null }
++    const task = data.task
++    task.previewStatus = 'expired'
++    task.previewPollCount = 0
++    task.previewExpireAt = new Date().toISOString()
++    task.previewLastError = '预览资源已手动释放'
++    task.logs.push({ level: 'info', content: '预览资源已手动释放', ts: Date.now() })
++    const r: TaskPreviewResult = {
++      taskId,
++      status: 'expired',
++      previewUrl: null,
++      expireAt: task.previewExpireAt,
++      lastError: task.previewLastError
++    }
++    setState(data.state)
++    return ok(r)
++  }
++
+   if (method === 'GET' && url.startsWith('/api/task/') && url.endsWith('/download')) {
+     const taskId = url.replace('/api/task/', '').replace('/download', '')
+     return mockDownloadZip(taskId)
+@@ -515,5 +546,55 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
+     return ok({ taskId: newTaskId, status: 'queued' })
+   }
+ 
++  if (method === 'POST' && url.startsWith('/api/task/') && url.endsWith('/modify/from-plan')) {
++    const body = (req.body ?? {}) as Record<string, unknown>
++    const taskId = url.replace('/api/task/', '').replace('/modify/from-plan', '')
++    const src = getTask(taskId)
++    if (!src) return { code: 1004, message: 'task not found', data: null }
++    const newTaskId = genId('t')
++    const task: Task = {
++      taskId: newTaskId,
++      projectId: src.task.projectId,
++      status: 'queued',
++      progress: 0,
++      step: 'queued',
++      logs: [{ level: 'info', content: '迭代编排任务已入队', ts: Date.now() }],
++      previewStatus: 'provisioning',
++      previewPollCount: 0,
++      previewExpireAt: null,
++      previewLastError: null,
++    }
++    state.tasks.unshift(task)
++    state.taskRelations.unshift({
++      parentTaskId: taskId,
++      childTaskId: newTaskId,
++      relationType: 'modify_from_plan',
++      chatSessionId: typeof body?.chatSessionId === 'string' ? body.chatSessionId : null,
++      createdAt: nowIso(),
++    })
++    setState(state)
++    return ok({ taskId: newTaskId, status: 'queued' })
++  }
++
++  if (method === 'GET' && url.startsWith('/api/task/') && url.endsWith('/relations')) {
++    const sourceTaskId = url.replace('/api/task/', '').replace('/relations', '')
++    const src = getTask(sourceTaskId)
++    if (!src) return { code: 1004, message: 'task not found', data: null }
++    const relations = state.taskRelations
++      .filter((r) => r.parentTaskId === sourceTaskId)
++      .map((r) => {
++        const t = state.tasks.find((it) => it.taskId === r.childTaskId)
++        return {
++          childTaskId: r.childTaskId,
++          relationType: r.relationType,
++          chatSessionId: r.chatSessionId || null,
++          taskStatus: t?.status || 'unknown',
++          taskType: 'modify',
++          createdAt: r.createdAt,
++        }
++      })
++    return ok({ sourceTaskId, relations })
++  }
++
+   return { code: 1004, message: `mock route not found: ${method} ${url}`, data: null }
+ }
+diff --git a/frontend-web/src/pages/ChatPage.vue b/frontend-web/src/pages/ChatPage.vue
+index 3db9431..111b92d 100644
+--- a/frontend-web/src/pages/ChatPage.vue
++++ b/frontend-web/src/pages/ChatPage.vue
+@@ -6,7 +6,7 @@ import ChatComposer from '@/components/ChatComposer.vue'
+ import ChatMessageList from '@/components/ChatMessageList.vue'
+ import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+ import { ApiRequestError, showApiError } from '@/api/http'
+-import { chatApi } from '@/api/endpoints'
++import { chatApi, taskApi } from '@/api/endpoints'
+ import { useChatStore } from '@/stores/chat'
+ import { ArrowRight, CheckCircle2, MoreVertical, Plus, Sparkles, Trash2 } from 'lucide-vue-next'
+ 
+@@ -17,6 +17,11 @@ const chat = useChatStore()
+ const sessionId = computed(() => String(route.params.sessionId))
+ const isReady = ref(false)
+ const activeStep = ref<1 | 2 | 3>(2)
++const isConfirming = ref(false)
++const modifyPlanMode = computed(() => String(route.query.mode ?? '') === 'modify_plan')
++const modifySourceTaskId = ref('')
++const modifyProjectId = ref('')
++const modifySuggestion = ref('')
+ 
+ type SessionSummary = {
+   sessionId: string
+@@ -121,8 +126,49 @@ const overviewText = computed(() => {
+   return `本项目旨在围绕一个可快速交付的毕业设计应用，通过 AI 辅助完成需求梳理、数据库设计与工程生成。`
+ })
+ 
++const canConfirm = computed(() => {
++  if (modifyPlanMode.value) {
++    return Boolean(modifySourceTaskId.value && lastAssistant.value?.message)
++  }
++  return chat.hasDraft
++})
++
++const modifyPlanDoc = computed(() => {
++  if (!modifyPlanMode.value) return ''
++  return lastAssistant.value?.message?.trim() || ''
++})
++
++const buildModifyPlanPrompt = (suggestion: string) => {
++  return [
++    '请基于以下用户修改建议，输出“迭代文档”。',
++    '要求用中文，结构必须包含：',
++    '1) 迭代目标',
++    '2) 影响范围（前端/后端/数据库）',
++    '3) 具体改动清单',
++    '4) 风险与回滚点',
++    '5) 验收标准',
++    '6) 编排执行顺序',
++    '',
++    '用户修改建议：',
++    suggestion
++  ].join('\n')
++}
++
++const extractModifyContext = () => {
++  if (!modifyPlanMode.value) {
++    modifySourceTaskId.value = ''
++    modifyProjectId.value = ''
++    modifySuggestion.value = ''
++    return
++  }
++  modifySourceTaskId.value = String(route.query.sourceTaskId ?? '').trim()
++  modifyProjectId.value = String(route.query.projectId ?? '').trim()
++  modifySuggestion.value = String(route.query.initialMessage ?? '').trim()
++}
++
+ onMounted(async () => {
+   if (!sessionId.value) return
++  extractModifyContext()
+   await ensureViewportTop()
+   await loadLocalSessions()
+   
+@@ -137,7 +183,7 @@ onMounted(async () => {
+     const initialMessage = route.query.initialMessage as string
+     if (initialMessage) {
+       await router.replace({ query: {} })
+-      await onSend(initialMessage)
++      await onSend(modifyPlanMode.value ? buildModifyPlanPrompt(initialMessage) : initialMessage)
+     }
+     return
+   }
+@@ -156,12 +202,13 @@ onMounted(async () => {
+     // Remove query param to prevent resending on refresh
+     router.replace({ query: {} })
+     // Send initial message
+-    await onSend(initialMessage)
++    await onSend(modifyPlanMode.value ? buildModifyPlanPrompt(initialMessage) : initialMessage)
+   }
+ })
+ 
+ watch(sessionId, async (newSid, oldSid) => {
+   if (newSid && newSid !== oldSid) {
++    extractModifyContext()
+     await ensureViewportTop()
+     if (newSid === 'new') {
+       await loadLocalSessions()
+@@ -175,7 +222,7 @@ watch(sessionId, async (newSid, oldSid) => {
+       const initialMessage = route.query.initialMessage as string
+       if (initialMessage) {
+         await router.replace({ query: {} })
+-        await onSend(initialMessage)
++        await onSend(modifyPlanMode.value ? buildModifyPlanPrompt(initialMessage) : initialMessage)
+       }
+       return
+     }
+@@ -189,7 +236,7 @@ watch(sessionId, async (newSid, oldSid) => {
+     const initialMessage = route.query.initialMessage as string
+     if (initialMessage && chat.messages.length === 0) {
+       router.replace({ query: {} })
+-      await onSend(initialMessage)
++      await onSend(modifyPlanMode.value ? buildModifyPlanPrompt(initialMessage) : initialMessage)
+     }
+   }
+ })
+@@ -199,7 +246,13 @@ const onSend = async (text: string) => {
+     if (sessionId.value === 'new') {
+       const title = text.length > 12 ? `${text.slice(0, 12)}...` : text
+       const newSid = await chat.startSession({ title, projectType: 'web', description: text })
+-      await router.replace({ name: 'chat', params: { sessionId: newSid }, query: { initialMessage: text } })
++      const nextQuery: Record<string, string> = { initialMessage: text }
++      if (modifyPlanMode.value) {
++        nextQuery.mode = 'modify_plan'
++        if (modifySourceTaskId.value) nextQuery.sourceTaskId = modifySourceTaskId.value
++        if (modifyProjectId.value) nextQuery.projectId = modifyProjectId.value
++      }
++      await router.replace({ name: 'chat', params: { sessionId: newSid }, query: nextQuery })
+       return
+     }
+ 
+@@ -236,6 +289,34 @@ const onRetryMessage = async (index: number) => {
+ }
+ 
+ const onConfirm = async () => {
++  if (isConfirming.value) return
++  if (modifyPlanMode.value) {
++    if (!modifySourceTaskId.value) {
++      ElMessage.warning('缺少来源任务ID，无法创建修改任务')
++      return
++    }
++    const instructions = (modifySuggestion.value || '').trim()
++    if (!instructions) {
++      ElMessage.warning('缺少修改建议，无法创建修改任务')
++      return
++    }
++    const iterationDoc = modifyPlanDoc.value
++    isConfirming.value = true
++    try {
++      const res = await taskApi.modifyFromPlan(modifySourceTaskId.value, {
++        changeInstructions: instructions,
++        iterationDoc,
++        chatSessionId: chat.sessionId || ''
++      })
++      ElMessage.success('已创建修改任务，正在进入编排页')
++      await router.push({ name: 'task-progress', params: { taskId: res.taskId } })
++    } catch (err) {
++      showApiError(err)
++    } finally {
++      isConfirming.value = false
++    }
++    return
++  }
+   if (!chat.sessionId) {
+     ElMessage.warning('会话未初始化')
+     return
+@@ -399,7 +480,7 @@ const onDeleteSession = async (sid: string) => {
+         </div>
+         <div class="mt-5 text-2xl font-semibold tracking-tight">开启新的项目对话</div>
+         <div class="mt-2 max-w-xl text-sm text-slate-500 dark:text-slate-400">
+-          在下方输入框描述你的需求，AI 将为你梳理功能并生成项目
++          {{ modifyPlanMode ? '在下方输入框补充修改细节，AI 将先生成迭代文档并确认编排。' : '在下方输入框描述你的需求，AI 将为你梳理功能并生成项目' }}
+         </div>
+       </div>
+       
+@@ -415,11 +496,13 @@ const onDeleteSession = async (sid: string) => {
+           </div>
+           <div class="flex items-center gap-2">
+             <el-button size="small" @click="router.push({ name: 'projects' })">关闭</el-button>
+-            <el-button size="small" type="primary" :disabled="!chat.hasDraft" @click="onConfirm">生成项目</el-button>
++            <el-button size="small" type="primary" :loading="isConfirming" :disabled="!canConfirm" @click="onConfirm">
++              {{ modifyPlanMode ? '确认编排' : '生成项目' }}
++            </el-button>
+           </div>
+         </div>
+ 
+-        <div class="mt-4 flex flex-wrap items-center gap-2">
++        <div v-if="!modifyPlanMode" class="mt-4 flex flex-wrap items-center gap-2">
+           <button
+             type="button"
+             class="flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold"
+@@ -456,7 +539,7 @@ const onDeleteSession = async (sid: string) => {
+         </div>
+ 
+         <div class="mt-4 rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-900 dark:bg-slate-950">
+-          <div v-if="activeStep === 1" class="text-sm leading-relaxed">
++          <div v-if="!modifyPlanMode && activeStep === 1" class="text-sm leading-relaxed">
+             <div class="text-sm font-semibold">推荐需求</div>
+             <div class="mt-2 text-sm text-slate-700 dark:text-slate-200">
+               请补充角色、权限、核心业务流程与数据字段。完成后进入“AI确认需求”。
+@@ -468,8 +551,8 @@ const onDeleteSession = async (sid: string) => {
+             </div>
+           </div>
+ 
+-          <div v-else-if="activeStep === 2" class="text-sm leading-relaxed">
+-            <div class="text-sm font-semibold mb-3">AI确认需求</div>
++          <div v-else-if="modifyPlanMode || activeStep === 2" class="text-sm leading-relaxed">
++            <div class="text-sm font-semibold mb-3">{{ modifyPlanMode ? 'AI 迭代文档' : 'AI确认需求' }}</div>
+             <ChatMessageList :messages="chat.messages" @retry="onRetryMessage" />
+           </div>
+ 
+@@ -491,25 +574,27 @@ const onDeleteSession = async (sid: string) => {
+       <div v-if="sessionId !== 'new'" class="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-900 dark:bg-slate-950 lg:sticky lg:top-6">
+         <div class="flex items-start justify-between gap-3">
+           <div>
+-            <div class="text-sm font-semibold">需求文档</div>
++            <div class="text-sm font-semibold">{{ modifyPlanMode ? '迭代文档' : '需求文档' }}</div>
+             <div class="mt-1">
+               <span class="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                 自动生成
+               </span>
+             </div>
+           </div>
+-          <el-button size="small" type="success" @click="onConfirm" :disabled="!chat.hasDraft">启动生成</el-button>
++          <el-button size="small" type="success" :loading="isConfirming" @click="onConfirm" :disabled="!canConfirm">
++            {{ modifyPlanMode ? '确认编排' : '启动生成' }}
++          </el-button>
+         </div>
+ 
+         <div class="mt-4 space-y-4">
+           <div class="rounded-2xl border bg-slate-50 p-4 dark:border-slate-900 dark:bg-slate-900/40">
+-            <div class="text-xs font-semibold text-slate-700 dark:text-slate-200">项目概览</div>
++            <div class="text-xs font-semibold text-slate-700 dark:text-slate-200">{{ modifyPlanMode ? '迭代概览' : '项目概览' }}</div>
+             <div class="mt-2">
+-              <MarkdownRenderer :content="overviewText" />
++              <MarkdownRenderer :content="modifyPlanMode ? (modifyPlanDoc || overviewText) : overviewText" />
+             </div>
+           </div>
+ 
+-          <div v-if="chat.extractedRequirements?.features?.length" class="rounded-2xl border bg-slate-50 p-4 dark:border-slate-900 dark:bg-slate-900/40">
++          <div v-if="!modifyPlanMode && chat.extractedRequirements?.features?.length" class="rounded-2xl border bg-slate-50 p-4 dark:border-slate-900 dark:bg-slate-900/40">
+             <div class="text-xs font-semibold text-slate-700 dark:text-slate-200">核心功能</div>
+             <div class="mt-3 flex flex-col gap-2">
+               <div
+@@ -522,14 +607,14 @@ const onDeleteSession = async (sid: string) => {
+             </div>
+           </div>
+ 
+-          <div v-if="chat.extractedRequirements?.pages?.length" class="rounded-2xl border bg-slate-50 p-4 dark:border-slate-900 dark:bg-slate-900/40">
++          <div v-if="!modifyPlanMode && chat.extractedRequirements?.pages?.length" class="rounded-2xl border bg-slate-50 p-4 dark:border-slate-900 dark:bg-slate-900/40">
+             <div class="text-xs font-semibold text-slate-700 dark:text-slate-200">页面结构</div>
+             <div class="mt-3 flex flex-wrap gap-2">
+               <span v-for="p in chat.extractedRequirements.pages" :key="p" class="rounded-full bg-white px-3 py-1 text-xs text-slate-700 shadow-sm dark:bg-slate-950 dark:text-slate-200">{{ p }}</span>
+             </div>
+           </div>
+ 
+-          <div v-if="!chat.extractedRequirements" class="rounded-2xl border bg-slate-50 p-4 dark:border-slate-900 dark:bg-slate-900/40">
++          <div v-if="!modifyPlanMode && !chat.extractedRequirements" class="rounded-2xl border bg-slate-50 p-4 dark:border-slate-900 dark:bg-slate-900/40">
+             <div class="text-xs font-semibold text-slate-700 dark:text-slate-200">功能模块</div>
+             <div class="mt-3 flex flex-col gap-2">
+               <div
+@@ -554,10 +639,10 @@ const onDeleteSession = async (sid: string) => {
+           <button
+             type="button"
+             class="w-full rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-800"
+-            :disabled="!chat.hasDraft"
++            :disabled="!canConfirm"
+             @click="onConfirm"
+           >
+-            立即生成
++            {{ modifyPlanMode ? '确认并开始编排' : '立即生成' }}
+           </button>
+         </div>
+       </div>
+diff --git a/frontend-web/src/pages/PreviewPage.vue b/frontend-web/src/pages/PreviewPage.vue
+index f1c5485..d25d8bd 100644
+--- a/frontend-web/src/pages/PreviewPage.vue
++++ b/frontend-web/src/pages/PreviewPage.vue
+@@ -9,9 +9,32 @@
+         <div class="text-sm text-gray-500">
+           Task ID: {{ route.params.taskId }}
+         </div>
++        <el-button
++          v-if="canRebuildPreview"
++          :loading="isRebuildingPreview"
++          size="small"
++          type="warning"
++          plain
++          @click="onRebuildPreview"
++        >
++          重建预览
++        </el-button>
++        <el-button
++          v-if="previewStatus === 'ready' || previewStatus === 'provisioning'"
++          :loading="isReleasingPreview"
++          size="small"
++          type="warning"
++          plain
++          @click="onReleasePreview"
++        >
++          关闭预览
++        </el-button>
+         <el-button type="primary" size="small" @click="handleDownload">
+           下载代码
+         </el-button>
++        <el-button size="small" type="primary" plain @click="router.push({ name: 'task-progress', params: { taskId } })">
++          进入编排页
++        </el-button>
+         <el-button size="small" @click="router.push({ name: 'projects' })">
+           返回项目
+         </el-button>
+@@ -38,9 +61,37 @@
+             {{ errorMessage || '当前任务暂无预览地址，或任务尚未完成。' }}<br/>
+             您可以直接下载生成的应用代码在本地运行。
+           </p>
+-          <el-button type="primary" size="large" @click="handleDownload">
+-            下载应用代码
+-          </el-button>
++          <div class="flex items-center justify-center gap-3">
++            <el-button
++              v-if="canRebuildPreview"
++              :loading="isRebuildingPreview"
++              type="warning"
++              plain
++              @click="onRebuildPreview"
++            >
++              重建预览
++            </el-button>
++            <el-button type="primary" @click="handleDownload">
++              下载应用代码
++            </el-button>
++          </div>
++          <div class="mt-5 rounded-xl bg-slate-50 p-4 text-left">
++            <div class="mb-3 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
++              建议在“编排页”统一处理预览与修改流程。
++            </div>
++            <div class="text-sm font-semibold text-slate-700">继续修改</div>
++            <div class="mt-1 text-xs text-slate-500">用中文描述改动，例如：订单模块增加待发货状态</div>
++            <el-input
++              v-model="changeInstructions"
++              class="mt-3"
++              type="textarea"
++              :autosize="{ minRows: 3, maxRows: 6 }"
++              placeholder="请输入修改指令"
++            />
++            <el-button class="mt-3 w-full" type="primary" :loading="isModifying" @click="onModify">
++              生成修改版
++            </el-button>
++          </div>
+         </div>
+       </div>
+     </div>
+@@ -51,6 +102,8 @@
+ import { ref, onMounted } from 'vue'
+ import { useRoute, useRouter } from 'vue-router'
+ import { taskApi } from '@/api/endpoints'
++import { ElMessage } from 'element-plus'
++import { showApiError } from '@/api/http'
+ import { Loading, Warning } from '@element-plus/icons-vue'
+ 
+ const route = useRoute()
+@@ -60,14 +113,23 @@ const taskId = String(route.params.taskId)
+ const previewUrl = ref('')
+ const loading = ref(true)
+ const errorMessage = ref('')
++const previewStatus = ref('provisioning')
++const isRebuildingPreview = ref(false)
++const isReleasingPreview = ref(false)
++const changeInstructions = ref('')
++const isModifying = ref(false)
++const canRebuildPreview = ref(false)
+ 
+-onMounted(async () => {
++const loadPreview = async () => {
+   try {
+     const res = await taskApi.preview(taskId)
++    previewStatus.value = res.status || 'failed'
++    canRebuildPreview.value = previewStatus.value === 'failed' || previewStatus.value === 'expired' || previewStatus.value === 'provisioning'
+     if (res.previewUrl) {
+       previewUrl.value = res.previewUrl
++      errorMessage.value = ''
+     } else {
+-      errorMessage.value = '未返回有效的预览地址'
++      errorMessage.value = res.lastError || '未返回有效的预览地址'
+     }
+   } catch (error: any) {
+     console.error('Failed to get preview URL', error)
+@@ -75,9 +137,74 @@ onMounted(async () => {
+   } finally {
+     loading.value = false
+   }
++}
++
++onMounted(async () => {
++  await loadPreview()
+ })
+ 
+-const handleDownload = () => {
+-  window.open(`/api/task/${taskId}/download`, '_blank')
++const handleDownload = async () => {
++  try {
++    const blob = await taskApi.download(taskId)
++    const url = URL.createObjectURL(blob)
++    const a = document.createElement('a')
++    a.href = url
++    a.download = `smartark_${taskId}.zip`
++    a.click()
++    URL.revokeObjectURL(url)
++  } catch (e) {
++    showApiError(e)
++  }
++}
++
++const onRebuildPreview = async () => {
++  if (isRebuildingPreview.value) return
++  isRebuildingPreview.value = true
++  try {
++    const p = await taskApi.rebuildPreview(taskId)
++    previewStatus.value = p.status || 'provisioning'
++    previewUrl.value = p.previewUrl || ''
++    errorMessage.value = p.lastError || '预览重建已触发，请稍后刷新'
++    canRebuildPreview.value = previewStatus.value === 'failed' || previewStatus.value === 'expired' || previewStatus.value === 'provisioning'
++    ElMessage.success('已开始重建预览')
++  } catch (e) {
++    showApiError(e)
++  } finally {
++    isRebuildingPreview.value = false
++  }
++}
++
++const onReleasePreview = async () => {
++  if (isReleasingPreview.value) return
++  isReleasingPreview.value = true
++  try {
++    const p = await taskApi.releasePreview(taskId)
++    previewStatus.value = p.status || 'expired'
++    previewUrl.value = p.previewUrl || ''
++    errorMessage.value = p.lastError || '预览资源已释放'
++    canRebuildPreview.value = true
++    ElMessage.success('预览资源已释放')
++  } catch (e) {
++    showApiError(e)
++  } finally {
++    isReleasingPreview.value = false
++  }
++}
++
++const onModify = async () => {
++  const text = changeInstructions.value.trim()
++  if (!text) {
++    ElMessage.warning('请输入修改指令')
++    return
++  }
++  isModifying.value = true
++  try {
++    const res = await taskApi.modify(taskId, { changeInstructions: text })
++    await router.push({ name: 'task-progress', params: { taskId: res.taskId } })
++  } catch (e) {
++    showApiError(e)
++  } finally {
++    isModifying.value = false
++  }
+ }
+ </script>
+diff --git a/frontend-web/src/pages/ProjectDetailPage.vue b/frontend-web/src/pages/ProjectDetailPage.vue
+index aea007a..c3cea5d 100644
+--- a/frontend-web/src/pages/ProjectDetailPage.vue
++++ b/frontend-web/src/pages/ProjectDetailPage.vue
+@@ -15,6 +15,7 @@ const projectId = computed(() => String(route.params.projectId))
+ const loading = ref(true)
+ const project = ref<ProjectDetail | null>(null)
+ const activeTab = ref('tasks')
++const latestTaskId = computed(() => project.value?.tasks?.[0]?.id || '')
+ 
+ const loadDetail = async () => {
+   if (!projectId.value) return
+@@ -142,6 +143,16 @@ onMounted(() => {
+             <span class="font-medium text-text-primary">{{ project.stack.db }}</span>
+           </div>
+         </div>
++        <div class="mt-4">
++          <el-button
++            type="primary"
++            plain
++            :disabled="!latestTaskId"
++            @click="latestTaskId && onProgress(latestTaskId)"
++          >
++            进入编排页
++          </el-button>
++        </div>
+       </div>
+ 
+       <!-- 详情区 -->
+@@ -172,6 +183,9 @@ onMounted(() => {
+                     查看编排
+                   </el-button>
+                   <template v-if="task.status === 'finished'">
++                    <el-button type="primary" plain size="small" @click="onProgress(task.id)">
++                      继续编排
++                    </el-button>
+                     <el-button type="primary" plain size="small" @click="onPreview(task.id)">
+                       预览
+                     </el-button>
+diff --git a/frontend-web/src/pages/TaskProgressPage.vue b/frontend-web/src/pages/TaskProgressPage.vue
+index 60cd32a..13386bf 100644
+--- a/frontend-web/src/pages/TaskProgressPage.vue
++++ b/frontend-web/src/pages/TaskProgressPage.vue
+@@ -1,6 +1,7 @@
+ <script setup lang="ts">
+-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
++import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+ import { useRoute, useRouter } from 'vue-router'
++import { ElMessage } from 'element-plus'
+ import LogPanel from '@/components/LogPanel.vue'
+ import StatusTag from '@/components/StatusTag.vue'
+ import StepTimeline from '@/components/StepTimeline.vue'
+@@ -14,21 +15,72 @@ const task = useTaskStore()
+ 
+ const taskId = computed(() => String(route.params.taskId))
+ const isPolling = ref(false)
++const previewLoading = ref(false)
++const previewStatus = ref('provisioning')
++const previewUrl = ref('')
++const previewExpireAt = ref('')
++const previewLastError = ref('')
++const isRebuildingPreview = ref(false)
++const isReleasingPreview = ref(false)
++const isModifying = ref(false)
++const changeInstructions = ref('')
++const relationLoading = ref(false)
++const relationItems = ref<Array<{
++  childTaskId: string
++  relationType: string
++  chatSessionId?: string | null
++  taskStatus: string
++  taskType: string
++  createdAt?: string | null
++}>>([])
+ let pollTimer: number | null = null
+ 
++const resetPreviewState = () => {
++  previewLoading.value = false
++  previewStatus.value = 'provisioning'
++  previewUrl.value = ''
++  previewExpireAt.value = ''
++  previewLastError.value = ''
++  isRebuildingPreview.value = false
++}
++
++const stopPolling = () => {
++  if (pollTimer) {
++    window.clearInterval(pollTimer)
++    pollTimer = null
++  }
++}
++
++const startPolling = () => {
++  stopPolling()
++  pollTimer = window.setInterval(() => {
++    void poll()
++  }, 2000)
++}
++
++const initTaskPage = async () => {
++  task.reset()
++  resetPreviewState()
++  isPolling.value = false
++  isModifying.value = false
++  await poll()
++  startPolling()
++}
++
+ const poll = async () => {
+   if (!taskId.value) return
+   isPolling.value = true
+   try {
+     await task.loadStatus(taskId.value)
++    if (task.isFinished) {
++      await loadPreview(true)
++      await loadRelations(true)
++    }
+     if (task.isFinished || task.isFailed || task.isCancelled) {
+       if (pollTimer) {
+         window.clearInterval(pollTimer)
+         pollTimer = null
+       }
+-      if (task.isFinished && projectId.value) {
+-        onViewResult()
+-      }
+     }
+   } catch (e) {
+     showApiError(e)
+@@ -38,15 +90,16 @@ const poll = async () => {
+ }
+ 
+ onMounted(() => {
+-  task.reset()
+-  void poll()
+-  pollTimer = window.setInterval(() => {
+-    void poll()
+-  }, 2000)
++  void initTaskPage()
++})
++
++watch(taskId, (next, prev) => {
++  if (!next || next === prev) return
++  void initTaskPage()
+ })
+ 
+ onBeforeUnmount(() => {
+-  if (pollTimer) window.clearInterval(pollTimer)
++  stopPolling()
+ })
+ 
+ // Use backend returned projectId to navigate to project detail
+@@ -67,12 +120,111 @@ const onRetry = async () => {
+   const stepCode = task.currentStep || 'requirement_analyze'
+   await taskApi.retry(taskId.value, stepCode)
+   await poll()
+-  if (!pollTimer) {
+-    pollTimer = window.setInterval(() => {
+-      void poll()
+-    }, 2000)
++  if (!pollTimer) startPolling()
++}
++
++const loadPreview = async (silent = false) => {
++  if (!taskId.value || !task.isFinished) return
++  if (previewLoading.value) return
++  previewLoading.value = true
++  try {
++    const p = await taskApi.preview(taskId.value)
++    previewStatus.value = p.status || 'failed'
++    previewUrl.value = p.previewUrl || ''
++    previewExpireAt.value = p.expireAt || ''
++    previewLastError.value = p.lastError || ''
++  } catch (e) {
++    previewStatus.value = 'failed'
++    previewLastError.value = '获取预览状态失败'
++    if (!silent) showApiError(e)
++  } finally {
++    previewLoading.value = false
+   }
+ }
++
++const loadRelations = async (silent = false) => {
++  if (!taskId.value) return
++  if (relationLoading.value) return
++  relationLoading.value = true
++  try {
++    const result = await taskApi.relations(taskId.value)
++    relationItems.value = Array.isArray(result.relations) ? result.relations : []
++  } catch (e) {
++    relationItems.value = []
++    if (!silent) showApiError(e)
++  } finally {
++    relationLoading.value = false
++  }
++}
++
++const onRebuildPreview = async () => {
++  if (!task.isFinished || isRebuildingPreview.value) return
++  isRebuildingPreview.value = true
++  try {
++    const p = await taskApi.rebuildPreview(taskId.value)
++    previewStatus.value = p.status || 'provisioning'
++    previewUrl.value = p.previewUrl || ''
++    previewExpireAt.value = p.expireAt || ''
++    previewLastError.value = p.lastError || ''
++    ElMessage.success('已开始重建预览')
++  } catch (e) {
++    showApiError(e)
++  } finally {
++    isRebuildingPreview.value = false
++  }
++}
++
++const onReleasePreview = async () => {
++  if (isReleasingPreview.value) return
++  isReleasingPreview.value = true
++  try {
++    const p = await taskApi.releasePreview(taskId.value)
++    previewStatus.value = p.status || 'expired'
++    previewUrl.value = p.previewUrl || ''
++    previewExpireAt.value = p.expireAt || ''
++    previewLastError.value = p.lastError || ''
++    ElMessage.success('预览资源已释放')
++  } catch (e) {
++    showApiError(e)
++  } finally {
++    isReleasingPreview.value = false
++  }
++}
++
++const onModify = async () => {
++  const text = changeInstructions.value.trim()
++  if (!text) {
++    ElMessage.warning('请输入修改指令')
++    return
++  }
++  if (isModifying.value) return
++  isModifying.value = true
++  const projectId = task.rawStatus?.projectId ? String(task.rawStatus.projectId) : ''
++  console.info('[modify-plan] route to chat', { sourceTaskId: taskId.value, projectId, textLength: text.length })
++  try {
++    await router.push({
++      name: 'chat',
++      params: { sessionId: 'new' },
++      query: {
++        mode: 'modify_plan',
++        sourceTaskId: taskId.value,
++        projectId,
++        initialMessage: text
++      }
++    })
++    ElMessage.success('已进入迭代对话，请确认编排')
++  } catch (e) {
++    console.error('[modify-plan] route failed', { sourceTaskId: taskId.value, error: e })
++    showApiError(e)
++  } finally {
++    isModifying.value = false
++  }
++}
++
++const onOpenPreview = () => {
++  if (!previewUrl.value) return
++  window.open(previewUrl.value, '_blank', 'noopener,noreferrer')
++}
+ </script>
+ 
+ <template>
+@@ -112,6 +264,100 @@ const onRetry = async () => {
+       </div>
+     </div>
+ 
++    <div v-if="task.isFinished" class="grid grid-cols-1 gap-4 lg:grid-cols-3">
++      <div class="lg:col-span-2 rounded-2xl border bg-white p-5">
++        <div class="flex items-center justify-between gap-2">
++          <div class="text-sm font-semibold">在线预览</div>
++          <div class="flex items-center gap-2">
++            <el-button size="small" :loading="previewLoading" @click="loadPreview">刷新预览状态</el-button>
++            <el-button
++              size="small"
++              type="warning"
++              plain
++              :loading="isReleasingPreview"
++              @click="onReleasePreview"
++            >
++              关闭预览
++            </el-button>
++            <el-tag v-if="previewStatus === 'ready'" type="success" effect="plain">ready</el-tag>
++            <el-tag v-else-if="previewStatus === 'provisioning'" type="warning" effect="plain">provisioning</el-tag>
++            <el-tag v-else-if="previewStatus === 'expired'" type="info" effect="plain">expired</el-tag>
++            <el-tag v-else type="danger" effect="plain">{{ previewStatus || 'failed' }}</el-tag>
++          </div>
++        </div>
++
++        <div v-if="previewStatus === 'ready' && previewUrl" class="mt-3">
++          <div class="h-[520px] overflow-hidden rounded-xl border">
++            <iframe :src="previewUrl" class="h-full w-full border-0" title="Task Preview" />
++          </div>
++          <div class="mt-3 flex items-center justify-between gap-2">
++            <div class="text-xs text-slate-500">过期时间：{{ previewExpireAt || '—' }}</div>
++            <el-button size="small" type="primary" @click="onOpenPreview">新窗口打开</el-button>
++          </div>
++        </div>
++
++        <div v-else-if="previewStatus === 'provisioning'" class="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-700">
++          预览部署中，请稍后刷新查看结果。
++        </div>
++
++        <div v-else-if="previewStatus === 'failed' || previewStatus === 'expired'" class="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">
++          <div>预览不可用：{{ previewLastError || '请重建预览或下载 ZIP 在本地运行。' }}</div>
++          <el-button class="mt-3" size="small" type="warning" plain :loading="isRebuildingPreview" @click="onRebuildPreview">
++            重建预览
++          </el-button>
++        </div>
++
++        <div v-else class="mt-3 rounded-xl bg-slate-100 p-3 text-sm text-slate-600">
++          当前暂无可展示的预览信息，请稍后刷新。
++        </div>
++      </div>
++
++      <div class="lg:col-span-1">
++        <div class="rounded-2xl border bg-white p-5">
++          <div class="flex items-center justify-between gap-2">
++            <div class="text-sm font-semibold">迭代链路</div>
++            <el-button size="small" :loading="relationLoading" @click="loadRelations">刷新</el-button>
++          </div>
++          <div v-if="relationItems.length === 0" class="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
++            当前任务暂无迭代子任务
++          </div>
++          <div v-else class="mt-3 space-y-2">
++            <button
++              v-for="item in relationItems"
++              :key="item.childTaskId"
++              type="button"
++              class="w-full rounded-xl border bg-slate-50 p-3 text-left transition hover:bg-slate-100"
++              @click="router.push({ name: 'task-progress', params: { taskId: item.childTaskId } })"
++            >
++              <div class="text-xs font-semibold text-slate-700">{{ item.childTaskId }}</div>
++              <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
++                <span>类型：{{ item.taskType }}</span>
++                <span>状态：{{ item.taskStatus }}</span>
++                <span v-if="item.chatSessionId">会话：{{ item.chatSessionId }}</span>
++              </div>
++            </button>
++          </div>
++        </div>
++        <div class="mt-4 rounded-2xl border bg-white p-5">
++          <div class="text-sm font-semibold">继续修改</div>
++          <div class="mt-1 text-xs text-slate-500">用中文描述改动，例如：订单模块增加待发货状态</div>
++          <el-input
++            v-model="changeInstructions"
++            class="mt-4"
++            type="textarea"
++            :autosize="{ minRows: 4, maxRows: 8 }"
++            placeholder="请输入修改指令"
++          />
++          <el-button class="mt-3 w-full" type="primary" :loading="isModifying" @click="onModify">
++            进入迭代对话
++          </el-button>
++          <div class="mt-4 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
++            建议一次只提出一个明确修改点，便于模型准确应用。
++          </div>
++        </div>
++      </div>
++    </div>
++
+     <LogPanel :logs="task.logs" :show-hint="true" />
+   </div>
+ </template>
+diff --git a/frontend-web/src/pages/TaskResultPage.vue b/frontend-web/src/pages/TaskResultPage.vue
+index 2c355d3..0026d04 100644
+--- a/frontend-web/src/pages/TaskResultPage.vue
++++ b/frontend-web/src/pages/TaskResultPage.vue
+@@ -17,6 +17,7 @@ const previewLastError = ref('')
+ const provisioningPhase = ref('准备开始部署')
+ const isPreviewLoading = ref(false)
+ const isRebuildingPreview = ref(false)
++const isReleasingPreview = ref(false)
+ const isDownloading = ref(false)
+ let pollTimer: number | null = null
+ let previewSse: EventSource | null = null
+@@ -25,77 +26,13 @@ const sseMode = ref<'idle' | 'connecting' | 'connected' | 'fallback'>('idle')
+ const changeInstructions = ref('')
+ const isModifying = ref(false)
+ 
+-const isNoSandboxPreviewUrl = (url: string) => {
+-  try {
+-    const parsed = new URL(url, window.location.origin)
+-    return parsed.host === window.location.host && parsed.pathname.startsWith('/preview/')
+-  } catch {
+-    return url.startsWith('/preview/')
+-  }
+-}
+-
+-const buildMockPreviewUrl = (id: string) => {
+-  const html = `
+-<!doctype html>
+-<html lang="zh-CN">
+-<head>
+-  <meta charset="UTF-8" />
+-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-  <title>Mock Preview</title>
+-  <style>
+-    * { box-sizing: border-box; }
+-    body { margin: 0; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: linear-gradient(135deg, #e0f2fe 0%, #eef2ff 100%); color: #0f172a; }
+-    .shell { min-height: 100vh; padding: 28px; display: flex; align-items: center; justify-content: center; }
+-    .card { width: min(920px, 100%); background: #ffffff; border-radius: 16px; box-shadow: 0 24px 48px rgba(15, 23, 42, 0.12); overflow: hidden; }
+-    .top { padding: 20px 24px; background: #0f172a; color: #f8fafc; display: flex; justify-content: space-between; align-items: center; }
+-    .title { font-size: 18px; font-weight: 700; }
+-    .badge { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: #22c55e; color: #052e16; font-weight: 600; }
+-    .content { padding: 24px; display: grid; gap: 16px; }
+-    .panel { border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; }
+-    .panel h3 { margin: 0 0 8px; font-size: 14px; }
+-    .panel p { margin: 0; color: #475569; font-size: 13px; line-height: 1.5; }
+-    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+-    .kpi { border-radius: 10px; border: 1px solid #e2e8f0; padding: 12px; background: #f8fafc; }
+-    .kpi .label { font-size: 12px; color: #64748b; }
+-    .kpi .val { margin-top: 6px; font-size: 16px; font-weight: 700; }
+-  </style>
+-</head>
+-<body>
+-  <div class="shell">
+-    <div class="card">
+-      <div class="top">
+-        <div class="title">Smart Code Ark 无沙箱预览</div>
+-        <div class="badge">MOCK</div>
+-      </div>
+-      <div class="content">
+-        <div class="panel">
+-          <h3>任务信息</h3>
+-          <p>Task ID: ${id}</p>
+-          <p>当前环境未接入沙箱运行时，已使用前端内置 mock 数据模拟预览页面。</p>
+-        </div>
+-        <div class="grid">
+-          <div class="kpi"><div class="label">模块数</div><div class="val">6</div></div>
+-          <div class="kpi"><div class="label">接口数</div><div class="val">24</div></div>
+-          <div class="kpi"><div class="label">页面数</div><div class="val">11</div></div>
+-        </div>
+-      </div>
+-    </div>
+-  </div>
+-</body>
+-</html>
+-  `.trim()
+-  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+-}
+-
+ const effectivePreviewUrl = computed(() => {
+   if (previewStatus.value !== 'ready') return ''
+   const raw = previewUrl.value.trim()
+   if (!raw) return ''
+-  if (isNoSandboxPreviewUrl(raw)) return buildMockPreviewUrl(taskId.value)
+   return raw
+ })
+ 
+-const isUsingNoSandboxMock = computed(() => effectivePreviewUrl.value.startsWith('data:text/html'))
+ const canOpenPreviewInNewWindow = computed(() => Boolean(effectivePreviewUrl.value))
+ 
+ const stopPolling = () => {
+@@ -247,6 +184,23 @@ const onRebuildPreview = async () => {
+   }
+ }
+ 
++const onReleasePreview = async () => {
++  if (isReleasingPreview.value) return
++  isReleasingPreview.value = true
++  try {
++    const p = await taskApi.releasePreview(taskId.value)
++    previewStatus.value = p.status || 'expired'
++    previewUrl.value = p.previewUrl || ''
++    previewExpireAt.value = p.expireAt || ''
++    previewLastError.value = p.lastError || ''
++    ElMessage.success('预览资源已释放')
++  } catch (e) {
++    showApiError(e)
++  } finally {
++    isReleasingPreview.value = false
++  }
++}
++
+ const onModify = async () => {
+   const text = changeInstructions.value.trim()
+   if (!text) {
+@@ -283,7 +237,7 @@ const onModify = async () => {
+ 
+     <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+       <div class="lg:col-span-2">
+-        <ArtifactCards :preview-url="previewStatus === 'ready' && !isUsingNoSandboxMock ? previewUrl : ''" />
++        <ArtifactCards :preview-url="previewStatus === 'ready' ? previewUrl : ''" />
+         <div class="mt-4 rounded-2xl border bg-white p-4">
+           <div class="flex items-center justify-between gap-2">
+             <div class="text-sm font-semibold">在线预览</div>
+@@ -300,17 +254,19 @@ const onModify = async () => {
+           </div>
+ 
+           <div v-else-if="previewStatus === 'ready' && effectivePreviewUrl" class="mt-3">
+-            <div v-if="isUsingNoSandboxMock" class="mb-3 rounded-xl bg-sky-50 p-3 text-xs text-sky-700">
+-              当前环境未接入沙箱运行时，已启用前端内置 mock 预览数据。
+-            </div>
+             <div class="h-[520px] overflow-hidden rounded-xl border">
+               <iframe :src="effectivePreviewUrl" class="h-full w-full border-0" title="Task Preview" />
+             </div>
+             <div class="mt-3 flex items-center justify-between gap-2">
+               <div class="text-xs text-slate-500">过期时间：{{ previewExpireAt || '—' }}</div>
+-              <el-button size="small" type="primary" :disabled="!canOpenPreviewInNewWindow" @click="onOpenPreview">
+-                新窗口打开
+-              </el-button>
++              <div class="flex items-center gap-2">
++                <el-button size="small" type="primary" :disabled="!canOpenPreviewInNewWindow" @click="onOpenPreview">
++                  新窗口打开
++                </el-button>
++                <el-button size="small" type="warning" plain :loading="isReleasingPreview" @click="onReleasePreview">
++                  关闭预览
++                </el-button>
++              </div>
+             </div>
+           </div>
+ 
+@@ -358,4 +314,3 @@ const onModify = async () => {
+     </div>
+   </div>
+ </template>
+-
+diff --git a/frontend-web/src/types/api.ts b/frontend-web/src/types/api.ts
+index 68d11ad..c302d13 100644
+--- a/frontend-web/src/types/api.ts
++++ b/frontend-web/src/types/api.ts
+@@ -114,6 +114,18 @@ export type TaskPreviewResult = {
+   lastError?: string | null
+ }
+ 
++export type TaskRelationChainResult = {
++  sourceTaskId: string
++  relations: Array<{
++    childTaskId: string
++    relationType: string
++    chatSessionId?: string | null
++    taskStatus: string
++    taskType: string
++    createdAt?: string | null
++  }>
++}
++
+ export type BalanceResult = {
+   balance: number
+   quota: number
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/ApiGatewayApplication.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/ApiGatewayApplication.java
+index 503dc60..a8abb58 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/ApiGatewayApplication.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/ApiGatewayApplication.java
+@@ -5,11 +5,89 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
+ import org.springframework.scheduling.annotation.EnableAsync;
+ import org.springframework.scheduling.annotation.EnableScheduling;
+ 
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.Paths;
++import java.util.List;
++import java.util.Map;
++
+ @SpringBootApplication
+ @EnableAsync
+ @EnableScheduling
+ public class ApiGatewayApplication {
+     public static void main(String[] args) {
++        loadModelEnvFromDotEnv();
+         SpringApplication.run(ApiGatewayApplication.class, args);
+     }
++
++    private static void loadModelEnvFromDotEnv() {
++        for (Path path : candidateDotEnvPaths()) {
++            if (!Files.exists(path) || !Files.isRegularFile(path)) {
++                continue;
++            }
++            try {
++                Map<String, String> values = parseDotEnv(path);
++                applyIfMissing("MODEL_BASE_URL", values.get("MODEL_BASE_URL"));
++                applyIfMissing("MODEL_API_KEY", values.get("MODEL_API_KEY"));
++                applyIfMissing("MODEL_MOCK_ENABLED", values.get("MODEL_MOCK_ENABLED"));
++                applyIfMissing("CHAT_MODEL", values.get("CHAT_MODEL"));
++                applyIfMissing("CODE_MODEL", values.get("CODE_MODEL"));
++                return;
++            } catch (IOException ignored) {
++                return;
++            }
++        }
++    }
++
++    private static List<Path> candidateDotEnvPaths() {
++        return List.of(
++                Paths.get(".env"),
++                Paths.get("../.env"),
++                Paths.get("../../.env")
++        );
++    }
++
++    private static Map<String, String> parseDotEnv(Path path) throws IOException {
++        List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
++        java.util.LinkedHashMap<String, String> values = new java.util.LinkedHashMap<>();
++        for (String raw : lines) {
++            if (raw == null) {
++                continue;
++            }
++            String line = raw.trim();
++            if (line.isEmpty() || line.startsWith("#")) {
++                continue;
++            }
++            if (line.startsWith("export ")) {
++                line = line.substring(7).trim();
++            }
++            int index = line.indexOf('=');
++            if (index <= 0) {
++                continue;
++            }
++            String key = line.substring(0, index).trim();
++            String value = line.substring(index + 1).trim();
++            if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
++                value = value.substring(1, value.length() - 1);
++            }
++            values.put(key, value);
++        }
++        return values;
++    }
++
++    private static void applyIfMissing(String key, String value) {
++        if (value == null || value.isBlank()) {
++            return;
++        }
++        if (System.getProperty(key) != null && !System.getProperty(key).isBlank()) {
++            return;
++        }
++        String envValue = System.getenv(key);
++        if (envValue != null && !envValue.isBlank()) {
++            return;
++        }
++        System.setProperty(key, value);
++    }
+ }
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/controller/TaskController.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/controller/TaskController.java
+index 6f16ac3..19ad07d 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/controller/TaskController.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/controller/TaskController.java
+@@ -3,10 +3,13 @@ package com.smartark.gateway.controller;
+ import com.smartark.gateway.common.response.ApiResponse;
+ import com.smartark.gateway.dto.GenerateRequest;
+ import com.smartark.gateway.dto.GenerateResult;
++import com.smartark.gateway.dto.TaskModifyFromPlanRequest;
++import com.smartark.gateway.dto.TaskRelationChainResult;
+ import com.smartark.gateway.dto.TaskModifyRequest;
+ import com.smartark.gateway.dto.TaskPreviewResult;
+ import com.smartark.gateway.dto.TaskStatusResult;
+ import com.smartark.gateway.service.TaskService;
++import jakarta.validation.Valid;
+ import org.springframework.http.HttpHeaders;
+ import org.springframework.http.MediaType;
+ import org.springframework.http.ResponseEntity;
+@@ -16,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
+ import org.springframework.web.bind.annotation.RequestBody;
+ import org.springframework.web.bind.annotation.RequestMapping;
+ import org.springframework.web.bind.annotation.RestController;
++import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+ 
+ @RestController
+ @RequestMapping("/api")
+@@ -41,16 +45,37 @@ public class TaskController {
+         return ApiResponse.success(taskService.getPreview(taskId));
+     }
+ 
++    @GetMapping(value = "/task/{taskId}/preview/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
++    public SseEmitter streamPreview(@PathVariable("taskId") String taskId) {
++        return taskService.streamPreview(taskId);
++    }
++
+     @PostMapping("/task/{taskId}/preview/rebuild")
+     public ApiResponse<TaskPreviewResult> rebuildPreview(@PathVariable("taskId") String taskId) {
+         return ApiResponse.success(taskService.rebuildPreview(taskId));
+     }
+ 
++    @PostMapping("/task/{taskId}/preview/release")
++    public ApiResponse<TaskPreviewResult> releasePreview(@PathVariable("taskId") String taskId) {
++        return ApiResponse.success(taskService.releasePreview(taskId));
++    }
++
+     @PostMapping("/task/{taskId}/modify")
+-    public ApiResponse<GenerateResult> modify(@PathVariable("taskId") String taskId, @RequestBody TaskModifyRequest request) {
++    public ApiResponse<GenerateResult> modify(@PathVariable("taskId") String taskId, @Valid @RequestBody TaskModifyRequest request) {
+         return ApiResponse.success(taskService.modify(taskId, request));
+     }
+ 
++    @PostMapping("/task/{sourceTaskId}/modify/from-plan")
++    public ApiResponse<GenerateResult> modifyFromPlan(@PathVariable("sourceTaskId") String sourceTaskId,
++                                                       @Valid @RequestBody TaskModifyFromPlanRequest request) {
++        return ApiResponse.success(taskService.modifyFromPlan(sourceTaskId, request));
++    }
++
++    @GetMapping("/task/{sourceTaskId}/relations")
++    public ApiResponse<TaskRelationChainResult> getTaskRelations(@PathVariable("sourceTaskId") String sourceTaskId) {
++        return ApiResponse.success(taskService.getTaskRelations(sourceTaskId));
++    }
++
+     @PostMapping("/task/{taskId}/cancel")
+     public ApiResponse<GenerateResult> cancel(@PathVariable("taskId") String taskId) {
+         return ApiResponse.success(taskService.cancelTask(taskId));
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/db/repo/TaskRepository.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/db/repo/TaskRepository.java
+index 55d0b23..aa86767 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/db/repo/TaskRepository.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/db/repo/TaskRepository.java
+@@ -3,9 +3,12 @@ package com.smartark.gateway.db.repo;
+ import com.smartark.gateway.db.entity.TaskEntity;
+ import org.springframework.data.jpa.repository.JpaRepository;
+ 
++import java.time.LocalDateTime;
+ import java.util.List;
+ 
+ public interface TaskRepository extends JpaRepository<TaskEntity, String> {
+     List<TaskEntity> findByProjectIdOrderByCreatedAtDesc(String projectId);
+     List<TaskEntity> findByUserIdAndTaskTypeOrderByUpdatedAtDesc(Long userId, String taskType);
++    List<TaskEntity> findByStatus(String status);
++    List<TaskEntity> findByStatusAndUpdatedAtBefore(String status, LocalDateTime updatedAtBefore);
+ }
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/db/repo/TaskStepRepository.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/db/repo/TaskStepRepository.java
+index 82715a3..07949c6 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/db/repo/TaskStepRepository.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/db/repo/TaskStepRepository.java
+@@ -10,4 +10,5 @@ public interface TaskStepRepository extends JpaRepository<TaskStepEntity, Long>
+     List<TaskStepEntity> findByTaskIdOrderByStepOrderAsc(String taskId);
+ 
+     Optional<TaskStepEntity> findByTaskIdAndStepCode(String taskId, String stepCode);
++    List<TaskStepEntity> findByTaskIdAndStatus(String taskId, String status);
+ }
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/dto/TaskModifyRequest.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/dto/TaskModifyRequest.java
+index db9e020..92890e6 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/dto/TaskModifyRequest.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/dto/TaskModifyRequest.java
+@@ -1,4 +1,9 @@
+ package com.smartark.gateway.dto;
+ 
+-public record TaskModifyRequest(String changeInstructions) {
++import jakarta.validation.constraints.NotBlank;
++import jakarta.validation.constraints.Size;
++
++public record TaskModifyRequest(
++        @NotBlank @Size(max = 10000) String changeInstructions
++) {
+ }
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/ChatService.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/ChatService.java
+index c57b39e..ae1e5d6 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/ChatService.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/ChatService.java
+@@ -285,7 +285,6 @@ public class ChatService {
+                                 ), latencyMs, "success", null, null);
+ 
+                                 List<Map<String, String>> updatedMessages = new ArrayList<>(history);
+-                                updatedMessages.add(Map.of("role", "user", "content", request.message()));
+                                 updatedMessages.add(Map.of("role", "assistant", "content", cleanReply));
+ 
+                                 emitter.send(SseEmitter.event().name("result").data(new ChatReplyResult(
+@@ -317,6 +316,43 @@ public class ChatService {
+                                 errorCode = "504";
+                                 errorMessage = "大模型响应超时";
+                             }
++                            boolean shouldFallbackToNonStream = isFirstToken.get() && fullReply.length() == 0;
++                            if (shouldFallbackToNonStream) {
++                                try {
++                                    ModelService.ModelResult fallbackResult = modelService.chatReply(session.getTitle(), session.getProjectType(), request.message(), history);
++                                    String fallbackReply = fallbackResult.reply() == null ? "" : fallbackResult.reply();
++                                    if (!fallbackReply.isBlank()) {
++                                        ChatMessageEntity assistantMsg = new ChatMessageEntity();
++                                        assistantMsg.setSessionId(session.getId());
++                                        assistantMsg.setSpeaker("assistant");
++                                        assistantMsg.setMessage(fallbackReply);
++                                        assistantMsg.setTokenUsed(modelService.estimateTokens(fallbackReply));
++                                        assistantMsg.setCreatedAt(LocalDateTime.now());
++                                        chatMessageRepository.save(assistantMsg);
++
++                                        session.setUpdatedAt(LocalDateTime.now());
++                                        chatSessionRepository.save(session);
++
++                                        int fallbackLatencyMs = (int) ((System.nanoTime() - t0) / 1_000_000L);
++                                        writePromptHistory(session, request.message(), history, fallbackResult, fallbackLatencyMs, "success", null, null);
++
++                                        emitter.send(SseEmitter.event().name("delta").data(fallbackReply));
++                                        List<Map<String, String>> updatedMessages = new ArrayList<>(history);
++                                        updatedMessages.add(Map.of("role", "assistant", "content", fallbackReply));
++                                        emitter.send(SseEmitter.event().name("result").data(new ChatReplyResult(
++                                                session.getId(),
++                                                updatedMessages,
++                                                modelService.extractRequirements(fallbackReply),
++                                                session.getCreatedAt().toString(),
++                                                session.getUpdatedAt().toString()
++                                        )));
++                                        emitter.complete();
++                                        return;
++                                    }
++                                } catch (Exception fallbackError) {
++                                    logger.error("Fallback to non-stream chat failed", fallbackError);
++                                }
++                            }
+                             writePromptHistory(session, request.message(), history, new ModelService.ModelResult(
+                                     "unknown", "", new ArrayList<>(), 0, 0
+                             ), latencyMs, "failed", errorCode, errorMessage);
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/ModelService.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/ModelService.java
+index 88404dd..7dbb11e 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/ModelService.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/ModelService.java
+@@ -14,6 +14,7 @@ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.beans.factory.annotation.Value;
+ import org.springframework.stereotype.Service;
++import org.springframework.http.client.SimpleClientHttpRequestFactory;
+ import org.springframework.web.client.ResourceAccessException;
+ import org.springframework.web.client.RestClient;
+ import org.springframework.web.client.RestClientResponseException;
+@@ -49,6 +50,8 @@ public class ModelService {
+     private final boolean mockEnabled;
+     private final String chatModel;
+     private final String codeModel;
++    private final int connectTimeoutMs;
++    private final int readTimeoutMs;
+     private final PromptResolver promptResolver;
+     private final PromptRenderer promptRenderer;
+     private final PromptHistoryRepository promptHistoryRepository;
+@@ -62,7 +65,9 @@ public class ModelService {
+             @Value("${smartark.model.api-key:}") String apiKey,
+             @Value("${smartark.model.mock-enabled:false}") boolean mockEnabled,
+             @Value("${smartark.model.chat-model:Qwen3.5-Plus}") String chatModel,
+-            @Value("${smartark.model.code-model:qwen-plus}") String codeModel
++            @Value("${smartark.model.code-model:qwen-plus}") String codeModel,
++            @Value("${smartark.model.connect-timeout-ms:10000}") int connectTimeoutMs,
++            @Value("${smartark.model.read-timeout-ms:120000}") int readTimeoutMs
+     ) {
+         this.objectMapper = objectMapper;
+         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
+@@ -70,10 +75,17 @@ public class ModelService {
+         this.mockEnabled = mockEnabled;
+         this.chatModel = chatModel;
+         this.codeModel = codeModel;
++        this.connectTimeoutMs = connectTimeoutMs;
++        this.readTimeoutMs = readTimeoutMs;
+         this.promptResolver = promptResolver;
+         this.promptRenderer = promptRenderer;
+         this.promptHistoryRepository = promptHistoryRepository;
+-        this.restClient = RestClient.builder().build();
++        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
++        requestFactory.setConnectTimeout(this.connectTimeoutMs);
++        requestFactory.setReadTimeout(this.readTimeoutMs);
++        this.restClient = RestClient.builder()
++                .requestFactory(requestFactory)
++                .build();
+     }
+ 
+     public void streamChatReply(String sessionTitle, String projectType, String userMessage, List<Map<String, String>> history, Consumer<String> onContent, Runnable onDone, Consumer<Throwable> onError) {
+@@ -121,7 +133,7 @@ public class ModelService {
+             if (history != null) {
+                 messages.addAll(history);
+             }
+-            messages.add(Map.of("role", "user", "content", userMessage));
++            appendUserMessageIfNeeded(messages, userMessage);
+ 
+             Map<String, Object> payload = Map.of(
+                     "model", chatModel,
+@@ -143,6 +155,7 @@ public class ModelService {
+                         if (!apiKey.isEmpty()) {
+                             h.set("Authorization", "Bearer " + apiKey);
+                         }
++                        h.set("Accept", "text/event-stream");
+                     })
+                     .body(payload)
+                     .exchange((request, response) -> {
+@@ -166,20 +179,21 @@ public class ModelService {
+                             BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                             String line;
+                             while ((line = reader.readLine()) != null) {
+-                                if (line.startsWith("data: ")) {
+-                                    String data = line.substring(6).trim();
+-                                    if ("[DONE]".equals(data)) {
+-                                        break;
+-                                    }
+-                                    try {
+-                                        JsonNode root = objectMapper.readTree(data);
+-                                        String content = root.at("/choices/0/delta/content").asText("");
+-                                        if (!content.isEmpty()) {
+-                                            onContent.accept(content);
+-                                        }
+-                                    } catch (Exception e) {
+-                                        logger.warn("Failed to parse stream data: {}", data, e);
++                                String data = parseSseDataLine(line);
++                                if (data == null) {
++                                    continue;
++                                }
++                                if ("[DONE]".equals(data)) {
++                                    break;
++                                }
++                                try {
++                                    JsonNode root = objectMapper.readTree(data);
++                                    String content = root.at("/choices/0/delta/content").asText("");
++                                    if (!content.isEmpty()) {
++                                        onContent.accept(content);
+                                     }
++                                } catch (Exception e) {
++                                    logger.warn("Failed to parse stream data: {}", data, e);
+                                 }
+                             }
+                             onDone.run();
+@@ -221,7 +235,7 @@ public class ModelService {
+             if (history != null) {
+                 messages.addAll(history);
+             }
+-            messages.add(Map.of("role", "user", "content", userMessage));
++            appendUserMessageIfNeeded(messages, userMessage);
+ 
+             Map<String, Object> payload = Map.of(
+                     "model", chatModel,
+@@ -767,16 +781,44 @@ public class ModelService {
+             url = baseUrl.endsWith("/") ? baseUrl + "v1/chat/completions" : baseUrl + "/v1/chat/completions";
+         }
+         try {
++            Map<String, Object> streamingPayload = new LinkedHashMap<>(payload);
++            streamingPayload.put("stream", true);
+             return restClient.post()
+                     .uri(url)
+                     .headers(h -> {
+                         if (!apiKey.isEmpty()) {
+                             h.set("Authorization", "Bearer " + apiKey);
+                         }
++                        h.set("Accept", "text/event-stream");
+                     })
+-                    .body(payload)
+-                    .retrieve()
+-                    .body(String.class);
++                    .body(streamingPayload)
++                    .exchange((request, response) -> {
++                        var status = response.getStatusCode();
++                        try (InputStream is = response.getBody()) {
++                            if (!status.is2xxSuccessful()) {
++                                String errBody;
++                                try {
++                                    errBody = is == null ? null : new String(is.readAllBytes(), StandardCharsets.UTF_8);
++                                } catch (Exception ex) {
++                                    errBody = null;
++                                }
++                                String msg = "模型服务调用失败(HTTP " + status.value() + ")";
++                                if (errBody != null && !errBody.isBlank()) {
++                                    msg = msg + ": " + truncate(errBody.replace("\n", " ").replace("\r", " "), 300);
++                                }
++                                throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, msg);
++                            }
++                            if (is == null) {
++                                throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败: 空响应体");
++                            }
++                            String responseText = new String(is.readAllBytes(), StandardCharsets.UTF_8);
++                            return normalizeStreamResponse(responseText);
++                        } catch (BusinessException e) {
++                            throw e;
++                        } catch (Exception e) {
++                            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败(" + e.getClass().getSimpleName() + "): " + detailMessage(e));
++                        }
++                    });
+         } catch (ResourceAccessException e) {
+             throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败(ResourceAccessException): " + detailMessage(e));
+         } catch (RestClientResponseException e) {
+@@ -789,6 +831,92 @@ public class ModelService {
+         }
+     }
+ 
++    private String normalizeStreamResponse(String responseText) {
++        if (responseText == null || responseText.isBlank()) {
++            return responseText;
++        }
++        if (!responseText.contains("data:")) {
++            return responseText;
++        }
++        StringBuilder contentBuilder = new StringBuilder();
++        String model = chatModel;
++        JsonNode usageNode = null;
++        String[] lines = responseText.split("\\R");
++        for (String line : lines) {
++            String trimmed = line == null ? "" : line.trim();
++            if (!trimmed.startsWith("data:")) {
++                continue;
++            }
++            String data = trimmed.substring(5).trim();
++            if (data.isEmpty() || "[DONE]".equals(data)) {
++                continue;
++            }
++            try {
++                JsonNode root = objectMapper.readTree(data);
++                if (root.hasNonNull("model")) {
++                    model = root.path("model").asText(model);
++                }
++                String deltaContent = root.at("/choices/0/delta/content").asText("");
++                if (!deltaContent.isEmpty()) {
++                    contentBuilder.append(deltaContent);
++                }
++                if (deltaContent.isEmpty()) {
++                    String messageContent = root.at("/choices/0/message/content").asText("");
++                    if (!messageContent.isEmpty()) {
++                        contentBuilder.append(messageContent);
++                    }
++                }
++                if (root.has("usage") && !root.path("usage").isMissingNode() && !root.path("usage").isNull()) {
++                    usageNode = root.path("usage");
++                }
++            } catch (Exception e) {
++                logger.warn("Failed to parse stream data in callModelApi: {}", data, e);
++            }
++        }
++        ObjectNode normalized = objectMapper.createObjectNode();
++        normalized.put("id", "stream-normalized");
++        normalized.put("object", "chat.completion");
++        normalized.put("model", model);
++        ArrayNode choices = objectMapper.createArrayNode();
++        ObjectNode choice = objectMapper.createObjectNode();
++        choice.put("index", 0);
++        ObjectNode message = objectMapper.createObjectNode();
++        message.put("role", "assistant");
++        message.put("content", contentBuilder.toString());
++        choice.set("message", message);
++        choice.put("finish_reason", "stop");
++        choices.add(choice);
++        normalized.set("choices", choices);
++        if (usageNode != null && usageNode.isObject()) {
++            normalized.set("usage", usageNode);
++        }
++        return normalized.toString();
++    }
++
++    private void appendUserMessageIfNeeded(List<Map<String, String>> messages, String userMessage) {
++        String normalizedUserMessage = userMessage == null ? "" : userMessage;
++        if (messages != null && !messages.isEmpty()) {
++            Map<String, String> last = messages.get(messages.size() - 1);
++            String lastRole = last == null ? null : last.get("role");
++            String lastContent = last == null ? null : last.get("content");
++            if ("user".equalsIgnoreCase(lastRole) && normalizedUserMessage.equals(lastContent)) {
++                return;
++            }
++        }
++        messages.add(Map.of("role", "user", "content", normalizedUserMessage));
++    }
++
++    private String parseSseDataLine(String line) {
++        if (line == null) {
++            return null;
++        }
++        String trimmed = line.trim();
++        if (!trimmed.startsWith("data:")) {
++            return null;
++        }
++        return trimmed.length() <= 5 ? "" : trimmed.substring(5).trim();
++    }
++
+     private String detailMessage(Throwable throwable) {
+         if (throwable == null) {
+             return "unknown";
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/PreviewDeployService.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/PreviewDeployService.java
+index ef14882..e48a5bf 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/PreviewDeployService.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/PreviewDeployService.java
+@@ -16,7 +16,6 @@ import org.springframework.stereotype.Service;
+ import java.time.LocalDateTime;
+ import java.util.List;
+ import java.util.Optional;
+-import java.util.UUID;
+ 
+ @Service
+ public class PreviewDeployService {
+@@ -25,6 +24,7 @@ public class PreviewDeployService {
+     private final TaskPreviewRepository taskPreviewRepository;
+     private final TaskRepository taskRepository;
+     private final TaskLogRepository taskLogRepository;
++    private final PreviewRuntimeService previewRuntimeService;
+ 
+     @Value("${smartark.preview.enabled:false}")
+     private boolean previewEnabled;
+@@ -37,14 +37,21 @@ public class PreviewDeployService {
+ 
+     public PreviewDeployService(TaskPreviewRepository taskPreviewRepository,
+                                 TaskRepository taskRepository,
+-                                TaskLogRepository taskLogRepository) {
++                                TaskLogRepository taskLogRepository,
++                                PreviewRuntimeService previewRuntimeService) {
+         this.taskPreviewRepository = taskPreviewRepository;
+         this.taskRepository = taskRepository;
+         this.taskLogRepository = taskLogRepository;
++        this.previewRuntimeService = previewRuntimeService;
+     }
+ 
+     @Async
+     public void deployPreviewAsync(String taskId) {
++        deployPreviewAsync(taskId, false);
++    }
++
++    @Async
++    public void deployPreviewAsync(String taskId, boolean forceDeploy) {
+         long startedAt = System.currentTimeMillis();
+         try {
+             Optional<TaskEntity> taskOptional = taskRepository.findById(taskId);
+@@ -52,7 +59,7 @@ public class PreviewDeployService {
+                 return;
+             }
+             TaskEntity task = taskOptional.get();
+-            if (!shouldTriggerDeploy(task)) {
++            if (!shouldTriggerDeploy(task, forceDeploy)) {
+                 return;
+             }
+             LocalDateTime now = LocalDateTime.now();
+@@ -77,7 +84,12 @@ public class PreviewDeployService {
+             }
+             preview.setStatus("provisioning");
+             preview.setPreviewUrl(null);
+-            preview.setRuntimeId(UUID.randomUUID().toString().replace("-", ""));
++            if (preview.getRuntimeId() != null && !preview.getRuntimeId().isBlank()) {
++                previewRuntimeService.stopRuntime(preview.getRuntimeId());
++            } else {
++                previewRuntimeService.stopRuntimeByTaskId(taskId);
++            }
++            preview.setRuntimeId(null);
+             preview.setExpireAt(null);
+             preview.setLastError(null);
+             preview.setUpdatedAt(now);
+@@ -85,17 +97,18 @@ public class PreviewDeployService {
+ 
+             appendTaskLog(taskId, "info", "Preview deployment started");
+ 
+-            String previewUrl = buildStaticPreviewUrl(taskId);
++            PreviewRuntimeService.RuntimeInfo runtimeInfo = previewRuntimeService.startRuntime(taskId);
+             LocalDateTime readyAt = LocalDateTime.now();
+             LocalDateTime expireAt = readyAt.plusHours(Math.max(previewDefaultTtlHours, 1));
+             preview.setStatus("ready");
+-            preview.setPreviewUrl(previewUrl);
++            preview.setPreviewUrl(runtimeInfo.previewUrl());
++            preview.setRuntimeId(runtimeInfo.runtimeId());
+             preview.setExpireAt(expireAt);
+             preview.setLastError(null);
+             preview.setUpdatedAt(readyAt);
+             taskPreviewRepository.save(preview);
+ 
+-            task.setResultUrl(previewUrl);
++            task.setResultUrl(runtimeInfo.previewUrl());
+             task.setUpdatedAt(readyAt);
+             taskRepository.save(task);
+ 
+@@ -106,7 +119,12 @@ public class PreviewDeployService {
+             int errorCode = resolvePreviewErrorCode(e);
+             LocalDateTime failedAt = LocalDateTime.now();
+             taskPreviewRepository.findByTaskId(taskId).ifPresent(preview -> {
++                if (preview.getRuntimeId() != null && !preview.getRuntimeId().isBlank()) {
++                    previewRuntimeService.stopRuntime(preview.getRuntimeId());
++                }
+                 preview.setStatus("failed");
++                preview.setPreviewUrl(null);
++                preview.setRuntimeId(null);
+                 preview.setLastError("[" + errorCode + "] " + messageOf(e));
+                 preview.setUpdatedAt(failedAt);
+                 taskPreviewRepository.save(preview);
+@@ -116,17 +134,13 @@ public class PreviewDeployService {
+         }
+     }
+ 
+-    private boolean shouldTriggerDeploy(TaskEntity task) {
++    private boolean shouldTriggerDeploy(TaskEntity task, boolean forceDeploy) {
+         return previewEnabled
+-                && autoDeployOnFinish
++                && (forceDeploy || autoDeployOnFinish)
+                 && "finished".equals(task.getStatus())
+                 && ("generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType()));
+     }
+ 
+-    private String buildStaticPreviewUrl(String taskId) {
+-        return "http://localhost:5173/preview/" + taskId;
+-    }
+-
+     private void appendTaskLog(String taskId, String level, String content) {
+         TaskLogEntity log = new TaskLogEntity();
+         log.setTaskId(taskId);
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/PreviewLifecycleService.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/PreviewLifecycleService.java
+index 59484f3..323b7ee 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/PreviewLifecycleService.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/PreviewLifecycleService.java
+@@ -19,14 +19,17 @@ public class PreviewLifecycleService {
+ 
+     private final TaskPreviewRepository taskPreviewRepository;
+     private final TaskLogRepository taskLogRepository;
++    private final PreviewRuntimeService previewRuntimeService;
+ 
+     @Value("${smartark.preview.enabled:false}")
+     private boolean previewEnabled;
+ 
+     public PreviewLifecycleService(TaskPreviewRepository taskPreviewRepository,
+-                                   TaskLogRepository taskLogRepository) {
++                                   TaskLogRepository taskLogRepository,
++                                   PreviewRuntimeService previewRuntimeService) {
+         this.taskPreviewRepository = taskPreviewRepository;
+         this.taskLogRepository = taskLogRepository;
++        this.previewRuntimeService = previewRuntimeService;
+     }
+ 
+     @Scheduled(fixedDelayString = "${smartark.preview.recycle-interval-ms:60000}")
+@@ -38,6 +41,7 @@ public class PreviewLifecycleService {
+         List<TaskPreviewEntity> expired = taskPreviewRepository.findByStatusAndExpireAtBefore("ready", now);
+         for (TaskPreviewEntity preview : expired) {
+             try {
++                previewRuntimeService.stopRuntime(preview.getRuntimeId());
+                 preview.setStatus("expired");
+                 preview.setRuntimeId(null);
+                 preview.setUpdatedAt(now);
+diff --git a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/TaskService.java b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/TaskService.java
+index b5abdc5..ed3acc0 100644
+--- a/services/api-gateway-java/src/main/java/com/smartark/gateway/service/TaskService.java
++++ b/services/api-gateway-java/src/main/java/com/smartark/gateway/service/TaskService.java
+@@ -9,6 +9,7 @@ import com.smartark.gateway.db.entity.PaperOutlineVersionEntity;
+ import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
+ import com.smartark.gateway.db.entity.ProjectEntity;
+ import com.smartark.gateway.db.entity.TaskEntity;
++import com.smartark.gateway.db.entity.TaskRelationEntity;
+ import com.smartark.gateway.db.entity.TaskPreviewEntity;
+ import com.smartark.gateway.db.entity.TaskStepEntity;
+ import com.smartark.gateway.db.entity.ArtifactEntity;
+@@ -16,6 +17,7 @@ import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
+ import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
+ import com.smartark.gateway.db.repo.ProjectRepository;
+ import com.smartark.gateway.db.repo.TaskPreviewRepository;
++import com.smartark.gateway.db.repo.TaskRelationRepository;
+ import com.smartark.gateway.db.repo.TaskRepository;
+ import com.smartark.gateway.db.repo.TaskStepRepository;
+ import com.smartark.gateway.db.repo.ArtifactRepository;
+@@ -27,25 +29,34 @@ import com.smartark.gateway.dto.PaperManuscriptResult;
+ import com.smartark.gateway.dto.PaperOutlineResult;
+ import com.smartark.gateway.dto.PaperProjectSummary;
+ import com.smartark.gateway.dto.TaskModifyRequest;
++import com.smartark.gateway.dto.TaskModifyFromPlanRequest;
+ import com.smartark.gateway.dto.TaskPreviewResult;
+ import com.smartark.gateway.dto.TaskStatusResult;
+ import org.springframework.beans.factory.annotation.Value;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
++import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ import java.time.LocalDateTime;
+ import java.util.ArrayList;
++import java.util.Comparator;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.UUID;
++import java.util.concurrent.CompletableFuture;
+ 
+ import com.smartark.gateway.db.entity.TaskLogEntity;
+ import com.smartark.gateway.db.repo.TaskLogRepository;
+ import com.smartark.gateway.dto.TaskLogDto;
++import com.smartark.gateway.dto.TaskRelationChainResult;
+ import java.time.ZoneId;
+ 
+ @Service
+ public class TaskService {
++    private static final Logger logger = LoggerFactory.getLogger(TaskService.class);
++
+     @Value("${smartark.preview.max-concurrent-per-user:2}")
+     private int previewMaxConcurrentPerUser;
+ 
+@@ -55,10 +66,12 @@ public class TaskService {
+     private final ProjectRepository projectRepository;
+     private final ArtifactRepository artifactRepository;
+     private final TaskPreviewRepository taskPreviewRepository;
++    private final TaskRelationRepository taskRelationRepository;
+     private final PaperTopicSessionRepository paperTopicSessionRepository;
+     private final PaperOutlineVersionRepository paperOutlineVersionRepository;
+     private final TaskExecutorService taskExecutorService;
+     private final PreviewDeployService previewDeployService;
++    private final PreviewRuntimeService previewRuntimeService;
+     private final BillingService billingService;
+     private final ObjectMapper objectMapper;
+ 
+@@ -68,10 +81,12 @@ public class TaskService {
+                        ProjectRepository projectRepository,
+                        ArtifactRepository artifactRepository,
+                        TaskPreviewRepository taskPreviewRepository,
++                       TaskRelationRepository taskRelationRepository,
+                        PaperTopicSessionRepository paperTopicSessionRepository,
+                        PaperOutlineVersionRepository paperOutlineVersionRepository,
+                        TaskExecutorService taskExecutorService,
+                        PreviewDeployService previewDeployService,
++                       PreviewRuntimeService previewRuntimeService,
+                        BillingService billingService,
+                        ObjectMapper objectMapper) {
+         this.taskRepository = taskRepository;
+@@ -80,10 +95,12 @@ public class TaskService {
+         this.projectRepository = projectRepository;
+         this.artifactRepository = artifactRepository;
+         this.taskPreviewRepository = taskPreviewRepository;
++        this.taskRelationRepository = taskRelationRepository;
+         this.paperTopicSessionRepository = paperTopicSessionRepository;
+         this.paperOutlineVersionRepository = paperOutlineVersionRepository;
+         this.taskExecutorService = taskExecutorService;
+         this.previewDeployService = previewDeployService;
++        this.previewRuntimeService = previewRuntimeService;
+         this.billingService = billingService;
+         this.objectMapper = objectMapper;
+     }
+@@ -105,7 +122,7 @@ public class TaskService {
+             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此项目");
+         }
+ 
+-        return createAndStartTask(project.getId(), userId, "generate", request.instructions());
++        return createAndStartTask(project.getId(), userId, "generate", request.instructions(), null);
+     }
+ 
+     public GenerateResult modify(String taskId, TaskModifyRequest request) {
+@@ -117,7 +134,73 @@ public class TaskService {
+             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+         }
+ 
+-        return createAndStartTask(parentTask.getProjectId(), userId, "modify", request.changeInstructions());
++        String normalized = request.changeInstructions() == null ? "" : request.changeInstructions().trim();
++        logger.info("Modify requested: sourceTaskId={}, projectId={}, userId={}, changeInstructionsLength={}",
++                taskId, parentTask.getProjectId(), userId, normalized.length());
++        GenerateResult result = createAndStartTask(parentTask.getProjectId(), userId, "modify", request.changeInstructions(), taskId);
++        appendTaskLog(taskId, "info", "Modify requested -> newTaskId=" + result.taskId());
++        return result;
++    }
++
++    public TaskRelationChainResult getTaskRelations(String sourceTaskId) {
++        Long userId = requireUserId();
++        TaskEntity sourceTask = taskRepository.findById(sourceTaskId)
++                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "来源任务不存在"));
++        if (!sourceTask.getUserId().equals(userId)) {
++            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权查看此任务链路");
++        }
++        List<TaskRelationEntity> relationEntities = taskRelationRepository.findByParentTaskIdOrderByCreatedAtDesc(sourceTaskId);
++        List<TaskRelationChainResult.ChildTaskRelation> relations = relationEntities.stream()
++                .map(relation -> {
++                    TaskEntity child = taskRepository.findById(relation.getChildTaskId()).orElse(null);
++                    return new TaskRelationChainResult.ChildTaskRelation(
++                            relation.getChildTaskId(),
++                            relation.getRelationType(),
++                            relation.getChatSessionId(),
++                            child == null ? "unknown" : child.getStatus(),
++                            child == null ? "unknown" : child.getTaskType(),
++                            relation.getCreatedAt() == null ? null : relation.getCreatedAt().toString()
++                    );
++                })
++                .sorted(Comparator.comparing(TaskRelationChainResult.ChildTaskRelation::createdAt, Comparator.nullsLast(String::compareTo)).reversed())
++                .toList();
++        return new TaskRelationChainResult(sourceTaskId, relations);
++    }
++
++    @Transactional
++    public GenerateResult modifyFromPlan(String sourceTaskId, TaskModifyFromPlanRequest request) {
++        Long userId = requireUserId();
++        TaskEntity sourceTask = taskRepository.findById(sourceTaskId)
++                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "来源任务不存在"));
++        if (!sourceTask.getUserId().equals(userId)) {
++            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
++        }
++        String normalizedInstructions = request.changeInstructions() == null ? "" : request.changeInstructions().trim();
++        if (normalizedInstructions.isEmpty()) {
++            throw new BusinessException(ErrorCodes.VALIDATION_FAILED, "changeInstructions 不能为空");
++        }
++        String normalizedDoc = request.iterationDoc() == null ? "" : request.iterationDoc().trim();
++        String normalizedSession = request.chatSessionId() == null ? "" : request.chatSessionId().trim();
++        String payload = normalizedDoc.isEmpty()
++                ? normalizedInstructions
++                : normalizedInstructions + "\n\n【迭代文档】\n" + normalizedDoc;
++        GenerateResult result = createAndStartTask(sourceTask.getProjectId(), userId, "modify", payload, sourceTaskId);
++
++        TaskRelationEntity relation = new TaskRelationEntity();
++        relation.setParentTaskId(sourceTaskId);
++        relation.setChildTaskId(result.taskId());
++        relation.setRelationType("modify_from_plan");
++        relation.setChatSessionId(normalizedSession.isEmpty() ? null : normalizedSession);
++        relation.setMetadataJson(toRelationMetadataJson(normalizedInstructions, normalizedDoc));
++        relation.setCreatedAt(LocalDateTime.now());
++        relation.setUpdatedAt(LocalDateTime.now());
++        taskRelationRepository.save(relation);
++
++        appendTaskLog(sourceTaskId, "info", "Modify from-plan requested -> newTaskId=" + result.taskId());
++        appendTaskLog(result.taskId(), "info", "Task relation saved: parentTaskId=" + sourceTaskId + ", relationType=modify_from_plan");
++        logger.info("Modify from-plan requested: sourceTaskId={}, childTaskId={}, userId={}, projectId={}, chatSessionId={}",
++                sourceTaskId, result.taskId(), userId, sourceTask.getProjectId(), normalizedSession.isEmpty() ? "-" : normalizedSession);
++        return result;
+     }
+ 
+     public PaperOutlineGenerateResult generatePaperOutline(PaperOutlineGenerateRequest request) {
+@@ -201,7 +284,7 @@ public class TaskService {
+         return new GenerateResult(taskId, "running");
+     }
+ 
+-    private GenerateResult createAndStartTask(String projectId, Long userId, String taskType, String instructions) {
++    private GenerateResult createAndStartTask(String projectId, Long userId, String taskType, String instructions, String sourceTaskId) {
+         String taskId = UUID.randomUUID().toString().replace("-", "");
+         LocalDateTime now = LocalDateTime.now();
+ 
+@@ -219,6 +302,9 @@ public class TaskService {
+         task.setCreatedAt(now);
+         task.setUpdatedAt(now);
+         taskRepository.save(task);
++        appendTaskLog(taskId, "info", "Task queued: taskType=" + taskType + ", projectId=" + projectId + ", sourceTaskId=" + (sourceTaskId == null ? "-" : sourceTaskId));
++        logger.info("Task created: taskId={}, taskType={}, projectId={}, userId={}, sourceTaskId={}",
++                taskId, taskType, projectId, userId, sourceTaskId == null ? "-" : sourceTaskId);
+ 
+         createStep(taskId, "requirement_analyze", "需求分析", 1);
+         createStep(taskId, "codegen_backend", "生成后端", 2);
+@@ -226,7 +312,9 @@ public class TaskService {
+         createStep(taskId, "sql_generate", "生成 SQL", 4);
+         createStep(taskId, "package", "打包交付物", 5);
+ 
++        appendTaskLog(taskId, "info", "Task dispatch requested: taskId=" + taskId);
+         taskExecutorService.executeTask(taskId);
++        logger.info("Task dispatch started: taskId={}, taskType={}", taskId, taskType);
+ 
+         return new GenerateResult(taskId, "queued");
+     }
+@@ -273,6 +361,17 @@ public class TaskService {
+         taskStepRepository.save(step);
+     }
+ 
++    private String toRelationMetadataJson(String changeInstructions, String iterationDoc) {
++        try {
++            return objectMapper.writeValueAsString(Map.of(
++                    "changeInstructions", changeInstructions,
++                    "iterationDoc", iterationDoc
++            ));
++        } catch (Exception ignored) {
++            return null;
++        }
++    }
++
+     public TaskStatusResult getStatus(String taskId) {
+         Long userId = requireUserId();
+         TaskEntity task = taskRepository.findById(taskId)
+@@ -317,9 +416,52 @@ public class TaskService {
+ 
+         TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId)
+                 .orElseGet(() -> buildPreviewFallback(task));
++        if ("ready".equals(preview.getStatus()) && isLegacyPreviewUrl(taskId, preview.getPreviewUrl())) {
++            preview.setStatus("failed");
++            preview.setPreviewUrl(null);
++            preview.setRuntimeId(null);
++            preview.setLastError("检测到旧版占位预览地址，请点击重建预览");
++            preview.setUpdatedAt(LocalDateTime.now());
++            if (preview.getId() != null) {
++                taskPreviewRepository.save(preview);
++            }
++        }
+         return toPreviewResult(taskId, preview);
+     }
+ 
++    public SseEmitter streamPreview(String taskId) {
++        Long userId = requireUserId();
++        TaskEntity task = taskRepository.findById(taskId)
++                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
++        if (!task.getUserId().equals(userId)) {
++            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
++        }
++        SseEmitter emitter = new SseEmitter(120_000L);
++        CompletableFuture.runAsync(() -> {
++            try {
++                for (int i = 0; i < 60; i++) {
++                    TaskPreviewResult preview = getPreview(taskId);
++                    emitter.send(SseEmitter.event().name("message").data(Map.of(
++                            "taskId", preview.taskId(),
++                            "status", preview.status(),
++                            "previewUrl", preview.previewUrl() == null ? "" : preview.previewUrl(),
++                            "expireAt", preview.expireAt() == null ? "" : preview.expireAt(),
++                            "lastError", preview.lastError() == null ? "" : preview.lastError(),
++                            "phase", "provisioning".equals(preview.status()) ? "预览部署进行中" : "预览状态更新完成"
++                    )));
++                    if (!"provisioning".equals(preview.status())) {
++                        break;
++                    }
++                    Thread.sleep(2000L);
++                }
++                emitter.complete();
++            } catch (Exception e) {
++                emitter.completeWithError(e);
++            }
++        });
++        return emitter;
++    }
++
+     @Transactional
+     public TaskPreviewResult rebuildPreview(String taskId) {
+         Long userId = requireUserId();
+@@ -331,11 +473,11 @@ public class TaskService {
+         if (!isPreviewTargetTask(task)) {
+             throw new BusinessException(ErrorCodes.CONFLICT, "当前任务类型不支持预览重建");
+         }
+-        TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId)
+-                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "预览记录不存在"));
+-        if (!"failed".equals(preview.getStatus()) && !"expired".equals(preview.getStatus())) {
+-            throw new BusinessException(ErrorCodes.PREVIEW_REBUILD_STATE_INVALID, "仅 failed 或 expired 状态允许重建预览");
++        if (!"finished".equals(task.getStatus())) {
++            throw new BusinessException(ErrorCodes.CONFLICT, "任务未完成，暂不支持预览重建");
+         }
++        TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId).orElse(null);
++        boolean previewMissing = preview == null;
+         long activeCount = taskPreviewRepository.countByUserIdAndStatusIn(userId, List.of("provisioning", "ready"));
+         if (activeCount >= Math.max(previewMaxConcurrentPerUser, 1)) {
+             throw new BusinessException(
+@@ -344,14 +486,52 @@ public class TaskService {
+             );
+         }
+         LocalDateTime now = LocalDateTime.now();
++        if (previewMissing) {
++            preview = new TaskPreviewEntity();
++            preview.setTaskId(taskId);
++            preview.setProjectId(task.getProjectId());
++            preview.setUserId(task.getUserId());
++            preview.setCreatedAt(now);
++        } else if (!"failed".equals(preview.getStatus()) && !"expired".equals(preview.getStatus())) {
++            throw new BusinessException(ErrorCodes.PREVIEW_REBUILD_STATE_INVALID, "仅 failed 或 expired 状态允许重建预览");
++        }
+         preview.setStatus("provisioning");
+         preview.setPreviewUrl(null);
++        preview.setRuntimeId(null);
+         preview.setExpireAt(null);
+         preview.setLastError(null);
+         preview.setUpdatedAt(now);
+         taskPreviewRepository.save(preview);
+-        appendTaskLog(taskId, "info", "Preview rebuild requested");
+-        previewDeployService.deployPreviewAsync(taskId);
++        appendTaskLog(taskId, "info", previewMissing ? "Preview record auto-created and rebuild requested" : "Preview rebuild requested");
++        previewDeployService.deployPreviewAsync(taskId, true);
++        return toPreviewResult(taskId, preview);
++    }
++
++    @Transactional
++    public TaskPreviewResult releasePreview(String taskId) {
++        Long userId = requireUserId();
++        TaskEntity task = taskRepository.findById(taskId)
++                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
++        if (!task.getUserId().equals(userId)) {
++            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
++        }
++        if (!isPreviewTargetTask(task)) {
++            throw new BusinessException(ErrorCodes.CONFLICT, "当前任务类型不支持预览释放");
++        }
++        TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId).orElse(null);
++        if (preview == null) {
++            return toPreviewResult(taskId, buildTransientPreview(taskId, "expired", null, LocalDateTime.now(), "预览资源已释放"));
++        }
++        previewRuntimeService.stopRuntime(preview.getRuntimeId());
++        previewRuntimeService.stopRuntimeByTaskId(taskId);
++        preview.setStatus("expired");
++        preview.setPreviewUrl(null);
++        preview.setRuntimeId(null);
++        preview.setExpireAt(LocalDateTime.now());
++        preview.setLastError("预览资源已手动释放");
++        preview.setUpdatedAt(LocalDateTime.now());
++        taskPreviewRepository.save(preview);
++        appendTaskLog(taskId, "info", "Preview released by user");
+         return toPreviewResult(taskId, preview);
+     }
+ 
+@@ -537,7 +717,7 @@ public class TaskService {
+         if (!"finished".equals(task.getStatus())) {
+             return buildTransientPreview(task.getId(), "provisioning", null, null, null);
+         }
+-        return buildTransientPreview(task.getId(), "provisioning", null, null, null);
++        return buildTransientPreview(task.getId(), "failed", null, null, "预览尚未初始化，请点击重建预览");
+     }
+ 
+     private TaskPreviewResult toPreviewResult(String taskId, TaskPreviewEntity preview) {
+@@ -567,4 +747,13 @@ public class TaskService {
+         return "generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType());
+     }
+ 
++    private boolean isLegacyPreviewUrl(String taskId, String previewUrl) {
++        if (previewUrl == null || previewUrl.isBlank()) {
++            return false;
++        }
++        String normalized = previewUrl.trim();
++        return normalized.equals("http://localhost:5173/preview/" + taskId)
++                || normalized.endsWith("/preview/" + taskId);
++    }
++
+ }
+diff --git a/services/api-gateway-java/src/main/resources/application.yml b/services/api-gateway-java/src/main/resources/application.yml
+index 6661a24..0e34a58 100644
+--- a/services/api-gateway-java/src/main/resources/application.yml
++++ b/services/api-gateway-java/src/main/resources/application.yml
+@@ -32,12 +32,18 @@ smartark:
+     workspace-root: /tmp/smartark/
+     max-retries: 2
+     retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate
++    recovery-enabled: ${AGENT_RECOVERY_ENABLED:true}
++    task-timeout-minutes: ${AGENT_TASK_TIMEOUT_MINUTES:30}
++    recovery-scan-interval-ms: ${AGENT_RECOVERY_SCAN_INTERVAL_MS:60000}
+   preview:
+-    enabled: ${PREVIEW_ENABLED:false}
++    enabled: ${PREVIEW_ENABLED:true}
+     auto-deploy-on-finish: ${PREVIEW_AUTO_DEPLOY_ON_FINISH:true}
+     default-ttl-hours: ${PREVIEW_DEFAULT_TTL_HOURS:24}
+     max-concurrent-per-user: ${PREVIEW_MAX_CONCURRENT_PER_USER:2}
+     recycle-interval-ms: ${PREVIEW_RECYCLE_INTERVAL_MS:60000}
++    runtime-start-timeout-ms: ${PREVIEW_RUNTIME_START_TIMEOUT_MS:60000}
++    runtime-install-timeout-ms: ${PREVIEW_RUNTIME_INSTALL_TIMEOUT_MS:180000}
++    runtime-public-host: ${PREVIEW_RUNTIME_PUBLIC_HOST:http://localhost}
+   cors:
+     allowed-origins: "*"
+   auth:
+@@ -49,6 +55,8 @@ smartark:
+     mock-enabled: ${MODEL_MOCK_ENABLED:false}
+     chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
+     code-model: ${CODE_MODEL:qwen-plus}
++    connect-timeout-ms: ${MODEL_CONNECT_TIMEOUT_MS:10000}
++    read-timeout-ms: ${MODEL_READ_TIMEOUT_MS:120000}
+   billing:
+     recharge:
+       callback-mock-sign-enabled: ${RECHARGE_CALLBACK_MOCK_SIGN_ENABLED:true}
+diff --git a/services/api-gateway-java/src/test/java/com/smartark/gateway/service/PreviewDeployServiceTest.java b/services/api-gateway-java/src/test/java/com/smartark/gateway/service/PreviewDeployServiceTest.java
+index 062beb5..537295e 100644
+--- a/services/api-gateway-java/src/test/java/com/smartark/gateway/service/PreviewDeployServiceTest.java
++++ b/services/api-gateway-java/src/test/java/com/smartark/gateway/service/PreviewDeployServiceTest.java
+@@ -15,6 +15,8 @@ import org.mockito.Mock;
+ import org.mockito.junit.jupiter.MockitoExtension;
+ import org.springframework.test.util.ReflectionTestUtils;
+ 
++import java.time.LocalDateTime;
++import java.util.ArrayList;
+ import java.util.List;
+ import java.util.Optional;
+ 
+@@ -34,6 +36,8 @@ class PreviewDeployServiceTest {
+     private TaskRepository taskRepository;
+     @Mock
+     private TaskLogRepository taskLogRepository;
++    @Mock
++    private PreviewRuntimeService previewRuntimeService;
+ 
+     @InjectMocks
+     private PreviewDeployService previewDeployService;
+@@ -43,29 +47,41 @@ class PreviewDeployServiceTest {
+         ReflectionTestUtils.setField(previewDeployService, "previewEnabled", true);
+         ReflectionTestUtils.setField(previewDeployService, "autoDeployOnFinish", true);
+         ReflectionTestUtils.setField(previewDeployService, "previewDefaultTtlHours", 24);
+-        when(taskPreviewRepository.save(any(TaskPreviewEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+-        when(taskRepository.save(any(TaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+-        when(taskLogRepository.save(any(TaskLogEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+     }
+ 
+     @Test
+-    void deployPreviewAsync_shouldSaveProvisioningThenReady_forFinishedGenerateTask() {
++    void deployPreviewAsync_shouldSaveProvisioningThenReady_forFinishedGenerateTask() throws Exception {
++        List<TaskPreviewEntity> snapshots = new ArrayList<>();
+         TaskEntity task = buildTask("t1", "generate", "finished");
+         when(taskRepository.findById("t1")).thenReturn(Optional.of(task));
+         when(taskPreviewRepository.findByTaskId("t1")).thenReturn(Optional.empty());
++        when(previewRuntimeService.startRuntime("t1"))
++                .thenReturn(new PreviewRuntimeService.RuntimeInfo("rt1", "http://localhost:33001"));
++        when(taskPreviewRepository.save(any(TaskPreviewEntity.class))).thenAnswer(invocation -> {
++            TaskPreviewEntity arg = invocation.getArgument(0);
++            TaskPreviewEntity copy = new TaskPreviewEntity();
++            copy.setStatus(arg.getStatus());
++            copy.setPreviewUrl(arg.getPreviewUrl());
++            copy.setRuntimeId(arg.getRuntimeId());
++            copy.setExpireAt(arg.getExpireAt());
++            copy.setLastError(arg.getLastError());
++            copy.setUpdatedAt(arg.getUpdatedAt() == null ? null : LocalDateTime.from(arg.getUpdatedAt()));
++            snapshots.add(copy);
++            return arg;
++        });
+ 
+         previewDeployService.deployPreviewAsync("t1");
+ 
+-        ArgumentCaptor<TaskPreviewEntity> previewCaptor = ArgumentCaptor.forClass(TaskPreviewEntity.class);
+-        verify(taskPreviewRepository, times(2)).save(previewCaptor.capture());
+-        List<TaskPreviewEntity> savedPreviews = previewCaptor.getAllValues();
+-        assertThat(savedPreviews.get(0).getStatus()).isEqualTo("provisioning");
+-        assertThat(savedPreviews.get(1).getStatus()).isEqualTo("ready");
+-        assertThat(savedPreviews.get(1).getPreviewUrl()).isEqualTo("http://localhost:5173/preview/t1");
+-        assertThat(savedPreviews.get(1).getExpireAt()).isNotNull();
++        verify(taskPreviewRepository, times(2)).save(any(TaskPreviewEntity.class));
++        assertThat(snapshots.get(0).getStatus()).isEqualTo("provisioning");
++        assertThat(snapshots.get(1).getStatus()).isEqualTo("ready");
++        assertThat(snapshots.get(1).getPreviewUrl()).isEqualTo("http://localhost:33001");
++        assertThat(snapshots.get(1).getRuntimeId()).isEqualTo("rt1");
++        assertThat(snapshots.get(1).getExpireAt()).isNotNull();
+ 
+         verify(taskRepository, times(1)).save(task);
+-        assertThat(task.getResultUrl()).isEqualTo("http://localhost:5173/preview/t1");
++        assertThat(task.getResultUrl()).isEqualTo("http://localhost:33001");
++        verify(previewRuntimeService).startRuntime("t1");
+ 
+         ArgumentCaptor<TaskLogEntity> logCaptor = ArgumentCaptor.forClass(TaskLogEntity.class);
+         verify(taskLogRepository, times(2)).save(logCaptor.capture());
+@@ -75,7 +91,7 @@ class PreviewDeployServiceTest {
+     }
+ 
+     @Test
+-    void deployPreviewAsync_shouldSkipWhenTaskIsNotPreviewTarget() {
++    void deployPreviewAsync_shouldSkipWhenTaskIsNotPreviewTarget() throws Exception {
+         TaskEntity task = buildTask("t2", "paper_outline", "finished");
+         when(taskRepository.findById("t2")).thenReturn(Optional.of(task));
+ 
+@@ -84,6 +100,60 @@ class PreviewDeployServiceTest {
+         verify(taskPreviewRepository, never()).save(any(TaskPreviewEntity.class));
+         verify(taskLogRepository, never()).save(any(TaskLogEntity.class));
+         verify(taskRepository, never()).save(any(TaskEntity.class));
++        verify(previewRuntimeService, never()).startRuntime(any(String.class));
++    }
++
++    @Test
++    void deployPreviewAsync_shouldSaveProvisioningThenReady_forFinishedModifyTask() throws Exception {
++        TaskEntity task = buildTask("t3", "modify", "finished");
++        when(taskRepository.findById("t3")).thenReturn(Optional.of(task));
++        when(taskPreviewRepository.findByTaskId("t3")).thenReturn(Optional.empty());
++        when(previewRuntimeService.startRuntime("t3"))
++                .thenReturn(new PreviewRuntimeService.RuntimeInfo("rt3", "http://localhost:33003"));
++        when(taskPreviewRepository.save(any(TaskPreviewEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
++
++        previewDeployService.deployPreviewAsync("t3");
++
++        ArgumentCaptor<TaskPreviewEntity> previewCaptor = ArgumentCaptor.forClass(TaskPreviewEntity.class);
++        verify(taskPreviewRepository, times(2)).save(previewCaptor.capture());
++        List<TaskPreviewEntity> savedPreviews = previewCaptor.getAllValues();
++        assertThat(savedPreviews.get(1).getStatus()).isEqualTo("ready");
++        assertThat(savedPreviews.get(1).getPreviewUrl()).isEqualTo("http://localhost:33003");
++        verify(previewRuntimeService).startRuntime("t3");
++    }
++
++    @Test
++    void deployPreviewAsync_shouldMarkFailedWhenRuntimeStartThrows() throws Exception {
++        List<TaskPreviewEntity> snapshots = new ArrayList<>();
++        TaskEntity task = buildTask("t4", "generate", "finished");
++        TaskPreviewEntity existing = new TaskPreviewEntity();
++        existing.setTaskId("t4");
++        existing.setProjectId("p1");
++        existing.setUserId(1L);
++        existing.setCreatedAt(LocalDateTime.now().minusMinutes(1));
++        existing.setStatus("provisioning");
++        when(taskRepository.findById("t4")).thenReturn(Optional.of(task));
++        when(taskPreviewRepository.findByTaskId("t4")).thenReturn(Optional.of(existing));
++        when(previewRuntimeService.startRuntime("t4")).thenThrow(new RuntimeException("start failed"));
++        when(taskPreviewRepository.save(any(TaskPreviewEntity.class))).thenAnswer(invocation -> {
++            TaskPreviewEntity arg = invocation.getArgument(0);
++            TaskPreviewEntity copy = new TaskPreviewEntity();
++            copy.setStatus(arg.getStatus());
++            copy.setPreviewUrl(arg.getPreviewUrl());
++            copy.setRuntimeId(arg.getRuntimeId());
++            copy.setLastError(arg.getLastError());
++            copy.setUpdatedAt(arg.getUpdatedAt());
++            snapshots.add(copy);
++            return arg;
++        });
++
++        previewDeployService.deployPreviewAsync("t4");
++
++        verify(taskPreviewRepository, times(2)).save(any(TaskPreviewEntity.class));
++        assertThat(snapshots.get(0).getStatus()).isEqualTo("provisioning");
++        assertThat(snapshots.get(1).getStatus()).isEqualTo("failed");
++        assertThat(snapshots.get(1).getLastError()).contains("[", "start failed");
++        verify(taskRepository, never()).save(any(TaskEntity.class));
+     }
+ 
+     private TaskEntity buildTask(String taskId, String taskType, String status) {
+diff --git a/services/api-gateway-java/src/test/java/com/smartark/gateway/service/TaskServicePaperOutlineTest.java b/services/api-gateway-java/src/test/java/com/smartark/gateway/service/TaskServicePaperOutlineTest.java
+index 043259a..f230288 100644
+--- a/services/api-gateway-java/src/test/java/com/smartark/gateway/service/TaskServicePaperOutlineTest.java
++++ b/services/api-gateway-java/src/test/java/com/smartark/gateway/service/TaskServicePaperOutlineTest.java
+@@ -56,6 +56,8 @@ class TaskServicePaperOutlineTest {
+     @Mock
+     private TaskPreviewRepository taskPreviewRepository;
+     @Mock
++    private com.smartark.gateway.db.repo.TaskRelationRepository taskRelationRepository;
++    @Mock
+     private PaperTopicSessionRepository paperTopicSessionRepository;
+     @Mock
+     private PaperOutlineVersionRepository paperOutlineVersionRepository;
+@@ -64,6 +66,8 @@ class TaskServicePaperOutlineTest {
+     @Mock
+     private PreviewDeployService previewDeployService;
+     @Mock
++    private PreviewRuntimeService previewRuntimeService;
++    @Mock
+     private BillingService billingService;
+ 
+     private TaskService taskService;
+@@ -77,10 +81,12 @@ class TaskServicePaperOutlineTest {
+                 projectRepository,
+                 artifactRepository,
+                 taskPreviewRepository,
++                taskRelationRepository,
+                 paperTopicSessionRepository,
+                 paperOutlineVersionRepository,
+                 taskExecutorService,
+                 previewDeployService,
++                previewRuntimeService,
+                 billingService,
+                 new ObjectMapper()
+         );

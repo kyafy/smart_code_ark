@@ -6,6 +6,7 @@ import com.smartark.gateway.db.repo.TaskLogRepository;
 import com.smartark.gateway.db.repo.TaskPreviewRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,9 @@ public class PreviewLifecycleService {
 
     private final TaskPreviewRepository taskPreviewRepository;
     private final TaskLogRepository taskLogRepository;
+
+    @Autowired(required = false)
+    private ContainerRuntimeService containerRuntimeService;
 
     @Value("${smartark.preview.enabled:false}")
     private boolean previewEnabled;
@@ -38,8 +42,11 @@ public class PreviewLifecycleService {
         List<TaskPreviewEntity> expired = taskPreviewRepository.findByStatusAndExpireAtBefore("ready", now);
         for (TaskPreviewEntity preview : expired) {
             try {
+                // Stop and remove the container if runtime is available
+                stopContainer(preview);
+
                 preview.setStatus("expired");
-                preview.setRuntimeId(null);
+                preview.setPhase(null);
                 preview.setUpdatedAt(now);
                 taskPreviewRepository.save(preview);
                 appendTaskLog(preview.getTaskId(), "info", "Preview instance recycled as expired");
@@ -47,6 +54,26 @@ public class PreviewLifecycleService {
                 logger.warn("Failed to recycle preview for task {}", preview.getTaskId(), e);
                 appendTaskLog(preview.getTaskId(), "error", "Preview recycle failed: " + safeMessage(e));
             }
+        }
+    }
+
+    /**
+     * Stop container associated with a preview. Idempotent.
+     */
+    private void stopContainer(TaskPreviewEntity preview) {
+        String runtimeId = preview.getRuntimeId();
+        if (runtimeId == null || runtimeId.isBlank()) {
+            return;
+        }
+        if (containerRuntimeService == null) {
+            logger.debug("ContainerRuntimeService not available, skipping container cleanup for {}", runtimeId);
+            return;
+        }
+        try {
+            containerRuntimeService.stopAndRemoveContainer(runtimeId);
+            logger.info("Container stopped and removed for task {}: {}", preview.getTaskId(), runtimeId);
+        } catch (Exception e) {
+            logger.warn("Failed to stop container {} for task {}: {}", runtimeId, preview.getTaskId(), e.getMessage());
         }
     }
 

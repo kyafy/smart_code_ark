@@ -8,6 +8,8 @@ import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.db.repo.PaperSourceRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
+import com.smartark.gateway.service.ArxivService;
+import com.smartark.gateway.service.CrossrefService;
 import com.smartark.gateway.service.SemanticScholarService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,6 +35,10 @@ class AcademicRetrieveStepTest {
     @Mock
     private SemanticScholarService semanticScholarService;
     @Mock
+    private CrossrefService crossrefService;
+    @Mock
+    private ArxivService arxivService;
+    @Mock
     private PaperTopicSessionRepository paperTopicSessionRepository;
     @Mock
     private PaperSourceRepository paperSourceRepository;
@@ -41,6 +47,8 @@ class AcademicRetrieveStepTest {
     void execute_retrievesAndPersistsSources_thenUpdateSessionStatus() throws Exception {
         AcademicRetrieveStep step = new AcademicRetrieveStep(
                 semanticScholarService,
+                crossrefService,
+                arxivService,
                 paperTopicSessionRepository,
                 paperSourceRepository,
                 new ObjectMapper()
@@ -74,6 +82,8 @@ class AcademicRetrieveStepTest {
 
         when(paperTopicSessionRepository.findByTaskId("task-1")).thenReturn(Optional.of(session));
         when(semanticScholarService.searchPapers(eq("细化主题 计算机科学"), eq(12))).thenReturn(List.of(item));
+        when(crossrefService.searchPapers(eq("细化主题 计算机科学"), eq(10))).thenReturn(List.of());
+        when(arxivService.searchPapers(eq("细化主题 计算机科学"), eq(10))).thenReturn(List.of());
         when(semanticScholarService.searchPapers(eq("细化主题 计算机科学 RQ1"), eq(5))).thenReturn(List.of(item));
 
         step.execute(context);
@@ -103,6 +113,8 @@ class AcademicRetrieveStepTest {
     void execute_writeDegradedMarkerWhenNoRetrievalResult() throws Exception {
         AcademicRetrieveStep step = new AcademicRetrieveStep(
                 semanticScholarService,
+                crossrefService,
+                arxivService,
                 paperTopicSessionRepository,
                 paperSourceRepository,
                 new ObjectMapper()
@@ -125,6 +137,8 @@ class AcademicRetrieveStepTest {
 
         when(paperTopicSessionRepository.findByTaskId("task-empty")).thenReturn(Optional.of(session));
         when(semanticScholarService.searchPapers(eq("空检索细化主题 计算机科学"), eq(12))).thenReturn(List.of());
+        when(crossrefService.searchPapers(eq("空检索细化主题 计算机科学"), eq(10))).thenReturn(List.of());
+        when(arxivService.searchPapers(eq("空检索细化主题 计算机科学"), eq(10))).thenReturn(List.of());
         when(semanticScholarService.searchPapers(eq("空检索细化主题 计算机科学 RQ1"), eq(5))).thenReturn(List.of());
         when(semanticScholarService.searchPapers(eq("空检索细化主题"), eq(5))).thenReturn(List.of());
 

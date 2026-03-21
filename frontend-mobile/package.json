@@ -1,0 +1,27 @@
+{
+  "name": "frontend-mobile",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:h5": "vite",
+    "build:h5": "vite build",
+    "type-check": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-5000420260318001",
+    "@smartark/api-sdk": "file:../packages/api-sdk",
+    "@smartark/constants": "file:../packages/constants",
+    "@smartark/domain": "file:../packages/domain",
+    "pinia": "2.1.7",
+    "vue": "3.4.21"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "3.4.28",
+    "@dcloudio/vite-plugin-uni": "3.0.0-5000420260318001",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.8.3",
+    "vite": "5.2.8",
+    "vue-tsc": "^2.2.4"
+  }
+}

@@ -1,0 +1,80 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:smartark}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${DB_USER:smartark}
+    password: ${DB_PASSWORD:smartark}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      repositories:
+        enabled: false
+
+smartark:
+  agent:
+    workspace-root: /tmp/smartark/
+    max-retries: 2
+    retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate
+    recovery-enabled: ${AGENT_RECOVERY_ENABLED:true}
+    task-timeout-minutes: ${AGENT_TASK_TIMEOUT_MINUTES:30}
+    recovery-scan-interval-ms: ${AGENT_RECOVERY_SCAN_INTERVAL_MS:60000}
+  preview:
+    enabled: ${PREVIEW_ENABLED:true}
+    auto-deploy-on-finish: ${PREVIEW_AUTO_DEPLOY_ON_FINISH:true}
+    default-ttl-hours: ${PREVIEW_DEFAULT_TTL_HOURS:24}
+    max-concurrent-per-user: ${PREVIEW_MAX_CONCURRENT_PER_USER:2}
+    recycle-interval-ms: ${PREVIEW_RECYCLE_INTERVAL_MS:60000}
+    runtime-start-timeout-ms: ${PREVIEW_RUNTIME_START_TIMEOUT_MS:60000}
+    runtime-install-timeout-ms: ${PREVIEW_RUNTIME_INSTALL_TIMEOUT_MS:180000}
+    runtime-public-host: ${PREVIEW_RUNTIME_PUBLIC_HOST:http://localhost}
+  cors:
+    allowed-origins: "*"
+  auth:
+    jwt-secret: ${JWT_SECRET:change-me}
+    token-ttl-seconds: ${JWT_TTL_SECONDS:604800}
+  model:
+    base-url: ${MODEL_BASE_URL:}
+    api-key: ${MODEL_API_KEY:}
+    mock-enabled: ${MODEL_MOCK_ENABLED:false}
+    chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
+    code-model: ${CODE_MODEL:qwen-plus}
+    connect-timeout-ms: ${MODEL_CONNECT_TIMEOUT_MS:10000}
+    read-timeout-ms: ${MODEL_READ_TIMEOUT_MS:120000}
+  billing:
+    recharge:
+      callback-mock-sign-enabled: ${RECHARGE_CALLBACK_MOCK_SIGN_ENABLED:true}
+      callback-mock-sign-secret: ${RECHARGE_CALLBACK_MOCK_SIGN_SECRET:smartark-recharge-secret}
+  paper:
+    semantic-scholar:
+      base-url: ${SEMANTIC_SCHOLAR_BASE_URL:https://api.semanticscholar.org}
+      api-key: ${SEMANTIC_SCHOLAR_API_KEY:}
+      timeout-ms: ${SEMANTIC_SCHOLAR_TIMEOUT_MS:10000}
+    quality-rewrite:
+      score-threshold: ${PAPER_QUALITY_REWRITE_SCORE_THRESHOLD:75}
+      max-rounds: ${PAPER_QUALITY_REWRITE_MAX_ROUNDS:1}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}

@@ -25,6 +25,19 @@ services:
       timeout: 5s
       retries: 20
 
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   api-gateway:
     build:
       context: ./services/api-gateway-java
@@ -41,11 +54,28 @@ services:
       MODEL_MOCK_ENABLED: ${MODEL_MOCK_ENABLED:-true}
       CHAT_MODEL: ${CHAT_MODEL:-Qwen3.5-Plus}
       CODE_MODEL: ${CODE_MODEL:-qwen-plus}
+      QDRANT_HOST: qdrant
+      QDRANT_GRPC_PORT: 6334
+      RAG_ENABLED: ${RAG_ENABLED:-true}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-text-embedding-v3}
+      RAG_EMBEDDING_DIMENSION: ${RAG_EMBEDDING_DIMENSION:-1024}
+      CROSSREF_MAILTO: ${CROSSREF_MAILTO:-aicfu71@gmail.com}
+      PREVIEW_ENABLED: ${PREVIEW_ENABLED:-true}
+      PREVIEW_DOCKER_HOST: unix:///var/run/docker.sock
       TZ: UTC
     ports:
       - "8080:8080"
+      - "30000-30100:30000-30100"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/smartark:/tmp/smartark
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
+volumes:
+  qdrant_data:

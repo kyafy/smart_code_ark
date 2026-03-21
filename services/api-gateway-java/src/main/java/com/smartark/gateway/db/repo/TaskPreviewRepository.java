@@ -12,4 +12,6 @@ public interface TaskPreviewRepository extends JpaRepository<TaskPreviewEntity, 
     Optional<TaskPreviewEntity> findByTaskId(String taskId);
     long countByUserIdAndStatusIn(Long userId, Collection<String> statuses);
     List<TaskPreviewEntity> findByStatusAndExpireAtBefore(String status, LocalDateTime expireAt);
+    List<TaskPreviewEntity> findByStatusInAndUpdatedAtBefore(Collection<String> statuses, LocalDateTime before);
+    List<TaskPreviewEntity> findByStatus(String status);
 }

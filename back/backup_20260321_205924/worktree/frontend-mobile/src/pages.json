@@ -1,0 +1,17 @@
+{
+  "pages": [
+    { "path": "pages/login/index", "style": { "navigationBarTitleText": "登录" } },
+    { "path": "pages/home/index", "style": { "navigationBarTitleText": "首页" } },
+    { "path": "pages/projects/index", "style": { "navigationBarTitleText": "项目列表" } },
+    { "path": "pages/chat/index", "style": { "navigationBarTitleText": "聊天" } },
+    { "path": "pages/tasks/index", "style": { "navigationBarTitleText": "任务进度" } },
+    { "path": "pages/profile/index", "style": { "navigationBarTitleText": "个人中心" } },
+    { "path": "pages/recharge/index", "style": { "navigationBarTitleText": "积分充值" } }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "Smart Code Ark",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f8fafc"
+  }
+}

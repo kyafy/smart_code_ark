@@ -3,6 +3,7 @@ package com.smartark.gateway.controller;
 import com.smartark.gateway.common.response.ApiResponse;
 import com.smartark.gateway.dto.GenerateRequest;
 import com.smartark.gateway.dto.GenerateResult;
+import com.smartark.gateway.dto.PreviewLogsResult;
 import com.smartark.gateway.dto.TaskModifyRequest;
 import com.smartark.gateway.dto.TaskPreviewResult;
 import com.smartark.gateway.dto.TaskStatusResult;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -44,6 +46,13 @@ public class TaskController {
     @PostMapping("/task/{taskId}/preview/rebuild")
     public ApiResponse<TaskPreviewResult> rebuildPreview(@PathVariable("taskId") String taskId) {
         return ApiResponse.success(taskService.rebuildPreview(taskId));
+    }
+
+    @GetMapping("/task/{taskId}/preview/logs")
+    public ApiResponse<PreviewLogsResult> getPreviewLogs(
+            @PathVariable("taskId") String taskId,
+            @RequestParam(value = "tail", defaultValue = "200") int tail) {
+        return ApiResponse.success(taskService.getPreviewLogs(taskId, tail));
     }
 
     @PostMapping("/task/{taskId}/modify")

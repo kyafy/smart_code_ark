@@ -28,17 +28,29 @@ public class TaskPreviewEntity {
     @Column(name = "status", nullable = false, length = 32)
     private String status;
 
+    @Column(name = "phase", length = 32)
+    private String phase;
+
     @Column(name = "preview_url", length = 512)
     private String previewUrl;
 
     @Column(name = "runtime_id", length = 128)
     private String runtimeId;
 
+    @Column(name = "build_log_url", length = 512)
+    private String buildLogUrl;
+
     @Column(name = "expire_at")
     private LocalDateTime expireAt;
 
     @Column(name = "last_error", length = 1024)
     private String lastError;
+
+    @Column(name = "last_error_code")
+    private Integer lastErrorCode;
+
+    @Column(name = "last_health_check_at")
+    private LocalDateTime lastHealthCheckAt;
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
@@ -86,6 +98,14 @@ public class TaskPreviewEntity {
         this.status = status;
     }
 
+    public String getPhase() {
+        return phase;
+    }
+
+    public void setPhase(String phase) {
+        this.phase = phase;
+    }
+
     public String getPreviewUrl() {
         return previewUrl;
     }
@@ -102,6 +122,14 @@ public class TaskPreviewEntity {
         this.runtimeId = runtimeId;
     }
 
+    public String getBuildLogUrl() {
+        return buildLogUrl;
+    }
+
+    public void setBuildLogUrl(String buildLogUrl) {
+        this.buildLogUrl = buildLogUrl;
+    }
+
     public LocalDateTime getExpireAt() {
         return expireAt;
     }
@@ -116,6 +144,22 @@ public class TaskPreviewEntity {
 
     public void setLastError(String lastError) {
         this.lastError = lastError;
+    }
+
+    public Integer getLastErrorCode() {
+        return lastErrorCode;
+    }
+
+    public void setLastErrorCode(Integer lastErrorCode) {
+        this.lastErrorCode = lastErrorCode;
+    }
+
+    public LocalDateTime getLastHealthCheckAt() {
+        return lastHealthCheckAt;
+    }
+
+    public void setLastHealthCheckAt(LocalDateTime lastHealthCheckAt) {
+        this.lastHealthCheckAt = lastHealthCheckAt;
     }
 
     public LocalDateTime getCreatedAt() {

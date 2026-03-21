@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
+import com.smartark.gateway.agent.model.RagEvidenceItem;
 import com.smartark.gateway.db.entity.PaperOutlineVersionEntity;
 import com.smartark.gateway.db.entity.PaperSourceEntity;
 import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
@@ -48,6 +49,13 @@ public class OutlineGenerateStep implements AgentStep {
         List<PaperSourceEntity> sources = paperSourceRepository.findBySessionIdOrderByCreatedAtAsc(session.getId());
         JsonNode sourceNode = objectMapper.readTree(objectMapper.writeValueAsString(sources));
 
+        // Build RAG evidence JSON if available
+        JsonNode ragEvidenceNode = null;
+        List<RagEvidenceItem> ragItems = context.getRagEvidenceItems();
+        if (ragItems != null && !ragItems.isEmpty()) {
+            ragEvidenceNode = objectMapper.readTree(objectMapper.writeValueAsString(ragItems));
+        }
+
         JsonNode outline = modelService.generatePaperOutline(
                 context.getTask().getId(),
                 context.getTask().getProjectId(),
@@ -57,7 +65,8 @@ public class OutlineGenerateStep implements AgentStep {
                 session.getDegreeLevel(),
                 session.getMethodPreference(),
                 session.getResearchQuestionsJson(),
-                sourceNode
+                sourceNode,
+                ragEvidenceNode
         );
 
         int nextVersion = paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(session.getId())
@@ -73,6 +82,13 @@ public class OutlineGenerateStep implements AgentStep {
         paperOutlineVersionRepository.save(version);
 
         context.setOutlineDraftJson(objectMapper.writeValueAsString(outline));
+
+        // Extract and store chapter evidence map if present
+        JsonNode evidenceMapping = outline.path("evidenceMapping");
+        if (!evidenceMapping.isMissingNode()) {
+            context.setChapterEvidenceMapJson(objectMapper.writeValueAsString(evidenceMapping));
+        }
+
         session.setStatus("outlined");
         session.setUpdatedAt(LocalDateTime.now());
         paperTopicSessionRepository.save(session);

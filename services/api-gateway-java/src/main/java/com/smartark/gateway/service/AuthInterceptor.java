@@ -10,6 +10,9 @@ import org.springframework.web.servlet.HandlerInterceptor;
 
 @Component
 public class AuthInterceptor implements HandlerInterceptor {
+    private static final String HEADER_CLIENT_PLATFORM = "X-Client-Platform";
+    private static final String HEADER_APP_VERSION = "X-App-Version";
+    private static final String HEADER_DEVICE_ID = "X-Device-Id";
     private final TokenService tokenService;
 
     public AuthInterceptor(TokenService tokenService) {
@@ -18,6 +21,7 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        bindClientMetadata(request);
         String path = request.getRequestURI();
         if (path.startsWith("/api/auth/") || path.startsWith("/api/v1/auth/")
                 || path.equals("/api/health") || path.equals("/api/v1/health")
@@ -35,5 +39,14 @@ public class AuthInterceptor implements HandlerInterceptor {
                 .orElseThrow(() -> new BusinessException(ErrorCodes.UNAUTHORIZED, "无效令牌"));
         RequestContext.setUserId(userId);
         return true;
+    }
+
+    private void bindClientMetadata(HttpServletRequest request) {
+        String platform = request.getHeader(HEADER_CLIENT_PLATFORM);
+        String appVersion = request.getHeader(HEADER_APP_VERSION);
+        String deviceId = request.getHeader(HEADER_DEVICE_ID);
+        RequestContext.setClientPlatform(platform == null || platform.isBlank() ? "web" : platform.trim());
+        RequestContext.setAppVersion(appVersion == null ? "" : appVersion.trim());
+        RequestContext.setDeviceId(deviceId == null ? "" : deviceId.trim());
     }
 }

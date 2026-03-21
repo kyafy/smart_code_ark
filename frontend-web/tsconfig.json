@@ -11,12 +11,22 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@smartark/domain/*": [
+        "../packages/domain/src/*"
+      ],
+      "@smartark/api-sdk": [
+        "../packages/api-sdk/src/index.ts"
+      ],
+      "@smartark/constants": [
+        "../packages/constants/src/index.ts"
       ]
     }
   },
   "include": [
     "src/**/*.ts",
     "src/**/*.vue",
-    "api"
+    "api",
+    "../packages/**/*.ts"
   ]
 }

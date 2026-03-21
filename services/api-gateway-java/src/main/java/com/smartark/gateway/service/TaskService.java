@@ -12,6 +12,11 @@ import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.db.entity.TaskPreviewEntity;
 import com.smartark.gateway.db.entity.TaskStepEntity;
 import com.smartark.gateway.db.entity.ArtifactEntity;
+import com.smartark.gateway.agent.model.RagEvidenceItem;
+import com.smartark.gateway.db.entity.PaperCorpusChunkEntity;
+import com.smartark.gateway.db.entity.PaperCorpusDocEntity;
+import com.smartark.gateway.db.repo.PaperCorpusChunkRepository;
+import com.smartark.gateway.db.repo.PaperCorpusDocRepository;
 import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.db.repo.ProjectRepository;
@@ -26,9 +31,12 @@ import com.smartark.gateway.dto.PaperOutlineGenerateResult;
 import com.smartark.gateway.dto.PaperManuscriptResult;
 import com.smartark.gateway.dto.PaperOutlineResult;
 import com.smartark.gateway.dto.PaperProjectSummary;
+import com.smartark.gateway.dto.RagRetrievalResult;
 import com.smartark.gateway.dto.TaskModifyRequest;
+import com.smartark.gateway.dto.PreviewLogsResult;
 import com.smartark.gateway.dto.TaskPreviewResult;
 import com.smartark.gateway.dto.TaskStatusResult;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +56,11 @@ import java.time.ZoneId;
 public class TaskService {
     @Value("${smartark.preview.max-concurrent-per-user:2}")
     private int previewMaxConcurrentPerUser;
+    @Value("${smartark.preview.log-dir:/tmp/smartark/preview-logs}")
+    private String previewLogDir;
+
+    @Autowired(required = false)
+    private ContainerRuntimeService containerRuntimeService;
 
     private final TaskRepository taskRepository;
     private final TaskStepRepository taskStepRepository;
@@ -57,6 +70,8 @@ public class TaskService {
     private final TaskPreviewRepository taskPreviewRepository;
     private final PaperTopicSessionRepository paperTopicSessionRepository;
     private final PaperOutlineVersionRepository paperOutlineVersionRepository;
+    private final PaperCorpusDocRepository paperCorpusDocRepository;
+    private final PaperCorpusChunkRepository paperCorpusChunkRepository;
     private final TaskExecutorService taskExecutorService;
     private final PreviewDeployService previewDeployService;
     private final BillingService billingService;
@@ -70,6 +85,8 @@ public class TaskService {
                        TaskPreviewRepository taskPreviewRepository,
                        PaperTopicSessionRepository paperTopicSessionRepository,
                        PaperOutlineVersionRepository paperOutlineVersionRepository,
+                       PaperCorpusDocRepository paperCorpusDocRepository,
+                       PaperCorpusChunkRepository paperCorpusChunkRepository,
                        TaskExecutorService taskExecutorService,
                        PreviewDeployService previewDeployService,
                        BillingService billingService,
@@ -82,6 +99,8 @@ public class TaskService {
         this.taskPreviewRepository = taskPreviewRepository;
         this.paperTopicSessionRepository = paperTopicSessionRepository;
         this.paperOutlineVersionRepository = paperOutlineVersionRepository;
+        this.paperCorpusDocRepository = paperCorpusDocRepository;
+        this.paperCorpusChunkRepository = paperCorpusChunkRepository;
         this.taskExecutorService = taskExecutorService;
         this.previewDeployService = previewDeployService;
         this.billingService = billingService;
@@ -247,12 +266,14 @@ public class TaskService {
         task.setUpdatedAt(now);
         taskRepository.save(task);
 
-        createStep(taskId, "topic_clarify", "主题澄清", 1);
-        createStep(taskId, "academic_retrieve", "学术检索", 2);
-        createStep(taskId, "outline_generate", "大纲生成", 3);
-        createStep(taskId, "outline_expand", "内容扩展", 4);
-        createStep(taskId, "outline_quality_check", "大纲质检", 5);
-        createStep(taskId, "quality_rewrite", "质量回写", 6);
+        createStep(taskId, "topic_clarify",         "主题澄清",       1);
+        createStep(taskId, "academic_retrieve",     "学术检索",       2);
+        createStep(taskId, "rag_index_enrich",      "RAG索引构建",    3);
+        createStep(taskId, "rag_retrieve_rerank",   "RAG检索重排",    4);
+        createStep(taskId, "outline_generate",      "大纲生成",       5);
+        createStep(taskId, "outline_expand",        "内容扩展",       6);
+        createStep(taskId, "outline_quality_check", "大纲质检",       7);
+        createStep(taskId, "quality_rewrite",       "质量回写",       8);
 
         taskExecutorService.executeTask(taskId);
 
@@ -345,14 +366,83 @@ public class TaskService {
         }
         LocalDateTime now = LocalDateTime.now();
         preview.setStatus("provisioning");
+        preview.setPhase(null);
         preview.setPreviewUrl(null);
         preview.setExpireAt(null);
         preview.setLastError(null);
+        preview.setLastErrorCode(null);
         preview.setUpdatedAt(now);
         taskPreviewRepository.save(preview);
         appendTaskLog(taskId, "info", "Preview rebuild requested");
         previewDeployService.deployPreviewAsync(taskId);
         return toPreviewResult(taskId, preview);
+    }
+
+    public PreviewLogsResult getPreviewLogs(String taskId, int tail) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+        }
+
+        List<PreviewLogsResult.LogLine> logLines = new ArrayList<>();
+
+        // Try to get container logs first
+        TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId).orElse(null);
+        if (preview != null && containerRuntimeService != null
+                && preview.getRuntimeId() != null
+                && containerRuntimeService.isContainerRunning(preview.getRuntimeId())) {
+            String containerLogs = containerRuntimeService.getContainerLogs(preview.getRuntimeId(), tail);
+            if (containerLogs != null && !containerLogs.isBlank()) {
+                long now = System.currentTimeMillis();
+                for (String line : containerLogs.split("\n")) {
+                    logLines.add(new PreviewLogsResult.LogLine(now, "info", line));
+                }
+            }
+        }
+
+        // Also include build logs from file if available
+        if (logLines.isEmpty() && preview != null && preview.getBuildLogUrl() != null) {
+            String logUrl = preview.getBuildLogUrl();
+            if (logUrl.startsWith("file://")) {
+                try {
+                    java.nio.file.Path logPath = java.nio.file.Paths.get(logUrl.substring(7));
+                    if (java.nio.file.Files.exists(logPath)) {
+                        List<String> lines = java.nio.file.Files.readAllLines(logPath);
+                        int start = Math.max(0, lines.size() - tail);
+                        long ts = System.currentTimeMillis();
+                        for (int i = start; i < lines.size(); i++) {
+                            logLines.add(new PreviewLogsResult.LogLine(ts, "info", lines.get(i)));
+                        }
+                    }
+                } catch (Exception e) {
+                    logLines.add(new PreviewLogsResult.LogLine(System.currentTimeMillis(), "error",
+                            "Failed to read log file: " + e.getMessage()));
+                }
+            }
+        }
+
+        // Fallback: return task logs related to preview
+        if (logLines.isEmpty()) {
+            List<TaskLogEntity> taskLogs = taskLogRepository.findByTaskIdOrderByCreatedAtAsc(taskId);
+            for (TaskLogEntity log : taskLogs) {
+                if (log.getContent() != null && (log.getContent().contains("Preview") || log.getContent().contains("preview"))) {
+                    logLines.add(new PreviewLogsResult.LogLine(
+                            log.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                            log.getLevel(),
+                            log.getContent()
+                    ));
+                }
+            }
+        }
+
+        // Apply tail limit
+        if (logLines.size() > tail) {
+            logLines = logLines.subList(logLines.size() - tail, logLines.size());
+        }
+
+        return new PreviewLogsResult(taskId, logLines);
     }
 
     public PaperOutlineResult getPaperOutline(String taskId) {
@@ -450,6 +540,43 @@ public class TaskService {
         );
     }
     
+    public RagRetrievalResult getRagRetrieval(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
+        }
+
+        PaperTopicSessionEntity session = paperTopicSessionRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "论文会话不存在"));
+
+        List<PaperCorpusDocEntity> docs = paperCorpusDocRepository.findBySessionId(session.getId());
+        List<RagEvidenceItem> evidenceItems = new ArrayList<>();
+        long totalChunks = 0;
+
+        for (PaperCorpusDocEntity doc : docs) {
+            List<PaperCorpusChunkEntity> chunks = paperCorpusChunkRepository.findByDocId(doc.getId());
+            totalChunks += chunks.size();
+            for (PaperCorpusChunkEntity chunk : chunks) {
+                RagEvidenceItem item = new RagEvidenceItem();
+                item.setChunkUid(chunk.getChunkUid());
+                item.setDocUid(doc.getDocUid());
+                item.setPaperId(doc.getPaperId());
+                item.setTitle(doc.getTitle());
+                item.setContent(chunk.getContent());
+                item.setUrl(doc.getUrl());
+                item.setYear(doc.getYear());
+                item.setChunkType(chunk.getChunkType());
+                item.setVectorScore(0);
+                item.setRerankScore(0);
+                evidenceItems.add(item);
+            }
+        }
+
+        return new RagRetrievalResult(taskId, evidenceItems, totalChunks);
+    }
+
     public byte[] getDownload(String taskId) {
         Long userId = requireUserId();
         TaskEntity task = taskRepository.findById(taskId)
@@ -542,14 +669,17 @@ public class TaskService {
 
     private TaskPreviewResult toPreviewResult(String taskId, TaskPreviewEntity preview) {
         if (preview == null) {
-            return new TaskPreviewResult(taskId, "failed", null, null, "当前任务类型不支持预览");
+            return new TaskPreviewResult(taskId, "failed", null, null, null, "当前任务类型不支持预览", null, null);
         }
         return new TaskPreviewResult(
                 taskId,
                 preview.getStatus(),
+                preview.getPhase(),
                 preview.getPreviewUrl(),
                 preview.getExpireAt() == null ? null : preview.getExpireAt().toString(),
-                preview.getLastError()
+                preview.getLastError(),
+                preview.getLastErrorCode(),
+                preview.getBuildLogUrl()
         );
     }
 

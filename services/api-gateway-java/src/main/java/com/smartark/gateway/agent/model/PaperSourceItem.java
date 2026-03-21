@@ -13,6 +13,7 @@ public class PaperSourceItem {
     private String abstractText;
     private String evidenceSnippet;
     private BigDecimal relevanceScore;
+    private String source = "semantic_scholar";
 
     public String getPaperId() {
         return paperId;
@@ -84,5 +85,13 @@ public class PaperSourceItem {
 
     public void setRelevanceScore(BigDecimal relevanceScore) {
         this.relevanceScore = relevanceScore;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
     }
 }

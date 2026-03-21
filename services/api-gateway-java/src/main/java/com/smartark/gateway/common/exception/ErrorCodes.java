@@ -26,6 +26,14 @@ public final class ErrorCodes {
     public static final int PREVIEW_REBUILD_STATE_INVALID = 3105;
     public static final int PREVIEW_CONCURRENCY_LIMIT = 3106;
 
+    // RAG 错误码 (4xxx)
+    public static final int RAG_EMBEDDING_FAILED = 4001;
+    public static final int RAG_EMBEDDING_DIMENSION_MISMATCH = 4002;
+    public static final int RAG_QDRANT_UNAVAILABLE = 4003;
+    public static final int RAG_INDEX_FAILED = 4004;
+    public static final int RAG_RETRIEVE_FAILED = 4005;
+    public static final int TASK_RAG_ERROR = 3008;
+
     public static final int INTERNAL_ERROR = 9000;
 
     private ErrorCodes() {

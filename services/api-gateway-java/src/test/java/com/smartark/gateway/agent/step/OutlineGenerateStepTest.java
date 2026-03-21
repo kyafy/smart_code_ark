@@ -78,7 +78,7 @@ class OutlineGenerateStepTest {
         when(paperTopicSessionRepository.findByTaskId("task-x")).thenReturn(Optional.of(session));
         when(paperSourceRepository.findBySessionIdOrderByCreatedAtAsc(7L)).thenReturn(List.of(source));
         when(paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(7L)).thenReturn(Optional.of(oldVersion));
-        when(modelService.generatePaperOutline(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(modelService.generatePaperOutline(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(generatedOutline);
 
         step.execute(context);
