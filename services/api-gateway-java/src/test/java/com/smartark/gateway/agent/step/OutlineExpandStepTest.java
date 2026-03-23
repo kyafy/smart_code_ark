@@ -48,38 +48,32 @@ class OutlineExpandStepTest {
         );
         TaskEntity task = new TaskEntity();
         task.setId("task-expand");
+        task.setProjectId("project-expand");
         AgentExecutionContext context = new AgentExecutionContext();
         context.setTask(task);
 
         PaperTopicSessionEntity session = new PaperTopicSessionEntity();
         session.setId(10L);
         session.setTaskId("task-expand");
-        session.setTopic("原主题");
-        session.setTopicRefined("细化主题");
-        session.setResearchQuestionsJson("[\"问题1\"]");
+        session.setTopic("topic");
+        session.setTopicRefined("refined topic");
+        session.setDiscipline("cs");
+        session.setDegreeLevel("undergraduate");
+        session.setResearchQuestionsJson("[\"Q1\"]");
 
         PaperOutlineVersionEntity version = new PaperOutlineVersionEntity();
         version.setSessionId(10L);
         version.setVersionNo(1);
-        version.setOutlineJson("{\"chapters\":[{\"title\":\"第一章\",\"sections\":[{\"title\":\"1.1\"}]}]}");
+        version.setOutlineJson("{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\"}]}]}");
 
         when(paperTopicSessionRepository.findByTaskId("task-expand")).thenReturn(Optional.of(session));
         when(paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(10L)).thenReturn(Optional.of(version));
         when(paperSourceRepository.findBySessionIdOrderByCreatedAtAsc(10L)).thenReturn(java.util.List.of(new PaperSourceEntity()));
         when(modelService.expandPaperOutline(
-                org.mockito.ArgumentMatchers.nullable(String.class),
-                org.mockito.ArgumentMatchers.nullable(String.class),
-                org.mockito.ArgumentMatchers.nullable(String.class),
-                org.mockito.ArgumentMatchers.nullable(String.class),
-                org.mockito.ArgumentMatchers.nullable(String.class),
-                org.mockito.ArgumentMatchers.nullable(String.class),
-                org.mockito.ArgumentMatchers.nullable(String.class),
-                org.mockito.ArgumentMatchers.nullable(String.class),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any()
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
         )).thenReturn(
-                new ObjectMapper().readTree("{\"chapters\":[{\"title\":\"第一章\",\"sections\":[]}]}"),
-                new ObjectMapper().readTree("{\"chapters\":[{\"title\":\"第一章\",\"sections\":[{\"title\":\"1.1\",\"coreArgument\":\"A\",\"method\":\"M\",\"dataPlan\":\"D\",\"expectedResult\":\"E\",\"citations\":[\"c1\"]}]}]}")
+                new ObjectMapper().readTree("{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[]}]}"),
+                new ObjectMapper().readTree("{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\",\"content\":\"Body [1]\",\"coreArgument\":\"A\",\"citations\":[1]}]}]}")
         );
 
         step.execute(context);
@@ -87,8 +81,8 @@ class OutlineExpandStepTest {
         ArgumentCaptor<PaperOutlineVersionEntity> vCap = ArgumentCaptor.forClass(PaperOutlineVersionEntity.class);
         verify(paperOutlineVersionRepository).save(vCap.capture());
         assertTrue(vCap.getValue().getManuscriptJson().contains("chapters"));
-        assertTrue(context.getManuscriptJson().contains("第一章"));
-        verify(modelService, times(2)).expandPaperOutline(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        assertTrue(context.getManuscriptJson().contains("Chapter 1"));
+        verify(modelService, times(2)).expandPaperOutline(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
 
         ArgumentCaptor<PaperTopicSessionEntity> sCap = ArgumentCaptor.forClass(PaperTopicSessionEntity.class);
         verify(paperTopicSessionRepository).save(sCap.capture());

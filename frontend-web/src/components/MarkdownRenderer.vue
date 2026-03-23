@@ -51,4 +51,3 @@ const htmlContent = computed(() => {
   color: inherit;
 }
 </style>
-EOF~

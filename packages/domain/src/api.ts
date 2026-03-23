@@ -193,3 +193,69 @@ export type PaperProjectSummary = {
   status: string
   updatedAt?: string | null
 }
+
+export type RagRetrievalResult = {
+  taskId: string
+  evidenceItems: Array<{
+    chunkUid: string
+    docUid?: string | null
+    paperId?: string | null
+    title?: string | null
+    content?: string | null
+    url?: string | null
+    year?: number | null
+    vectorScore?: number | null
+    rerankScore?: number | null
+    chunkType?: string | null
+  }>
+  totalChunks: number
+}
+
+export type TopicSuggestRequest = {
+  sessionId?: number
+  direction: string
+  constraints?: string
+  round?: number
+}
+
+export type TopicSuggestResult = {
+  sessionId: number
+  round: number
+  suggestions: Array<{
+    title: string
+    researchQuestions: string[]
+    rationale: string
+    keywords: string[]
+  }>
+}
+
+export type TopicAdoptRequest = {
+  sessionId: number
+  selectedIndex: number
+  customTitle?: string
+  customQuestions?: string[]
+}
+
+export type PaperTraceabilityResult = {
+  taskId: string
+  chapters: Array<{
+    chapterTitle: string
+    chapterIndex: number
+    citationIndices: number[]
+  }>
+  globalEvidenceList: Array<{
+    citationIndex: number
+    chunkUid: string
+    docUid: string
+    paperId: string
+    title: string
+    content: string
+    url: string
+    year?: number | null
+    source?: string | null
+    vectorScore?: number | null
+    rerankScore?: number | null
+    chunkType?: string | null
+  }>
+  totalChunksSearched: number
+}

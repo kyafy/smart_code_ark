@@ -7,4 +7,6 @@ import java.util.Optional;
 
 public interface PaperTopicSessionRepository extends JpaRepository<PaperTopicSessionEntity, Long> {
     Optional<PaperTopicSessionEntity> findByTaskId(String taskId);
+
+    Optional<PaperTopicSessionEntity> findByIdAndUserId(Long id, Long userId);
 }

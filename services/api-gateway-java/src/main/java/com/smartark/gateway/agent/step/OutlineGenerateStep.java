@@ -77,17 +77,19 @@ public class OutlineGenerateStep implements AgentStep {
         version.setVersionNo(nextVersion);
         version.setCitationStyle("GB/T 7714");
         version.setOutlineJson(objectMapper.writeValueAsString(outline));
+        JsonNode evidenceMapping = outline.path("evidenceMapping");
+        if (!evidenceMapping.isMissingNode()) {
+            String evidenceMapJson = objectMapper.writeValueAsString(evidenceMapping);
+            context.setChapterEvidenceMapJson(evidenceMapJson);
+            version.setChapterEvidenceMapJson(evidenceMapJson);
+        } else if (context.getChapterEvidenceMapJson() != null) {
+            version.setChapterEvidenceMapJson(context.getChapterEvidenceMapJson());
+        }
         version.setRewriteRound(0);
         version.setCreatedAt(LocalDateTime.now());
         paperOutlineVersionRepository.save(version);
 
         context.setOutlineDraftJson(objectMapper.writeValueAsString(outline));
-
-        // Extract and store chapter evidence map if present
-        JsonNode evidenceMapping = outline.path("evidenceMapping");
-        if (!evidenceMapping.isMissingNode()) {
-            context.setChapterEvidenceMapJson(objectMapper.writeValueAsString(evidenceMapping));
-        }
 
         session.setStatus("outlined");
         session.setUpdatedAt(LocalDateTime.now());

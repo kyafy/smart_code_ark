@@ -10,6 +10,8 @@ import type {
   PaperOutlineGenerateResult,
   PaperOutlineResult,
   PaperProjectSummary,
+  PaperTraceabilityResult,
+  RagRetrievalResult,
   PreviewLogsResult,
   ProjectConfirmResult,
   ProjectDetail,
@@ -20,6 +22,9 @@ import type {
   TaskLogResult,
   TaskPreviewResult,
   TaskStatusResult,
+  TopicAdoptRequest,
+  TopicSuggestRequest,
+  TopicSuggestResult,
   UserProfileResult,
 } from '@smartark/domain/api'
 
@@ -130,8 +135,16 @@ export const createApiSdk = (deps: {
   const paperApi = {
     generateOutline: (payload: PaperOutlineGenerateRequest) =>
       requestJson<PaperOutlineGenerateResult>({ method: 'POST', url: '/api/paper/outline', data: payload }),
+    suggestTopics: (payload: TopicSuggestRequest) =>
+      requestJson<TopicSuggestResult>({ method: 'POST', url: '/api/paper/topic/suggest', data: payload }),
+    adoptTopic: (payload: TopicAdoptRequest) =>
+      requestJson<PaperOutlineGenerateRequest>({ method: 'POST', url: '/api/paper/topic/adopt', data: payload }),
     getOutline: (taskId: string) => requestJson<PaperOutlineResult>({ method: 'GET', url: `/api/paper/outline/${taskId}` }),
     getManuscript: (taskId: string) => requestJson<PaperManuscriptResult>({ method: 'GET', url: `/api/paper/manuscript/${taskId}` }),
+    getTraceability: (taskId: string) =>
+      requestJson<PaperTraceabilityResult>({ method: 'GET', url: `/api/paper/traceability/${taskId}` }),
+    getRagRetrieval: (taskId: string, reranked = false) =>
+      requestJson<RagRetrievalResult>({ method: 'GET', url: `/api/paper/rag/retrieval/${taskId}`, params: { reranked } }),
     list: () => requestJson<PaperProjectSummary[]>({ method: 'GET', url: '/api/paper/list' }),
   }
 

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
+import com.smartark.gateway.agent.model.RagEvidenceItem;
 import com.smartark.gateway.db.entity.PaperOutlineVersionEntity;
 import com.smartark.gateway.db.entity.PaperSourceEntity;
 import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
@@ -17,7 +18,9 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Component
 public class OutlineExpandStep implements AgentStep {
@@ -56,6 +59,11 @@ public class OutlineExpandStep implements AgentStep {
                 .filter(s -> !"degraded".equalsIgnoreCase(s.getSectionKey()))
                 .toList();
 
+        List<RagEvidenceItem> ragItems = context.getRagEvidenceItems();
+        JsonNode ragEvidenceNode = (ragItems == null || ragItems.isEmpty())
+                ? objectMapper.createArrayNode()
+                : objectMapper.valueToTree(ragItems);
+
         JsonNode expanded = modelService.expandPaperOutline(
                 context.getTask().getId(),
                 context.getTask().getProjectId(),
@@ -66,7 +74,8 @@ public class OutlineExpandStep implements AgentStep {
                 session.getMethodPreference(),
                 session.getResearchQuestionsJson(),
                 objectMapper.readTree(version.getOutlineJson()),
-                objectMapper.valueToTree(sources)
+                objectMapper.valueToTree(sources),
+                ragEvidenceNode
         );
         if (!isExpandedSchemaValid(expanded)) {
             expanded = modelService.expandPaperOutline(
@@ -79,10 +88,17 @@ public class OutlineExpandStep implements AgentStep {
                     session.getMethodPreference(),
                     session.getResearchQuestionsJson(),
                     objectMapper.readTree(version.getOutlineJson()),
-                    objectMapper.valueToTree(sources)
+                    objectMapper.valueToTree(sources),
+                    ragEvidenceNode
             );
         }
         ObjectNode normalized = normalizeExpanded(expanded, session);
+
+        String fullCitationMap = buildFullCitationMap(expanded.path("citationMap"), ragItems);
+        if (!fullCitationMap.isBlank()) {
+            version.setChapterEvidenceMapJson(fullCitationMap);
+            context.setChapterEvidenceMapJson(fullCitationMap);
+        }
 
         version.setManuscriptJson(objectMapper.writeValueAsString(normalized));
         paperOutlineVersionRepository.save(version);
@@ -112,11 +128,12 @@ public class OutlineExpandStep implements AgentStep {
             }
             for (JsonNode section : sections) {
                 if (section.path("title").asText("").isBlank()) return false;
-                if (section.path("coreArgument").asText("").isBlank()) return false;
-                if (section.path("method").asText("").isBlank()) return false;
-                if (section.path("dataPlan").asText("").isBlank()) return false;
-                if (section.path("expectedResult").asText("").isBlank()) return false;
-                if (!section.path("citations").isArray() || section.path("citations").isEmpty()) return false;
+                if (section.path("coreArgument").asText("").isBlank() && section.path("content").asText("").isBlank()) {
+                    return false;
+                }
+                if (!section.path("citations").isArray()) {
+                    return false;
+                }
             }
         }
         return true;
@@ -137,41 +154,50 @@ public class OutlineExpandStep implements AgentStep {
         for (JsonNode chapter : inputChapters) {
             ObjectNode ch = objectMapper.createObjectNode();
             ch.put("index", chapter.path("index").asInt(chapterIndex));
-            ch.put("title", fallback(chapter.path("title").asText(""), "第" + chapterIndex + "章"));
-            ch.put("summary", fallback(chapter.path("summary").asText(""), "本章围绕研究问题展开背景、方法与结果分析。"));
-            ch.put("objective", fallback(chapter.path("objective").asText(""), "明确本章研究目标与论证路径。"));
+            ch.put("title", fallback(chapter.path("title").asText(""), "Chapter " + chapterIndex));
+            ch.put("summary", fallback(chapter.path("summary").asText(""), "Chapter summary placeholder."));
+            ch.put("objective", fallback(chapter.path("objective").asText(""), "Chapter objective placeholder."));
 
             ArrayNode normalizedSections = objectMapper.createArrayNode();
             JsonNode sections = chapter.path("sections");
             if (!sections.isArray() || sections.isEmpty()) {
                 ObjectNode sec = objectMapper.createObjectNode();
-                sec.put("title", "核心内容");
-                sec.put("coreArgument", "围绕研究问题形成可验证论点。");
-                sec.put("method", "采用文献分析与对比研究方法。");
-                sec.put("dataPlan", "结合公开数据与相关研究结论进行论证。");
-                sec.put("expectedResult", "形成可复核的章节结论。");
+                sec.put("title", "Core Content");
+                sec.put("content", "This section should be expanded with evidence-backed content [1].");
+                sec.put("coreArgument", "Core argument placeholder.");
+                sec.put("method", "Method placeholder.");
+                sec.put("dataPlan", "Data plan placeholder.");
+                sec.put("expectedResult", "Expected result placeholder.");
                 ArrayNode citations = objectMapper.createArrayNode();
-                citations.add("[待补充引用]");
+                citations.add(1);
                 sec.set("citations", citations);
                 normalizedSections.add(sec);
             } else {
                 for (JsonNode section : sections) {
                     ObjectNode sec = objectMapper.createObjectNode();
-                    sec.put("title", fallback(section.path("title").asText(""), "核心内容"));
-                    sec.put("coreArgument", fallback(section.path("coreArgument").asText(""), fallback(section.path("content").asText(""), "围绕研究问题形成可验证论点。")));
-                    sec.put("method", fallback(section.path("method").asText(""), "采用文献分析与对比研究方法。"));
-                    sec.put("dataPlan", fallback(section.path("dataPlan").asText(""), "结合公开数据与相关研究结论进行论证。"));
-                    sec.put("expectedResult", fallback(section.path("expectedResult").asText(""), "形成可复核的章节结论。"));
+                    sec.put("title", fallback(section.path("title").asText(""), "Core Content"));
+                    sec.put("content", fallback(section.path("content").asText(""), ""));
+                    sec.put("coreArgument", fallback(section.path("coreArgument").asText(""), fallback(section.path("content").asText(""), "Core argument placeholder.")));
+                    sec.put("method", fallback(section.path("method").asText(""), "Method placeholder."));
+                    sec.put("dataPlan", fallback(section.path("dataPlan").asText(""), "Data plan placeholder."));
+                    sec.put("expectedResult", fallback(section.path("expectedResult").asText(""), "Expected result placeholder."));
                     ArrayNode citations = objectMapper.createArrayNode();
                     JsonNode src = section.path("citations");
                     if (src.isArray() && !src.isEmpty()) {
                         src.forEach(n -> {
+                            if (n.isInt() || n.isLong()) {
+                                citations.add(n.asInt());
+                                return;
+                            }
                             String v = n.asText("");
-                            if (!v.isBlank() && !v.startsWith("NO_RESULT_")) citations.add(v);
+                            if (!v.isBlank() && !v.startsWith("NO_RESULT_")) {
+                                try {
+                                    citations.add(Integer.parseInt(v));
+                                } catch (Exception ignored) {
+                                    // skip non numeric citation id
+                                }
+                            }
                         });
-                    }
-                    if (citations.isEmpty()) {
-                        citations.add("[待补充引用]");
                     }
                     sec.set("citations", citations);
                     normalizedSections.add(sec);
@@ -211,5 +237,68 @@ public class OutlineExpandStep implements AgentStep {
 
     private String fallback(String value, String def) {
         return value == null || value.isBlank() ? def : value;
+    }
+
+    private String buildFullCitationMap(JsonNode citationMapNode, List<RagEvidenceItem> ragItems) {
+        if (citationMapNode == null || !citationMapNode.isArray() || citationMapNode.isEmpty()) {
+            return "";
+        }
+        Map<String, RagEvidenceItem> ragIndex = new LinkedHashMap<>();
+        if (ragItems != null) {
+            for (RagEvidenceItem ragItem : ragItems) {
+                if (ragItem == null || ragItem.getChunkUid() == null || ragItem.getChunkUid().isBlank()) {
+                    continue;
+                }
+                ragIndex.putIfAbsent(ragItem.getChunkUid(), ragItem);
+            }
+        }
+
+        ArrayNode full = objectMapper.createArrayNode();
+        for (JsonNode citation : citationMapNode) {
+            String chunkUid = citation.path("chunkUid").asText("");
+            if (chunkUid.isBlank()) {
+                continue;
+            }
+            RagEvidenceItem rag = ragIndex.get(chunkUid);
+            if (rag == null) {
+                continue;
+            }
+
+            ObjectNode item = objectMapper.createObjectNode();
+            item.put("citationIndex", citation.path("citationIndex").asInt());
+            item.put("chunkUid", chunkUid);
+            item.put("docUid", rag.getDocUid());
+            item.put("paperId", rag.getPaperId());
+            item.put("title", rag.getTitle());
+            item.put("content", rag.getContent());
+            item.put("url", rag.getUrl());
+            if (rag.getYear() == null) {
+                item.putNull("year");
+            } else {
+                item.put("year", rag.getYear());
+            }
+            item.put("source", extractSource(rag.getPaperId()));
+            item.put("vectorScore", rag.getVectorScore());
+            item.put("rerankScore", rag.getRerankScore());
+            item.put("chunkType", rag.getChunkType());
+            full.add(item);
+        }
+
+        try {
+            return objectMapper.writeValueAsString(full);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String extractSource(String paperId) {
+        if (paperId == null || paperId.isBlank()) {
+            return "unknown";
+        }
+        int idx = paperId.indexOf(':');
+        if (idx <= 0) {
+            return "unknown";
+        }
+        return paperId.substring(0, idx);
     }
 }

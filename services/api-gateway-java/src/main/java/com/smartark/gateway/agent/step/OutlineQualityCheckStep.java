@@ -53,6 +53,9 @@ public class OutlineQualityCheckStep implements AgentStep {
         }
 
         String chapterEvidenceMapJson = context.getChapterEvidenceMapJson();
+        if (chapterEvidenceMapJson == null || chapterEvidenceMapJson.isBlank()) {
+            chapterEvidenceMapJson = version.getChapterEvidenceMapJson();
+        }
 
         JsonNode qualityReport = modelService.qualityCheckPaperOutline(
                 context.getTask().getId(),

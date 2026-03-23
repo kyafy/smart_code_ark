@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { paperApi } from '@/api/endpoints'
@@ -42,6 +42,14 @@ onMounted(() => {
 const onViewManuscript = async () => {
   await router.push({ name: 'paper-manuscript', params: { taskId: taskId.value } })
 }
+
+const onViewTraceability = async () => {
+  await router.push({
+    name: 'paper-manuscript',
+    params: { taskId: taskId.value },
+    query: { panel: 'evidence' },
+  })
+}
 </script>
 
 <template>
@@ -49,12 +57,13 @@ const onViewManuscript = async () => {
     <div class="rounded-2xl border bg-white p-5">
       <div class="flex items-start justify-between gap-4">
         <div>
-          <div class="text-base font-semibold">论文框架结果</div>
+          <div class="text-base font-semibold">论文大纲结果</div>
           <div class="mt-1 text-sm text-slate-500">任务 ID：{{ taskId }}</div>
         </div>
         <div class="flex items-center gap-2">
           <el-button :loading="loading" @click="load">刷新结果</el-button>
           <el-button @click="router.push({ name: 'paper-outline-progress', params: { taskId } })">返回进度</el-button>
+          <el-button plain @click="onViewTraceability">查看溯源证据</el-button>
           <el-button type="primary" plain @click="onViewManuscript">查看论文文稿</el-button>
         </div>
       </div>
@@ -109,3 +118,4 @@ const onViewManuscript = async () => {
     </div>
   </div>
 </template>
+

@@ -31,6 +31,7 @@ import com.smartark.gateway.dto.PaperOutlineGenerateResult;
 import com.smartark.gateway.dto.PaperManuscriptResult;
 import com.smartark.gateway.dto.PaperOutlineResult;
 import com.smartark.gateway.dto.PaperProjectSummary;
+import com.smartark.gateway.dto.PaperTraceabilityResult;
 import com.smartark.gateway.dto.RagRetrievalResult;
 import com.smartark.gateway.dto.TaskModifyRequest;
 import com.smartark.gateway.dto.PreviewLogsResult;
@@ -43,9 +44,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.smartark.gateway.db.entity.TaskLogEntity;
 import com.smartark.gateway.db.repo.TaskLogRepository;
@@ -54,6 +58,8 @@ import java.time.ZoneId;
 
 @Service
 public class TaskService {
+    private static final Pattern CITATION_PATTERN = Pattern.compile("\\[(\\d+)]");
+
     @Value("${smartark.preview.max-concurrent-per-user:2}")
     private int previewMaxConcurrentPerUser;
     @Value("${smartark.preview.log-dir:/tmp/smartark/preview-logs}")
@@ -542,6 +548,10 @@ public class TaskService {
     }
     
     public RagRetrievalResult getRagRetrieval(String taskId) {
+        return getRagRetrieval(taskId, false);
+    }
+
+    public RagRetrievalResult getRagRetrieval(String taskId, boolean rerankedOnly) {
         Long userId = requireUserId();
         TaskEntity task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
@@ -571,11 +581,33 @@ public class TaskService {
                 item.setChunkType(chunk.getChunkType());
                 item.setVectorScore(0);
                 item.setRerankScore(0);
-                evidenceItems.add(item);
+                if (!rerankedOnly || item.getRerankScore() > 0) {
+                    evidenceItems.add(item);
+                }
             }
         }
 
         return new RagRetrievalResult(taskId, evidenceItems, totalChunks);
+    }
+
+    public PaperTraceabilityResult getPaperTraceability(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "任务不存在"));
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限操作");
+        }
+        if (!"paper_outline".equals(task.getTaskType())) {
+            throw new BusinessException(ErrorCodes.CONFLICT, "任务类型不匹配");
+        }
+
+        PaperOutlineVersionEntity version = paperOutlineVersionRepository.findTopByTaskIdOrderByVersionNoDesc(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "论文版本不存在"));
+
+        List<PaperTraceabilityResult.EvidenceItem> evidenceItems = parseEvidenceList(version.getChapterEvidenceMapJson());
+        List<PaperTraceabilityResult.ChapterEvidence> chapters = extractChapterCitations(version.getManuscriptJson());
+        int totalChunks = computeTotalChunks(taskId);
+        return new PaperTraceabilityResult(taskId, chapters, evidenceItems, totalChunks);
     }
 
     public byte[] getDownload(String taskId) {
@@ -656,6 +688,95 @@ public class TaskService {
             }
         });
         return result;
+    }
+
+    private List<PaperTraceabilityResult.EvidenceItem> parseEvidenceList(String chapterEvidenceMapJson) {
+        if (chapterEvidenceMapJson == null || chapterEvidenceMapJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode root = objectMapper.readTree(chapterEvidenceMapJson);
+            List<PaperTraceabilityResult.EvidenceItem> result = new ArrayList<>();
+            if (root.isArray()) {
+                for (JsonNode item : root) {
+                    result.add(new PaperTraceabilityResult.EvidenceItem(
+                            item.path("citationIndex").asInt(0),
+                            item.path("chunkUid").asText(null),
+                            item.path("docUid").asText(null),
+                            item.path("paperId").asText(null),
+                            item.path("title").asText(null),
+                            item.path("content").asText(null),
+                            item.path("url").asText(null),
+                            item.path("year").isMissingNode() || item.path("year").isNull() ? null : item.path("year").asInt(),
+                            item.path("source").asText(null),
+                            item.path("vectorScore").isNumber() ? item.path("vectorScore").asDouble() : null,
+                            item.path("rerankScore").isNumber() ? item.path("rerankScore").asDouble() : null,
+                            item.path("chunkType").asText(null)
+                    ));
+                }
+            }
+            return result.stream()
+                    .filter(e -> e.citationIndex() > 0)
+                    .sorted(Comparator.comparingInt(PaperTraceabilityResult.EvidenceItem::citationIndex))
+                    .toList();
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private List<PaperTraceabilityResult.ChapterEvidence> extractChapterCitations(String manuscriptJson) {
+        JsonNode manuscript = parseJson(manuscriptJson);
+        JsonNode chaptersNode = manuscript.path("chapters");
+        if (!chaptersNode.isArray()) {
+            return List.of();
+        }
+        List<PaperTraceabilityResult.ChapterEvidence> chapters = new ArrayList<>();
+        int idx = 0;
+        for (JsonNode chapter : chaptersNode) {
+            List<Integer> citationIndices = new ArrayList<>();
+            JsonNode sections = chapter.path("sections");
+            if (sections.isArray()) {
+                for (JsonNode section : sections) {
+                    JsonNode citationsNode = section.path("citations");
+                    if (citationsNode.isArray()) {
+                        citationsNode.forEach(citation -> {
+                            int citationValue = citation.asInt(-1);
+                            if (citationValue > 0 && !citationIndices.contains(citationValue)) {
+                                citationIndices.add(citationValue);
+                            }
+                        });
+                    }
+                    String content = section.path("content").asText("");
+                    Matcher matcher = CITATION_PATTERN.matcher(content);
+                    while (matcher.find()) {
+                        int citationValue = Integer.parseInt(matcher.group(1));
+                        if (!citationIndices.contains(citationValue)) {
+                            citationIndices.add(citationValue);
+                        }
+                    }
+                }
+            }
+            chapters.add(new PaperTraceabilityResult.ChapterEvidence(
+                    chapter.path("title").asText(""),
+                    idx,
+                    citationIndices.stream().sorted().toList()
+            ));
+            idx++;
+        }
+        return chapters;
+    }
+
+    private int computeTotalChunks(String taskId) {
+        PaperTopicSessionEntity session = paperTopicSessionRepository.findByTaskId(taskId).orElse(null);
+        if (session == null) {
+            return 0;
+        }
+        List<PaperCorpusDocEntity> docs = paperCorpusDocRepository.findBySessionId(session.getId());
+        int total = 0;
+        for (PaperCorpusDocEntity doc : docs) {
+            total += paperCorpusChunkRepository.findByDocId(doc.getId()).size();
+        }
+        return total;
     }
 
     private TaskPreviewEntity buildPreviewFallback(TaskEntity task) {

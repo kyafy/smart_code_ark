@@ -653,12 +653,27 @@ public class ModelService {
                                        String researchQuestionsJson,
                                        JsonNode outlineJson,
                                        JsonNode sources) {
+        return expandPaperOutline(taskId, projectId, topic, topicRefined, discipline, degreeLevel,
+                methodPreference, researchQuestionsJson, outlineJson, sources, null);
+    }
+
+    public JsonNode expandPaperOutline(String taskId,
+                                       String projectId,
+                                       String topic,
+                                       String topicRefined,
+                                       String discipline,
+                                       String degreeLevel,
+                                       String methodPreference,
+                                       String researchQuestionsJson,
+                                       JsonNode outlineJson,
+                                       JsonNode sources,
+                                       JsonNode ragEvidence) {
         if (baseUrl.isEmpty()) {
             return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);
         }
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_expand";
-        int versionNo = 1;
+        int versionNo = ragEvidence != null ? 3 : 1;
         String modelName = codeModel;
         try {
             Map<String, String> vars = new LinkedHashMap<>();
@@ -670,6 +685,7 @@ public class ModelService {
             vars.put("researchQuestions", researchQuestionsJson == null ? "[]" : researchQuestionsJson);
             vars.put("outlineJson", outlineJson == null ? "{}" : objectMapper.writeValueAsString(outlineJson));
             vars.put("sources", sources == null ? "[]" : objectMapper.writeValueAsString(sources));
+            vars.put("ragEvidence", ragEvidence == null ? "[]" : objectMapper.writeValueAsString(ragEvidence));
             String defaultSystemPrompt = "你是论文写作助手。请基于输入的大纲与文献，输出 JSON：{topic:string,topicRefined:string,researchQuestions:string[],chapters:[{index:number,title:string,summary:string,sections:[{title:string,content:string,citations:string[]}]}]}。仅输出 JSON。";
             String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n大纲：{{outlineJson}}\n候选文献：{{sources}}";
             JsonNode result = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
@@ -1029,5 +1045,43 @@ public class ModelService {
             return 0;
         }
         return Math.max(1, (text.length() + 3) / 4);
+    }
+
+    /**
+     * Lightweight synchronous chat for non-pipeline use (e.g., topic suggestion).
+     * Returns raw LLM text response (cleaned of markdown fences).
+     */
+    public String chat(String templateKey, Map<String, String> vars) {
+        PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.INTERNAL_ERROR, "Prompt template not found: " + templateKey));
+        return chat(resolvedPrompt, vars);
+    }
+
+    public String chat(PromptResolver.ResolvedPrompt prompt, Map<String, String> vars) {
+        String modelName = codeModel;
+        if (prompt.version().getModel() != null && !prompt.version().getModel().isBlank()) {
+            modelName = prompt.version().getModel();
+        }
+
+        String systemPrompt = resolveGlobalRulesPrefix() + promptRenderer.render(prompt.version().getSystemPrompt(), vars);
+        String userPrompt = promptRenderer.render(prompt.version().getUserPrompt(), vars);
+
+        List<Map<String, String>> messages = new ArrayList<>();
+        messages.add(Map.of("role", "system", "content", systemPrompt));
+        messages.add(Map.of("role", "user", "content", userPrompt));
+
+        Map<String, Object> payload = Map.of("model", modelName, "messages", messages);
+        String response = callModelApi(payload);
+        try {
+            JsonNode root = objectMapper.readTree(response);
+            String content = root.at("/choices/0/message/content").asText("");
+            return cleanupJsonContent(content);
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "Failed to parse model response: " + e.getMessage());
+        }
+    }
+
+    public String chatForText(String templateKey, Map<String, String> vars) {
+        return chat(templateKey, vars);
     }
 }
