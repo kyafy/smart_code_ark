@@ -243,7 +243,8 @@ public class TaskService {
         createStep(taskId, "codegen_backend", "生成后端", 2);
         createStep(taskId, "codegen_frontend", "生成前端", 3);
         createStep(taskId, "sql_generate", "生成 SQL", 4);
-        createStep(taskId, "package", "打包交付物", 5);
+        createStep(taskId, "artifact_contract_validate", "交付物校验", 5);
+        createStep(taskId, "package", "打包交付物", 6);
 
         taskExecutorService.executeTask(taskId);
 

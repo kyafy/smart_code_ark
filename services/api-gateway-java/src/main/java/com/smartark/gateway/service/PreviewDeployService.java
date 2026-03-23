@@ -146,6 +146,7 @@ public class PreviewDeployService {
             int hostPort = containerRuntimeService.findAvailablePort();
             String containerId = containerRuntimeService.createAndStartContainer(frontendPath, hostPort, taskId);
             preview.setRuntimeId(containerId);
+            preview.setHostPort(hostPort);
             preview.setUpdatedAt(LocalDateTime.now());
             taskPreviewRepository.save(preview);
             appendTaskLog(taskId, "info", "Container started: " + containerId + " on port " + hostPort);
@@ -202,8 +203,8 @@ public class PreviewDeployService {
             updatePhase(preview, PHASE_PUBLISH_GATEWAY);
             appendTaskLog(taskId, "info", "Phase: publish_gateway - publishing preview URL");
 
-            // Phase 1 simplified: use host:port directly
-            String previewUrl = "http://localhost:" + hostPort;
+            // Route through reverse proxy for same-origin access
+            String previewUrl = "/api/preview/" + taskId + "/";
 
             LocalDateTime readyAt = LocalDateTime.now();
             LocalDateTime expireAt = readyAt.plusHours(Math.max(previewDefaultTtlHours, 1));

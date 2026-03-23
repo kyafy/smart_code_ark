@@ -31,7 +31,7 @@ smartark:
   agent:
     workspace-root: /tmp/smartark/
     max-retries: 2
-    retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate,rag_index_enrich,rag_retrieve_rerank
+    retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate,artifact_contract_validate,rag_index_enrich,rag_retrieve_rerank
   preview:
     enabled: ${PREVIEW_ENABLED:false}
     auto-deploy-on-finish: ${PREVIEW_AUTO_DEPLOY_ON_FINISH:true}

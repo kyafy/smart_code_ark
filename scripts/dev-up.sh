@@ -44,7 +44,16 @@ if [ -f ".pids/backend.pid" ] && kill -0 "$(cat .pids/backend.pid)" 2>/dev/null;
 else
   (
     cd "$ROOT_DIR/services/api-gateway-java"
-    nohup mvn spring-boot:run -DskipTests >"$ROOT_DIR/.logs/backend.log" 2>&1 &
+    # Prefer Maven Wrapper if available, fallback to system mvn
+    if [ -x "./mvnw" ]; then
+      MVN_CMD="./mvnw"
+    elif command -v mvn >/dev/null 2>&1; then
+      MVN_CMD="mvn"
+    else
+      echo "ERROR: neither ./mvnw nor mvn found on PATH" >&2
+      exit 1
+    fi
+    nohup $MVN_CMD spring-boot:run -DskipTests >"$ROOT_DIR/.logs/backend.log" 2>&1 &
     echo $! >"$ROOT_DIR/.pids/backend.pid"
   )
 fi
@@ -62,7 +71,10 @@ if [ -f ".pids/frontend.pid" ] && kill -0 "$(cat .pids/frontend.pid)" 2>/dev/nul
 else
   (
     cd "$ROOT_DIR/frontend-web"
-    npm install >"$ROOT_DIR/.logs/frontend.install.log" 2>&1
+    if [ ! -d "node_modules" ]; then
+      echo "installing frontend dependencies..."
+      npm install >"$ROOT_DIR/.logs/frontend.install.log" 2>&1
+    fi
     nohup npm run dev -- --host 0.0.0.0 --port "${FRONTEND_PORT}" >"$ROOT_DIR/.logs/frontend.log" 2>&1 &
     echo $! >"$ROOT_DIR/.pids/frontend.pid"
   )

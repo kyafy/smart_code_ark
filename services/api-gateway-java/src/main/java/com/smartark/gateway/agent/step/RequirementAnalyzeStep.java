@@ -91,7 +91,7 @@ public class RequirementAnalyzeStep implements AgentStep {
         if (dedup.isEmpty()) {
             dedup.addAll(fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb));
         }
-        ensureDeploymentArtifacts(dedup);
+        ensureDeploymentArtifacts(dedup, stackBackend, stackFrontend);
         return new ArrayList<>(dedup);
     }
 
@@ -109,6 +109,8 @@ public class RequirementAnalyzeStep implements AgentStep {
         List<String> modules = normalizeModules(modelService.guessModules("", prd, projectType));
         if (backend.contains("spring")) {
             files.add("backend/pom.xml");
+            files.add("backend/mvnw");
+            files.add("backend/mvnw.cmd");
             files.add("backend/src/main/java/com/example/Application.java");
             files.add("backend/src/main/resources/application.yml");
             files.add("backend/src/main/java/com/example/common/ApiResponse.java");
@@ -220,10 +222,23 @@ public class RequirementAnalyzeStep implements AgentStep {
         return "backend";
     }
 
-    private void ensureDeploymentArtifacts(Set<String> files) {
+    private void ensureDeploymentArtifacts(Set<String> files, String stackBackend, String stackFrontend) {
         files.add("docs/deploy.md");
         files.add("scripts/deploy.sh");
         files.add("scripts/start.sh");
         files.add("docker-compose.yml");
+        files.add("README.md");
+        String backend = stackBackend == null ? "" : stackBackend.toLowerCase();
+        String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
+        if (backend.contains("spring") || backend.contains("java")) {
+            files.add("backend/pom.xml");
+            files.add("backend/mvnw");
+            files.add("backend/mvnw.cmd");
+        } else if (backend.contains("node") || backend.contains("express") || backend.contains("nestjs")) {
+            files.add("backend/package.json");
+        }
+        if (frontend.contains("vue") || frontend.contains("react") || frontend.contains("uni")) {
+            files.add("frontend/package.json");
+        }
     }
 }

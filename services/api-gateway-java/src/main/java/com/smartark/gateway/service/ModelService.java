@@ -76,6 +76,23 @@ public class ModelService {
         this.restClient = RestClient.builder().build();
     }
 
+    /**
+     * Resolve global engineering rules from prompt_templates.
+     * Prepended to system prompts of code-generation LLM calls.
+     */
+    private String resolveGlobalRulesPrefix() {
+        try {
+            return promptResolver.resolve("global_engineering_rules")
+                    .map(rp -> rp.version().getSystemPrompt())
+                    .filter(s -> s != null && !s.isBlank())
+                    .map(s -> s + "\n\n")
+                    .orElse("");
+        } catch (Exception e) {
+            logger.warn("Failed to resolve global engineering rules, skipping", e);
+            return "";
+        }
+    }
+
     public void streamChatReply(String sessionTitle, String projectType, String userMessage, List<Map<String, String>> history, Consumer<String> onContent, Runnable onDone, Consumer<Throwable> onError) {
         if (baseUrl.isEmpty() || apiKey.isEmpty()) {
             if (!mockEnabled) {
@@ -369,8 +386,9 @@ public class ModelService {
                 }
             }
 
+            String globalRules = resolveGlobalRulesPrefix();
             List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "system", "content", promptRenderer.render(systemPrompt, vars)));
+            messages.add(Map.of("role", "system", "content", globalRules + promptRenderer.render(systemPrompt, vars)));
             messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
 
             Map<String, Object> payload = Map.of(
@@ -382,7 +400,7 @@ public class ModelService {
             String response = callModelApi(payload);
             JsonNode root = objectMapper.readTree(response);
             String content = root.at("/choices/0/message/content").asText("");
-            
+
             // Clean up markdown if present
             if (content.contains("```json")) {
                 content = content.substring(content.indexOf("```json") + 7);
@@ -453,8 +471,9 @@ public class ModelService {
                 }
             }
 
+            String globalRules = resolveGlobalRulesPrefix();
             List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "system", "content", promptRenderer.render(systemPrompt, vars)));
+            messages.add(Map.of("role", "system", "content", globalRules + promptRenderer.render(systemPrompt, vars)));
             messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
 
             Map<String, Object> payload = Map.of(
@@ -466,7 +485,7 @@ public class ModelService {
             String response = callModelApi(payload);
             JsonNode root = objectMapper.readTree(response);
             String content = root.at("/choices/0/message/content").asText("");
-            
+
             // Clean up markdown code blocks if present (sometimes models add them despite instructions)
             if (content.startsWith("```") && content.endsWith("```")) {
                 int firstLineBreak = content.indexOf("\n");

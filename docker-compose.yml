@@ -69,12 +69,27 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/smartark:/tmp/smartark
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend-web
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      api-gateway:
         condition: service_healthy
 
 volumes:

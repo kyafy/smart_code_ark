@@ -32,6 +32,7 @@ public class AgentExecutionContext {
     private int ragIndexedChunkCount;
     private List<RagEvidenceItem> ragEvidenceItems;
     private String chapterEvidenceMapJson;
+    private List<String> contractViolations;
 
     public TaskEntity getTask() {
         return task;
@@ -207,5 +208,13 @@ public class AgentExecutionContext {
 
     public void setChapterEvidenceMapJson(String chapterEvidenceMapJson) {
         this.chapterEvidenceMapJson = chapterEvidenceMapJson;
+    }
+
+    public List<String> getContractViolations() {
+        return contractViolations;
+    }
+
+    public void setContractViolations(List<String> contractViolations) {
+        this.contractViolations = contractViolations;
     }
 }

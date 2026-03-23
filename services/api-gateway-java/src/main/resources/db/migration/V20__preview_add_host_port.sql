@@ -1,0 +1,1 @@
+ALTER TABLE task_preview ADD COLUMN host_port INT DEFAULT NULL;

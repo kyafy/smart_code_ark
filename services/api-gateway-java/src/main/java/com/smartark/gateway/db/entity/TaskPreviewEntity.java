@@ -37,6 +37,9 @@ public class TaskPreviewEntity {
     @Column(name = "runtime_id", length = 128)
     private String runtimeId;
 
+    @Column(name = "host_port")
+    private Integer hostPort;
+
     @Column(name = "build_log_url", length = 512)
     private String buildLogUrl;
 
@@ -120,6 +123,14 @@ public class TaskPreviewEntity {
 
     public void setRuntimeId(String runtimeId) {
         this.runtimeId = runtimeId;
+    }
+
+    public Integer getHostPort() {
+        return hostPort;
+    }
+
+    public void setHostPort(Integer hostPort) {
+        this.hostPort = hostPort;
     }
 
     public String getBuildLogUrl() {

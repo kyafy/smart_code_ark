@@ -52,6 +52,9 @@ class RequirementAnalyzeStepTest {
 
         assertTrue(context.getFileList().contains("backend/src/main.ts"));
         assertTrue(context.getFileList().contains("frontend/package.json"));
+        assertTrue(context.getFileList().contains("backend/pom.xml"));
+        assertTrue(context.getFileList().contains("backend/mvnw"));
+        assertTrue(context.getFileList().contains("backend/mvnw.cmd"));
         assertTrue(context.getFileList().contains("docs/deploy.md"));
         assertTrue(context.getFileList().contains("scripts/deploy.sh"));
         assertTrue(context.getFileList().contains("scripts/start.sh"));
