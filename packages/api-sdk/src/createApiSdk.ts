@@ -34,7 +34,8 @@ type RequestSse = (
   url: string,
   payload: { sessionId: string; message: string },
   onMessage: (event: string, data: any) => void,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
+  options?: { signal?: AbortSignal }
 ) => Promise<void>
 
 export const createApiSdk = (deps: {
@@ -64,11 +65,12 @@ export const createApiSdk = (deps: {
       requestJson<ChatStartResult>({ method: 'POST', url: '/api/chat/start', data: payload }),
     send: (
       payload: { sessionId: string; message: string },
-      onMessage: (event: string, data: any) => void
+      onMessage: (event: string, data: any) => void,
+      options?: { signal?: AbortSignal }
     ) =>
       requestSse('/api/chat', payload, onMessage, (err) => {
         throw err
-      }),
+      }, options),
     getSessions: () => requestJson<any[]>({ method: 'GET', url: '/api/chat/sessions' }),
     getSessionMessages: (sessionId: string) =>
       requestJson<ChatReplyResult>({ method: 'GET', url: `/api/chat/sessions/${sessionId}/messages` }),

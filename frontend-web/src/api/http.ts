@@ -114,7 +114,8 @@ export const requestSse = async (
   url: string,
   body: any,
   onMessage: (event: string, data: any) => void,
-  onError: (err: any) => void
+  onError: (err: any) => void,
+  options?: { signal?: AbortSignal }
 ) => {
   const auth = useAuthStore()
   const token = auth.token
@@ -132,6 +133,7 @@ export const requestSse = async (
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal: options?.signal,
     })
 
     if (!response.ok) {

@@ -18,10 +18,16 @@ export const useChatStore = defineStore('chat', () => {
   const draftModules = ref<string[]>([])
   const extractedRequirements = ref<any>(null)
   const isSending = ref(false)
+  let loadVersion = 0
+  let streamController: AbortController | null = null
 
   const hasDraft = computed(() => extractedRequirements.value != null || draftModules.value.length > 0)
 
   const startSession = async (payload: { title: string; projectType: string; description?: string }) => {
+    if (streamController) {
+      streamController.abort()
+      streamController = null
+    }
     const res = await chatApi.start(payload)
     sessionId.value = res.sessionId
     title.value = payload.title
@@ -34,6 +40,10 @@ export const useChatStore = defineStore('chat', () => {
   const hydrateFromMock = (sid: string) => {
     if (!sid) return
     if (import.meta.env.VITE_USE_MOCK === 'false') return
+    if (streamController) {
+      streamController.abort()
+      streamController = null
+    }
     try {
       const raw = localStorage.getItem('__smartark_mock_state__')
       if (!raw) return
@@ -68,10 +78,19 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   const loadSession = async (sid: string) => {
+    const currentLoad = ++loadVersion
+    if (streamController) {
+      streamController.abort()
+      streamController = null
+    }
+    sessionId.value = sid
+    messages.value = []
+    extractedRequirements.value = null
+    draftModules.value = []
     try {
       const res = await chatApi.getSessionMessages(sid)
+      if (currentLoad !== loadVersion) return
       sessionId.value = res.sessionId
-      // If we don't have the title in the response, we might need to fetch it or keep the current one
       
       const baseTs = new Date(res.updatedAt || Date.now()).getTime()
       
@@ -90,15 +109,26 @@ export const useChatStore = defineStore('chat', () => {
       }
       
       extractedRequirements.value = res.extractedRequirements || null
-      // Clear draft modules as we are using extractedRequirements now
       draftModules.value = []
     } catch (e) {
+      if (currentLoad !== loadVersion) return
+      if (sid === sessionId.value) {
+        messages.value = []
+        extractedRequirements.value = null
+      }
       console.error('Failed to load session messages', e)
     }
   }
 
   const send = async (text: string) => {
     if (!sessionId.value) throw new Error('sessionId is empty')
+    if (streamController) {
+      streamController.abort()
+      streamController = null
+    }
+    const activeSid = sessionId.value
+    const controller = new AbortController()
+    streamController = controller
     isSending.value = true
     try {
       const userMsg: ChatMessage = {
@@ -121,7 +151,8 @@ export const useChatStore = defineStore('chat', () => {
       messages.value.push(aiMsg)
       const aiMsgIndex = messages.value.length - 1
 
-      await chatApi.send({ sessionId: sessionId.value, message: text }, (event, data) => {
+      await chatApi.send({ sessionId: activeSid, message: text }, (event, data) => {
+        if (sessionId.value !== activeSid) return
         if (event === 'delta') {
           messages.value[aiMsgIndex].status = 'streaming'
           messages.value[aiMsgIndex].message += String(data)
@@ -140,8 +171,11 @@ export const useChatStore = defineStore('chat', () => {
           messages.value[aiMsgIndex].status = 'error'
           messages.value[aiMsgIndex].errorMessage = String(data.message || '生成出错')
         }
-      })
+      }, { signal: controller.signal })
     } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        return
+      }
       if (messages.value.length > 0) {
         const lastMsg = messages.value[messages.value.length - 1]
         if (lastMsg.speaker === 'assistant') {
@@ -151,11 +185,19 @@ export const useChatStore = defineStore('chat', () => {
       }
       throw e
     } finally {
+      if (streamController === controller) {
+        streamController = null
+      }
       isSending.value = false
     }
   }
 
   const reset = () => {
+    if (streamController) {
+      streamController.abort()
+      streamController = null
+    }
+    loadVersion += 1
     sessionId.value = ''
     title.value = ''
     messages.value = []

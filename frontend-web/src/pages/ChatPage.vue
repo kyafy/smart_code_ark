@@ -147,7 +147,6 @@ onMounted(async () => {
   } else {
     chat.hydrateFromMock(sessionId.value)
   }
-  chat.sessionId = sessionId.value
   isReady.value = true
 
   // Check for initial message from query params
@@ -162,6 +161,7 @@ onMounted(async () => {
 
 watch(sessionId, async (newSid, oldSid) => {
   if (newSid && newSid !== oldSid) {
+    isReady.value = false
     await ensureViewportTop()
     if (newSid === 'new') {
       await loadLocalSessions()
@@ -171,6 +171,7 @@ watch(sessionId, async (newSid, oldSid) => {
       }
       chat.reset()
       activeStep.value = 2
+      isReady.value = true
       await ensureViewportTop()
       const initialMessage = route.query.initialMessage as string
       if (initialMessage) {
@@ -185,6 +186,7 @@ watch(sessionId, async (newSid, oldSid) => {
       chat.hydrateFromMock(newSid)
     }
     activeStep.value = 2
+    isReady.value = true
 
     const initialMessage = route.query.initialMessage as string
     if (initialMessage && chat.messages.length === 0) {
@@ -209,7 +211,7 @@ const onSend = async (text: string) => {
         projectType: 'web',
         description: text,
       })
-      await router.replace({ query: { session: sid } })
+      await router.replace({ name: 'chat', params: { sessionId: sid }, query: {} })
       activeStep.value = 2
     }
     await chat.send(text)
@@ -236,34 +238,34 @@ const onRetryMessage = async (index: number) => {
 }
 
 const onConfirm = async () => {
-  if (!chat.sessionId) {
+  const currentSessionId = sessionId.value
+  if (!currentSessionId || currentSessionId === 'new') {
     ElMessage.warning('会话未初始化')
     return
   }
-  await router.push({ name: 'stack-confirm', params: { projectId: 'draft' }, query: { sessionId: chat.sessionId } })
+  await router.push({ name: 'stack-confirm', params: { projectId: 'draft' }, query: { sessionId: currentSessionId } })
 }
 
 const onNewChat = async () => {
   if (sessionId.value === 'new') {
     chat.reset()
     activeStep.value = 2
+    isReady.value = true
     await loadLocalSessions()
     await router.replace({ name: 'chat', params: { sessionId: 'new' }, query: { forceNew: '1' } })
     await ensureViewportTop()
     ElMessage.success('已新建对话')
     return
   }
+  chat.reset()
+  activeStep.value = 2
+  isReady.value = true
   await router.push({ name: 'chat', params: { sessionId: 'new' }, query: { forceNew: '1' } })
   await ensureViewportTop()
 }
 
 const onOpenSession = async (sid: string) => {
   if (!sid) return
-  if (import.meta.env.VITE_USE_MOCK === 'false') {
-    await chat.loadSession(sid)
-  } else {
-    chat.hydrateFromMock(sid)
-  }
   await router.push({ name: 'chat', params: { sessionId: sid } })
 }
 
@@ -313,8 +315,8 @@ const onDeleteSession = async (sid: string) => {
 </script>
 
 <template>
-  <div class="grid grid-cols-12 gap-6">
-    <div class="col-span-12 lg:col-span-3">
+  <div class="grid grid-cols-12 items-start gap-6">
+    <div class="col-span-12 min-h-0 lg:col-span-3">
       <button
         type="button"
         class="flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
@@ -324,7 +326,7 @@ const onDeleteSession = async (sid: string) => {
         新建对话
       </button>
 
-      <div class="mt-4 space-y-3">
+      <div class="mt-4 max-h-[calc(100vh-220px)] space-y-3 overflow-y-auto pr-1">
         <div
           v-for="s in sessions"
           :key="s.sessionId"
