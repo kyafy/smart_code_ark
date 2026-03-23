@@ -57,10 +57,13 @@ smart_code_ark/
 - REDIS_PORT：默认 `6379`
 
 ### 大模型（OpenAI 兼容接口）
-- MODEL_BASE_URL：DashScope Compatible Mode 示例 `https://dashscope.aliyuncs.com/compatible-mode/v1`
+- MODEL_BASE_URL：DashScope Compatible Mode 示例 `https://dashscope.aliyuncs.com/compatible-mode`
 - MODEL_API_KEY：你的模型 Key（请仅通过环境变量或密钥管理注入，不要写入仓库）
 - MODEL_MOCK_ENABLED：默认 `false`（未配置模型时直接报错，避免悄悄走 Mock）
 - CHAT_MODEL：默认 `Qwen3.5-Plus`（你也可以设置为 `qwen-plus`）
+- RAG_EMBEDDING_BASE_URL：百炼向量化服务地址，示例 `https://dashscope.aliyuncs.com`
+- RAG_EMBEDDING_MODEL：推荐 `text-embedding-v4`
+- RAG_EMBEDDING_DIMENSION：默认 `1024`
 
 ## 快速开始
 
@@ -95,10 +98,13 @@ docker-compose up -d
 cd services/api-gateway-java
 ./start.sh
 # 或者（自行注入环境变量）
-MODEL_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" \
+MODEL_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode" \
 MODEL_API_KEY="YOUR_MODEL_KEY" \
 MODEL_MOCK_ENABLED=false \
 CHAT_MODEL="qwen-plus" \
+RAG_EMBEDDING_BASE_URL="https://dashscope.aliyuncs.com" \
+RAG_EMBEDDING_MODEL="text-embedding-v4" \
+RAG_EMBEDDING_DIMENSION=1024 \
 mvn spring-boot:run -DskipTests
 ```
 后端服务将运行在 `http://localhost:8080`。

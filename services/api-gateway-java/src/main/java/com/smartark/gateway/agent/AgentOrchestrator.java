@@ -19,6 +19,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -27,7 +29,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Comparator;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Component
 public class AgentOrchestrator {
@@ -92,6 +96,7 @@ public class AgentOrchestrator {
             context.setNormalizedInstructions(normalizeInstructions(task.getInstructions()));
             Path workspaceDir = Paths.get(workspaceRoot, taskId);
             context.setWorkspaceDir(workspaceDir);
+            context.setTaskLogger((level, content) -> log(taskId, level, content));
             if ("paper_outline".equals(task.getTaskType())) {
                 fillPaperContext(context, task.getInstructions());
             }
@@ -123,6 +128,7 @@ public class AgentOrchestrator {
                     taskRepository.save(task);
 
                     log(taskId, "info", "Executing step: " + stepEntity.getStepName() + " (attempt " + attempt + ")");
+                    long startedAt = System.currentTimeMillis();
 
                     try {
                         AgentStep agentStep = stepMap.get(stepEntity.getStepCode());
@@ -130,6 +136,9 @@ public class AgentOrchestrator {
                             throw new IllegalArgumentException("Unsupported step code: " + stepEntity.getStepCode());
                         }
                         agentStep.execute(context);
+                        long elapsedMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+                        log(taskId, "info", "Step completed: " + stepEntity.getStepCode() + ", elapsedMs=" + elapsedMs);
+                        logStepOutputSummary(taskId, stepEntity.getStepCode(), context);
                         stepEntity.setStatus("finished");
                         stepEntity.setProgress(100);
                         stepEntity.setFinishedAt(LocalDateTime.now());
@@ -292,6 +301,71 @@ public class AgentOrchestrator {
             context.setMethodPreference(root.path("methodPreference").asText(""));
         } catch (Exception e) {
             log(context.getTask().getId(), "warn", "Invalid paper instructions payload");
+        }
+    }
+
+    private void logStepOutputSummary(String taskId, String stepCode, AgentExecutionContext context) {
+        if ("requirement_analyze".equals(stepCode)) {
+            int planSize = context.getFilePlan() == null ? 0 : context.getFilePlan().size();
+            int listSize = context.getFileList() == null ? 0 : context.getFileList().size();
+            log(taskId, "info", "Stage output [" + stepCode + "]: filePlan=" + planSize + ", fileList=" + listSize);
+            if (context.getFilePlan() != null && !context.getFilePlan().isEmpty()) {
+                String sample = context.getFilePlan().stream()
+                        .filter(item -> item.getPath() != null && !item.getPath().isBlank())
+                        .limit(8)
+                        .map(item -> item.getPath() + "[" + item.getGroup() + "]")
+                        .collect(Collectors.joining(", "));
+                if (!sample.isBlank()) {
+                    log(taskId, "info", "Stage output [" + stepCode + "] sample: " + sample);
+                }
+            }
+            return;
+        }
+        if ("artifact_contract_validate".equals(stepCode)) {
+            List<String> violations = context.getContractViolations();
+            int violationCount = violations == null ? 0 : violations.size();
+            log(taskId, "info", "Stage output [" + stepCode + "]: violations=" + violationCount);
+            if (violationCount == 0) {
+                log(taskId, "info", "Validation branch: no missing files or contract warnings, continue to package without auto-fix");
+            } else {
+                for (String violation : violations.stream().limit(20).toList()) {
+                    log(taskId, "warn", "Validation detail: " + violation);
+                }
+                log(taskId, "warn", "Validation branch: warnings detected, package step will auto-fix missing critical delivery files");
+            }
+            return;
+        }
+        logWorkspaceSnapshot(taskId, stepCode, context.getWorkspaceDir());
+    }
+
+    private void logWorkspaceSnapshot(String taskId, String stepCode, Path workspaceDir) {
+        if (workspaceDir == null || !Files.exists(workspaceDir)) {
+            log(taskId, "warn", "Stage output [" + stepCode + "]: workspace not found");
+            return;
+        }
+        try (Stream<Path> stream = Files.walk(workspaceDir)) {
+            List<Path> files = stream.filter(Files::isRegularFile).toList();
+            log(taskId, "info", "Stage output [" + stepCode + "]: workspaceFileCount=" + files.size());
+            if (!files.isEmpty()) {
+                String sample = files.stream()
+                        .sorted(Comparator.comparingLong(this::lastModifiedMillis).reversed())
+                        .limit(8)
+                        .map(path -> workspaceDir.relativize(path).toString().replace('\\', '/'))
+                        .collect(Collectors.joining(", "));
+                if (!sample.isBlank()) {
+                    log(taskId, "info", "Stage output [" + stepCode + "] recent files: " + sample);
+                }
+            }
+        } catch (IOException e) {
+            log(taskId, "warn", "Stage output [" + stepCode + "]: failed to scan workspace, " + messageOf(e));
+        }
+    }
+
+    private long lastModifiedMillis(Path path) {
+        try {
+            return Files.getLastModifiedTime(path).toMillis();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 

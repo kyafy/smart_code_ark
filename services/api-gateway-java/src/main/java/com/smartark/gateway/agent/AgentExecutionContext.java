@@ -8,6 +8,7 @@ import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 public class AgentExecutionContext {
     private TaskEntity task;
@@ -33,6 +34,7 @@ public class AgentExecutionContext {
     private List<RagEvidenceItem> ragEvidenceItems;
     private String chapterEvidenceMapJson;
     private List<String> contractViolations;
+    private BiConsumer<String, String> taskLogger;
 
     public TaskEntity getTask() {
         return task;
@@ -216,5 +218,31 @@ public class AgentExecutionContext {
 
     public void setContractViolations(List<String> contractViolations) {
         this.contractViolations = contractViolations;
+    }
+
+    public BiConsumer<String, String> getTaskLogger() {
+        return taskLogger;
+    }
+
+    public void setTaskLogger(BiConsumer<String, String> taskLogger) {
+        this.taskLogger = taskLogger;
+    }
+
+    public void log(String level, String content) {
+        if (taskLogger != null && level != null && content != null && !content.isBlank()) {
+            taskLogger.accept(level, content);
+        }
+    }
+
+    public void logInfo(String content) {
+        log("info", content);
+    }
+
+    public void logWarn(String content) {
+        log("warn", content);
+    }
+
+    public void logError(String content) {
+        log("error", content);
     }
 }

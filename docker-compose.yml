@@ -32,11 +32,6 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
 
   api-gateway:
     build:
@@ -80,7 +75,7 @@ services:
       redis:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        condition: service_started
 
   frontend:
     build:

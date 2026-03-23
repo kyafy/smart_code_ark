@@ -45,6 +45,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -54,6 +55,7 @@ import java.util.regex.Pattern;
 import com.smartark.gateway.db.entity.TaskLogEntity;
 import com.smartark.gateway.db.repo.TaskLogRepository;
 import com.smartark.gateway.dto.TaskLogDto;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.ZoneId;
 
 @Service
@@ -536,6 +538,7 @@ public class TaskService {
         if (manuscriptRoot.isMissingNode() || manuscriptRoot.isNull() || manuscriptRoot.isEmpty()) {
             manuscriptRoot = parseJson(outlineVersion.getOutlineJson());
         }
+        manuscriptRoot = patchManuscriptForDisplay(manuscriptRoot);
 
         return new PaperManuscriptResult(
                 taskId,
@@ -606,6 +609,15 @@ public class TaskService {
 
         List<PaperTraceabilityResult.EvidenceItem> evidenceItems = parseEvidenceList(version.getChapterEvidenceMapJson());
         List<PaperTraceabilityResult.ChapterEvidence> chapters = extractChapterCitations(version.getManuscriptJson());
+        boolean hasChapterCitations = chapters.stream().anyMatch(c -> c.citationIndices() != null && !c.citationIndices().isEmpty());
+        if (evidenceItems.isEmpty() || !hasChapterCitations) {
+            if (evidenceItems.isEmpty()) {
+                evidenceItems = extractEvidenceListFromOutline(version.getOutlineJson());
+            }
+            if (!hasChapterCitations) {
+                chapters = extractChapterCitationsFromOutline(version.getOutlineJson(), evidenceItems);
+            }
+        }
         int totalChunks = computeTotalChunks(taskId);
         return new PaperTraceabilityResult(taskId, chapters, evidenceItems, totalChunks);
     }
@@ -779,6 +791,195 @@ public class TaskService {
         return total;
     }
 
+    private JsonNode patchManuscriptForDisplay(JsonNode manuscriptRoot) {
+        if (!manuscriptRoot.isObject()) {
+            return manuscriptRoot;
+        }
+        JsonNode chaptersNode = manuscriptRoot.path("chapters");
+        if (!chaptersNode.isArray()) {
+            return manuscriptRoot;
+        }
+        for (JsonNode chapter : chaptersNode) {
+            JsonNode sections = chapter.path("sections");
+            if (!sections.isArray()) {
+                continue;
+            }
+            String chapterSummary = chapter.path("summary").asText("");
+            for (JsonNode section : sections) {
+                if (!(section instanceof ObjectNode sectionObject)) {
+                    continue;
+                }
+                String content = section.path("content").asText("");
+                if (content == null || content.isBlank()) {
+                    String fallbackContent = section.path("coreArgument").asText("");
+                    if (fallbackContent == null || fallbackContent.isBlank()) {
+                        fallbackContent = chapterSummary;
+                    }
+                    if (fallbackContent == null || fallbackContent.isBlank()) {
+                        fallbackContent = "该节暂无扩写内容";
+                    }
+                    sectionObject.put("content", fallbackContent);
+                }
+            }
+        }
+        return manuscriptRoot;
+    }
+
+    private List<PaperTraceabilityResult.EvidenceItem> extractEvidenceListFromOutline(String outlineJson) {
+        JsonNode outline = parseJson(outlineJson);
+        JsonNode chaptersNode = outline.path("chapters");
+        if (!chaptersNode.isArray()) {
+            return List.of();
+        }
+        Map<String, Integer> citationIndexMap = new LinkedHashMap<>();
+        List<PaperTraceabilityResult.EvidenceItem> evidenceItems = new ArrayList<>();
+        for (JsonNode chapter : chaptersNode) {
+            JsonNode sections = chapter.path("sections");
+            if (!sections.isArray()) {
+                continue;
+            }
+            for (JsonNode section : sections) {
+                JsonNode subsections = section.path("subsections");
+                if (!subsections.isArray()) {
+                    continue;
+                }
+                for (JsonNode subsection : subsections) {
+                    JsonNode evidences = subsection.path("evidence");
+                    if (!evidences.isArray()) {
+                        continue;
+                    }
+                    for (JsonNode evidence : evidences) {
+                        String key = buildOutlineEvidenceKey(evidence);
+                        if (key.isBlank()) {
+                            continue;
+                        }
+                        Integer citationIndex = citationIndexMap.get(key);
+                        if (citationIndex == null) {
+                            citationIndex = citationIndexMap.size() + 1;
+                            citationIndexMap.put(key, citationIndex);
+                            Integer year = null;
+                            JsonNode yearNode = evidence.path("year");
+                            if (yearNode.isInt() || yearNode.isLong()) {
+                                year = yearNode.asInt();
+                            } else {
+                                String yearText = yearNode.asText("");
+                                if (!yearText.isBlank()) {
+                                    try {
+                                        year = Integer.parseInt(yearText);
+                                    } catch (Exception ignored) {
+                                    }
+                                }
+                            }
+                            String paperId = evidence.path("paperId").asText(null);
+                            evidenceItems.add(new PaperTraceabilityResult.EvidenceItem(
+                                    citationIndex,
+                                    null,
+                                    null,
+                                    paperId,
+                                    evidence.path("title").asText(null),
+                                    null,
+                                    evidence.path("url").asText(null),
+                                    year,
+                                    extractSource(paperId),
+                                    null,
+                                    null,
+                                    null
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        return evidenceItems;
+    }
+
+    private List<PaperTraceabilityResult.ChapterEvidence> extractChapterCitationsFromOutline(
+            String outlineJson,
+            List<PaperTraceabilityResult.EvidenceItem> evidenceItems
+    ) {
+        JsonNode outline = parseJson(outlineJson);
+        JsonNode chaptersNode = outline.path("chapters");
+        if (!chaptersNode.isArray()) {
+            return List.of();
+        }
+        Map<String, Integer> citationIndexMap = new LinkedHashMap<>();
+        for (PaperTraceabilityResult.EvidenceItem evidenceItem : evidenceItems) {
+            if (evidenceItem == null) {
+                continue;
+            }
+            String key = buildOutlineEvidenceKey(evidenceItem.paperId(), evidenceItem.url(), evidenceItem.title());
+            if (!key.isBlank()) {
+                citationIndexMap.putIfAbsent(key, evidenceItem.citationIndex());
+            }
+        }
+
+        List<PaperTraceabilityResult.ChapterEvidence> chapters = new ArrayList<>();
+        int chapterIdx = 0;
+        for (JsonNode chapter : chaptersNode) {
+            List<Integer> chapterCitationIndices = new ArrayList<>();
+            JsonNode sections = chapter.path("sections");
+            if (sections.isArray()) {
+                for (JsonNode section : sections) {
+                    JsonNode subsections = section.path("subsections");
+                    if (!subsections.isArray()) {
+                        continue;
+                    }
+                    for (JsonNode subsection : subsections) {
+                        JsonNode evidences = subsection.path("evidence");
+                        if (!evidences.isArray()) {
+                            continue;
+                        }
+                        for (JsonNode evidence : evidences) {
+                            Integer citationIndex = citationIndexMap.get(buildOutlineEvidenceKey(evidence));
+                            if (citationIndex != null && citationIndex > 0 && !chapterCitationIndices.contains(citationIndex)) {
+                                chapterCitationIndices.add(citationIndex);
+                            }
+                        }
+                    }
+                }
+            }
+            chapters.add(new PaperTraceabilityResult.ChapterEvidence(
+                    chapter.path("chapter").asText(chapter.path("title").asText("")),
+                    chapterIdx,
+                    chapterCitationIndices.stream().sorted().toList()
+            ));
+            chapterIdx++;
+        }
+        return chapters;
+    }
+
+    private String buildOutlineEvidenceKey(JsonNode evidence) {
+        return buildOutlineEvidenceKey(
+                evidence.path("paperId").asText(""),
+                evidence.path("url").asText(""),
+                evidence.path("title").asText("")
+        );
+    }
+
+    private String buildOutlineEvidenceKey(String paperId, String url, String title) {
+        if (paperId != null && !paperId.isBlank()) {
+            return "paperId:" + paperId;
+        }
+        if (url != null && !url.isBlank()) {
+            return "url:" + url;
+        }
+        if (title != null && !title.isBlank()) {
+            return "title:" + title;
+        }
+        return "";
+    }
+
+    private String extractSource(String paperId) {
+        if (paperId == null || paperId.isBlank()) {
+            return "unknown";
+        }
+        int idx = paperId.indexOf(':');
+        if (idx <= 0) {
+            return "unknown";
+        }
+        return paperId.substring(0, idx);
+    }
+
     private TaskPreviewEntity buildPreviewFallback(TaskEntity task) {
         if (!isPreviewTargetTask(task)) {
             return null;
@@ -786,7 +987,7 @@ public class TaskService {
         if (!"finished".equals(task.getStatus())) {
             return buildTransientPreview(task.getId(), "provisioning", null, null, null);
         }
-        return buildTransientPreview(task.getId(), "provisioning", null, null, null);
+        return buildTransientPreview(task.getId(), "failed", null, null, "预览未就绪，请重试重建预览");
     }
 
     private TaskPreviewResult toPreviewResult(String taskId, TaskPreviewEntity preview) {

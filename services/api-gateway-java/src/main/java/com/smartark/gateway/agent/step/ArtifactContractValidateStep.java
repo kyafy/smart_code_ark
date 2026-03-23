@@ -42,34 +42,37 @@ public class ArtifactContractValidateStep implements AgentStep {
         Path workspace = context.getWorkspaceDir();
         if (workspace == null || !Files.exists(workspace)) {
             logger.warn("Workspace does not exist yet, skipping contract validation");
+            context.logWarn("Validation skipped: workspace missing");
             return;
         }
 
         List<String> violations = new ArrayList<>();
+        context.logInfo("Validation started: checks=[mandatory_files,path_safety,docker_compose,file_size]");
 
-        checkMandatoryFiles(workspace, violations);
+        checkMandatoryFiles(context, workspace, violations);
         scanPathSafety(workspace, violations);
-        validateDockerCompose(workspace, violations);
-        checkFileSizes(workspace, violations);
+        validateDockerCompose(context, workspace, violations);
+        checkFileSizes(context, workspace, violations);
 
         context.setContractViolations(violations);
 
         if (violations.isEmpty()) {
             logger.info("Artifact contract validation passed — no violations");
+            context.logInfo("Validation result: no violations, next=package without auto-fix");
         } else {
             for (String v : violations) {
                 logger.warn("Contract violation: {}", v);
+                context.logWarn("Validation violation: " + v);
             }
             logger.info("Artifact contract validation completed with {} violation(s)", violations.size());
+            context.logWarn("Validation result: violations=" + violations.size() + ", next=package auto-fix missing delivery files");
         }
     }
 
-    private void checkMandatoryFiles(Path workspace, List<String> violations) {
-        // Common mandatory files
-        checkFileExists(workspace, "README.md", violations);
-        checkFileExists(workspace, "docker-compose.yml", violations);
+    private void checkMandatoryFiles(AgentExecutionContext context, Path workspace, List<String> violations) {
+        checkFileExists(context, workspace, "README.md", violations);
+        checkFileExists(context, workspace, "docker-compose.yml", violations);
 
-        // Detect backend and check stack-specific files
         String backendDir = detectDir(workspace,
                 List.of("backend", "services/api-gateway-java", "api", "server"),
                 "backend");
@@ -78,23 +81,27 @@ public class ArtifactContractValidateStep implements AgentStep {
             boolean isJava = Files.exists(backendPath.resolve("pom.xml"))
                     || Files.exists(backendPath.resolve("build.gradle"));
             if (isJava) {
-                checkFileExists(workspace, backendDir + "/pom.xml", violations);
-                checkFileExists(workspace, backendDir + "/mvnw", violations);
-                checkFileExists(workspace, backendDir + "/mvnw.cmd", violations);
+                checkFileExists(context, workspace, backendDir + "/pom.xml", violations);
+                checkFileExists(context, workspace, backendDir + "/mvnw", violations);
+                checkFileExists(context, workspace, backendDir + "/mvnw.cmd", violations);
             }
         }
 
-        // Detect frontend and check package.json
         String frontendDir = detectDir(workspace,
                 List.of("frontend", "frontend-web", "web", "client", "app"),
                 "frontend");
         Path frontendPath = workspace.resolve(frontendDir);
         if (Files.exists(frontendPath)) {
-            checkFileExists(workspace, frontendDir + "/package.json", violations);
+            checkFileExists(context, workspace, frontendDir + "/package.json", violations);
         }
     }
 
-    private void checkFileExists(Path workspace, String relativePath, List<String> violations) {
+    private void checkFileExists(AgentExecutionContext context, Path workspace, String relativePath, List<String> violations) {
+        if (Files.exists(workspace.resolve(relativePath))) {
+            context.logInfo("Validation check mandatory_file pass: " + relativePath);
+            return;
+        }
+        context.logWarn("Validation check mandatory_file missing: " + relativePath + ", action=record_warning_then_package_auto_fix");
         if (!Files.exists(workspace.resolve(relativePath))) {
             violations.add("WARN: missing mandatory file: " + relativePath);
         }
@@ -139,10 +146,11 @@ public class ArtifactContractValidateStep implements AgentStep {
     }
 
     @SuppressWarnings("unchecked")
-    private void validateDockerCompose(Path workspace, List<String> violations) {
+    private void validateDockerCompose(AgentExecutionContext context, Path workspace, List<String> violations) {
         Path composePath = workspace.resolve("docker-compose.yml");
         if (!Files.exists(composePath)) {
-            return; // Already flagged by mandatory file check
+            context.logWarn("Validation check docker_compose skipped: docker-compose.yml not found");
+            return;
         }
         try {
             String content = Files.readString(composePath, StandardCharsets.UTF_8);
@@ -150,6 +158,7 @@ public class ArtifactContractValidateStep implements AgentStep {
             Map<String, Object> root = yaml.load(content);
             if (root == null) {
                 violations.add("WARN: docker-compose.yml is empty or unparseable");
+                context.logWarn("Validation check docker_compose invalid: empty or unparseable");
                 return;
             }
 
@@ -159,8 +168,10 @@ public class ArtifactContractValidateStep implements AgentStep {
             }
             if (services == null) {
                 violations.add("WARN: docker-compose.yml has no 'services' section");
+                context.logWarn("Validation check docker_compose invalid: missing services section");
                 return;
             }
+            context.logInfo("Validation check docker_compose parse ok: services=" + services.size());
 
             for (Map.Entry<String, Object> entry : services.entrySet()) {
                 if (!(entry.getValue() instanceof Map)) continue;
@@ -186,15 +197,20 @@ public class ArtifactContractValidateStep implements AgentStep {
                         violations.add("WARN: docker-compose service '"
                                 + entry.getKey() + "' build context '"
                                 + contextPath + "' does not exist");
+                        context.logWarn("Validation check docker_compose missing_build_context: service=" + entry.getKey() + ", context=" + contextPath);
+                    } else {
+                        context.logInfo("Validation check docker_compose build_context ok: service=" + entry.getKey() + ", context=" + contextPath);
                     }
                 }
             }
         } catch (Exception e) {
             violations.add("WARN: failed to parse docker-compose.yml: " + e.getMessage());
+            context.logWarn("Validation check docker_compose parse_error: " + e.getMessage());
         }
     }
 
-    private void checkFileSizes(Path workspace, List<String> violations) throws IOException {
+    private void checkFileSizes(AgentExecutionContext context, Path workspace, List<String> violations) throws IOException {
+        final int[] oversizedCount = {0};
         Files.walkFileTree(workspace, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
@@ -202,9 +218,11 @@ public class ArtifactContractValidateStep implements AgentStep {
                     String relative = workspace.relativize(file).toString().replace('\\', '/');
                     violations.add("WARN: oversized file (" + (attrs.size() / 1024)
                             + " KB): " + relative);
+                    oversizedCount[0]++;
                 }
                 return FileVisitResult.CONTINUE;
             }
         });
+        context.logInfo("Validation check file_size completed: oversizedFiles=" + oversizedCount[0] + ", thresholdBytes=" + MAX_FILE_SIZE_BYTES);
     }
 }

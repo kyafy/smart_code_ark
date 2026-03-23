@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
@@ -29,26 +29,134 @@ const manuscriptMd = computed(() => {
   return buildPaperManuscriptMarkdown(paper.outline)
 })
 
-const manuscriptChapters = computed(() => {
-  const raw = (paper.outline?.manuscript as any)?.chapters
+const pickSectionContent = (section: any, chapter: any) => {
+  const content = String(section?.content || '').trim()
+  if (content) return content
+  const coreArgument = String(section?.coreArgument || '').trim()
+  if (coreArgument) return coreArgument
+  const expectedResult = String(section?.expectedResult || '').trim()
+  if (expectedResult) return expectedResult
+  const subsectionText = Array.isArray(section?.subsections)
+    ? section.subsections
+        .map((item: any) => String(item?.subsection || '').trim())
+        .filter((item: string) => Boolean(item))
+        .join('\n')
+    : ''
+  if (subsectionText) return subsectionText
+  const chapterSummary = String(chapter?.summary || '').trim()
+  if (chapterSummary) return chapterSummary
+  return '该节暂无正文，建议重试“内容扩展”步骤后查看。'
+}
+
+const isPlaceholderText = (value: string) => {
+  const text = String(value || '').trim()
+  if (!text) return true
+  return /placeholder|待补充|暂无正文|暂无扩写|此处根据/i.test(text)
+}
+
+const pickChapterTitle = (chapter: any, chapterIndex: number) => {
+  const rawTitle = String(chapter?.title || chapter?.chapter || chapter?.name || '').trim()
+  if (rawTitle && !/^chapter\s+\d+$/i.test(rawTitle)) return rawTitle
+  return `第${chapterIndex + 1}章`
+}
+
+const buildOutlineSectionContent = (section: any, chapter: any) => {
+  const subsectionLines = Array.isArray(section?.subsections)
+    ? section.subsections
+        .map((item: any) => String(item?.subsection || item?.title || '').trim())
+        .filter((item: string) => Boolean(item))
+    : []
+  if (subsectionLines.length) {
+    return subsectionLines.map((line: string, idx: number) => `${idx + 1}. ${line}`).join('\n')
+  }
+  const chapterSummary = String(chapter?.summary || '').trim()
+  if (chapterSummary) return chapterSummary
+  return '该节暂无正文，建议重试“内容扩展”步骤后查看。'
+}
+
+const normalizeOutlineSections = (chapter: any, chapterIndex: number) => {
+  const sections = Array.isArray(chapter?.sections) ? chapter.sections : []
+  if (!sections.length) {
+    return [
+      {
+        sectionIndex: 0,
+        title: `第${chapterIndex + 1}.1节`,
+        content: String(chapter?.summary || '').trim() || '该章暂无结构化段落，建议重试“内容扩展”步骤后查看。',
+        citations: [],
+      },
+    ]
+  }
+  return sections.map((section: any, sectionIndex: number) => ({
+    sectionIndex,
+    title: String(section?.title || section?.section || section?.name || `第${chapterIndex + 1}.${sectionIndex + 1}节`),
+    content: buildOutlineSectionContent(section, chapter),
+    citations: [],
+  }))
+}
+
+const outlineChapters = computed(() => {
+  const raw = (paper.outline as any)?.chapters
   if (!Array.isArray(raw)) return []
   return raw.map((chapter: any, chapterIndex: number) => ({
     chapterIndex,
-    title: String(chapter?.title || chapter?.name || `第${chapterIndex + 1}章`),
-    sections: Array.isArray(chapter?.sections)
-      ? chapter.sections.map((section: any, sectionIndex: number) => ({
-          sectionIndex,
-          title: String(section?.title || section?.name || `第${chapterIndex + 1}.${sectionIndex + 1}节`),
-          content: String(section?.content || ''),
-          citations: Array.isArray(section?.citations)
-            ? section.citations
-                .map((v: unknown) => Number(v))
-                .filter((v: number) => Number.isFinite(v) && v > 0)
-            : [],
-        }))
-      : [],
+    title: pickChapterTitle(chapter, chapterIndex),
+    sections: normalizeOutlineSections(chapter, chapterIndex),
   }))
 })
+
+const normalizeSections = (chapter: any, chapterIndex: number) => {
+  if (Array.isArray(chapter?.sections) && chapter.sections.length) {
+    return chapter.sections.map((section: any, sectionIndex: number) => ({
+      sectionIndex,
+      title: String(section?.title || section?.name || `第${chapterIndex + 1}.${sectionIndex + 1}节`),
+      content: pickSectionContent(section, chapter),
+      citations: Array.isArray(section?.citations)
+        ? section.citations
+            .map((v: unknown) => Number(v))
+            .filter((v: number) => Number.isFinite(v) && v > 0)
+        : [],
+    }))
+  }
+  return [
+    {
+      sectionIndex: 0,
+      title: `第${chapterIndex + 1}.1节`,
+      content: String(chapter?.summary || '').trim() || '该章暂无结构化段落，建议重试“内容扩展”步骤后查看。',
+      citations: [],
+    },
+  ]
+}
+
+const manuscriptChapters = computed(() => {
+  const raw = (paper.outline?.manuscript as any)?.chapters
+  if (!Array.isArray(raw)) return outlineChapters.value
+  return raw.map((chapter: any, chapterIndex: number) => {
+    const outlineChapter = outlineChapters.value[chapterIndex]
+    const normalizedSections = normalizeSections(chapter, chapterIndex).map((section: any, sectionIndex: number) => {
+      const outlineSection = outlineChapter?.sections?.[sectionIndex]
+      const sectionContent = String(section?.content || '').trim()
+      const mergedContent = isPlaceholderText(sectionContent)
+        ? String(outlineSection?.content || sectionContent || '').trim()
+        : sectionContent
+      return {
+        ...section,
+        title: String(section?.title || outlineSection?.title || `第${chapterIndex + 1}.${sectionIndex + 1}节`),
+        content: mergedContent || '该节暂无正文，建议重试“内容扩展”步骤后查看。',
+      }
+    })
+    return {
+    chapterIndex,
+    title: pickChapterTitle(chapter, chapterIndex) || outlineChapter?.title || `第${chapterIndex + 1}章`,
+    sections: normalizedSections.length ? normalizedSections : outlineChapter?.sections || [],
+  }
+  })
+})
+
+const hasStructuredContent = computed(() =>
+  manuscriptChapters.value.some((chapter) =>
+    chapter.sections.some((section) => Boolean(section.content && section.content.trim()))
+  )
+)
 
 const chapterCitationMap = computed(() => {
   const map = new Map<number, number[]>()
@@ -246,8 +354,8 @@ const chapterCitations = (chapterIndex: number, fallback: number[]) => {
           <div class="h-3 w-5/6 animate-pulse rounded bg-slate-100" />
         </div>
 
-        <div v-else-if="!manuscriptChapters.length">
-          <div class="mb-3 text-sm text-slate-500">暂无结构化文稿，已回退为 Markdown 展示。</div>
+        <div v-else-if="!manuscriptChapters.length || !hasStructuredContent">
+          <div class="mb-3 text-sm text-slate-500">结构化文稿内容不足，已回退为 Markdown 展示。</div>
           <MarkdownRenderer v-if="manuscriptMd" :content="manuscriptMd" />
           <div v-else class="text-sm text-slate-500">暂无文稿内容，请先生成论文框架结果。</div>
         </div>
@@ -359,4 +467,3 @@ const chapterCitations = (chapterIndex: number, fallback: number[]) => {
   white-space: normal;
 }
 </style>
-

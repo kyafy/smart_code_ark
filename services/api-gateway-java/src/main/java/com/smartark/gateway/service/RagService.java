@@ -69,6 +69,7 @@ public class RagService {
     @Transactional
     public RagIndexResult indexSources(Long sessionId, List<PaperSourceEntity> sources, String discipline) {
         if (sources == null || sources.isEmpty()) {
+            logger.info("RAG index skipped: sessionId={}, reason=no_sources", sessionId);
             return new RagIndexResult(0, 0);
         }
 
@@ -152,15 +153,21 @@ public class RagService {
             totalDocs++;
         }
 
+        logger.info("RAG index prepared: sessionId={}, sourceCount={}, docCount={}, chunkCount={}, discipline={}",
+                sessionId, sources.size(), totalDocs, totalChunks, discipline);
+        logger.info("RAG index source sample: sessionId={}, sample={}", sessionId, buildSourceSample(sources, 5));
+
         // Batch embed all texts
         if (!allTexts.isEmpty()) {
             try {
                 List<float[]> vectors = embeddingService.embed(allTexts);
+                logger.info("RAG index embedding done: sessionId={}, vectorCount={}", sessionId, vectors.size());
                 for (int i = 0; i < payloadRefs.size(); i++) {
                     payloadRefs.get(i).setVector(vectors.get(i));
                 }
                 // Batch upsert to Qdrant
                 qdrantService.upsertChunks(payloadRefs);
+                logger.info("RAG index qdrant upsert done: sessionId={}, upsertCount={}", sessionId, payloadRefs.size());
             } catch (BusinessException e) {
                 throw new BusinessException(ErrorCodes.RAG_INDEX_FAILED, "RAG索引构建失败: " + e.getMessage());
             }
@@ -172,15 +179,21 @@ public class RagService {
 
     public List<RagEvidenceItem> retrieveAndRerank(Long sessionId, String query, String discipline, int topK) {
         try {
+            logger.info("RAG retrieve start: sessionId={}, topK={}, discipline={}, query={}",
+                    sessionId, topK > 0 ? topK : retrieveTopK, discipline, truncate(query, 220));
             // 1. Embed query
             List<float[]> queryVectors = embeddingService.embed(List.of(query));
             if (queryVectors.isEmpty()) {
+                logger.info("RAG retrieve early return: sessionId={}, reason=empty_query_vector", sessionId);
                 return List.of();
             }
             float[] queryVector = queryVectors.get(0);
+            logger.info("RAG retrieve query embedded: sessionId={}, queryVectorDim={}", sessionId, queryVector.length);
 
             // 2. Search Qdrant with discipline filter
             List<QdrantSearchResult> searchResults = qdrantService.search(queryVector, topK > 0 ? topK : retrieveTopK, discipline);
+            logger.info("RAG retrieve qdrant hits: sessionId={}, hitCount={}, topVector={}",
+                    sessionId, searchResults.size(), buildQdrantHitSample(searchResults, 5));
 
             // 3. Rerank
             int currentYear = Year.now().getValue();
@@ -216,7 +229,10 @@ public class RagService {
             // 4. Sort by rerank score descending, take top-N
             items.sort(Comparator.comparingDouble(RagEvidenceItem::getRerankScore).reversed());
             int limit = Math.min(rerankTopN, items.size());
-            return items.subList(0, limit);
+            List<RagEvidenceItem> finalItems = items.subList(0, limit);
+            logger.info("RAG rerank done: sessionId={}, inputCount={}, outputCount={}, topRerank={}",
+                    sessionId, items.size(), finalItems.size(), buildRerankSample(finalItems, 5));
+            return finalItems;
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -268,5 +284,61 @@ public class RagService {
         } catch (NumberFormatException e) {
             return defaultValue;
         }
+    }
+
+    private String buildSourceSample(List<PaperSourceEntity> sources, int limit) {
+        StringBuilder sb = new StringBuilder();
+        int max = Math.min(limit, sources.size());
+        for (int i = 0; i < max; i++) {
+            PaperSourceEntity s = sources.get(i);
+            if (i > 0) sb.append(" | ");
+            sb.append(i + 1)
+                    .append(":paperId=").append(s.getPaperId())
+                    .append(",title=").append(truncate(s.getTitle(), 48))
+                    .append(",year=").append(s.getYear());
+        }
+        return sb.toString();
+    }
+
+    private String buildQdrantHitSample(List<QdrantSearchResult> hits, int limit) {
+        StringBuilder sb = new StringBuilder();
+        int max = Math.min(limit, hits.size());
+        for (int i = 0; i < max; i++) {
+            QdrantSearchResult hit = hits.get(i);
+            if (i > 0) sb.append(" | ");
+            sb.append(i + 1)
+                    .append(":chunkUid=").append(hit.getChunkUid())
+                    .append(",score=").append(String.format("%.4f", hit.getScore()))
+                    .append(",title=").append(truncate(getStringPayload(hit, "title"), 48))
+                    .append(",paperId=").append(truncate(getStringPayload(hit, "paperId"), 36));
+        }
+        return sb.toString();
+    }
+
+    private String buildRerankSample(List<RagEvidenceItem> items, int limit) {
+        StringBuilder sb = new StringBuilder();
+        int max = Math.min(limit, items.size());
+        for (int i = 0; i < max; i++) {
+            RagEvidenceItem item = items.get(i);
+            if (i > 0) sb.append(" | ");
+            sb.append(i + 1)
+                    .append(":chunkUid=").append(item.getChunkUid())
+                    .append(",vector=").append(String.format("%.4f", item.getVectorScore()))
+                    .append(",rerank=").append(String.format("%.4f", item.getRerankScore()))
+                    .append(",title=").append(truncate(item.getTitle(), 48))
+                    .append(",paperId=").append(truncate(item.getPaperId(), 36));
+        }
+        return sb.toString();
+    }
+
+    private String truncate(String value, int maxLen) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= maxLen) {
+            return trimmed;
+        }
+        return trimmed.substring(0, maxLen) + "...";
     }
 }

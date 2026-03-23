@@ -83,6 +83,7 @@ export const createApiSdk = (deps: {
     detail: (id: string) => requestJson<ProjectDetail>({ method: 'GET', url: `/api/projects/${id}` }),
     confirm: (payload: { sessionId: string; stack: StackConfig; description?: string; prd?: string }) =>
       requestJson<ProjectConfirmResult>({ method: 'POST', url: '/api/projects/confirm', data: payload }),
+    delete: (id: string) => requestJson<boolean>({ method: 'DELETE', url: `/api/projects/${id}` }),
   }
 
   const taskApi = {

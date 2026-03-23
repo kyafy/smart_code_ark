@@ -39,6 +39,7 @@ public class ProjectService {
     private final ChatMessageRepository chatMessageRepository;
     private final TaskRepository taskRepository;
     private final ModelService modelService;
+    private final PreviewLifecycleService previewLifecycleService;
     private final ObjectMapper objectMapper;
 
     public ProjectService(
@@ -48,6 +49,7 @@ public class ProjectService {
             ChatMessageRepository chatMessageRepository,
             TaskRepository taskRepository,
             ModelService modelService,
+            PreviewLifecycleService previewLifecycleService,
             ObjectMapper objectMapper
     ) {
         this.projectRepository = projectRepository;
@@ -56,6 +58,7 @@ public class ProjectService {
         this.chatMessageRepository = chatMessageRepository;
         this.taskRepository = taskRepository;
         this.modelService = modelService;
+        this.previewLifecycleService = previewLifecycleService;
         this.objectMapper = objectMapper;
     }
 
@@ -72,7 +75,7 @@ public class ProjectService {
         }
 
         if (session.getProjectId() != null && !session.getProjectId().isBlank()) {
-            ProjectEntity existing = projectRepository.findById(session.getProjectId())
+            ProjectEntity existing = projectRepository.findByIdAndDeletedAtIsNull(session.getProjectId())
                     .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "项目不存在"));
             return new ProjectConfirmResult(existing.getId(), existing.getStatus());
         }
@@ -134,7 +137,7 @@ public class ProjectService {
 
     public List<ProjectSummary> list() {
         Long userId = requireUserId();
-        return projectRepository.findByUserIdOrderByUpdatedAtDesc(userId).stream()
+        return projectRepository.findByUserIdAndDeletedAtIsNullOrderByUpdatedAtDesc(userId).stream()
                 .map(p -> new ProjectSummary(
                         p.getId(),
                         p.getTitle(),
@@ -147,7 +150,7 @@ public class ProjectService {
 
     public ProjectDetail detail(String projectId) {
         Long userId = requireUserId();
-        ProjectEntity project = projectRepository.findById(projectId)
+        ProjectEntity project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
                 .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "项目不存在"));
         if (!userId.equals(project.getUserId())) {
             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该项目");
@@ -204,6 +207,29 @@ public class ProjectService {
                 tasks,
                 messages
         );
+    }
+
+    @Transactional
+    public boolean delete(String projectId) {
+        Long userId = requireUserId();
+        ProjectEntity project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "项目不存在"));
+        if (!userId.equals(project.getUserId())) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "无权限访问该项目");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        project.setDeletedAt(now);
+        project.setStatus("deleted");
+        project.setUpdatedAt(now);
+        projectRepository.save(project);
+
+        try {
+            previewLifecycleService.cleanupProjectPreviews(projectId);
+        } catch (Exception ignored) {
+        }
+
+        return true;
     }
 
     private Long requireUserId() {

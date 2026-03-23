@@ -82,11 +82,20 @@ public class ModelService {
      */
     private String resolveGlobalRulesPrefix() {
         try {
-            return promptResolver.resolve("global_engineering_rules")
-                    .map(rp -> rp.version().getSystemPrompt())
-                    .filter(s -> s != null && !s.isBlank())
-                    .map(s -> s + "\n\n")
-                    .orElse("");
+            var resolved = promptResolver.resolve("global_engineering_rules");
+            if (resolved.isEmpty()) {
+                logger.warn("Global engineering rules not found in prompt templates");
+                return "";
+            }
+            String prompt = resolved.get().version().getSystemPrompt();
+            if (prompt == null || prompt.isBlank()) {
+                logger.warn("Global engineering rules resolved but system prompt is empty, versionNo={}",
+                        resolved.get().version().getVersionNo());
+                return "";
+            }
+            logger.info("Global engineering rules enabled, versionNo={}, length={}",
+                    resolved.get().version().getVersionNo(), prompt.length());
+            return prompt + "\n\n";
         } catch (Exception e) {
             logger.warn("Failed to resolve global engineering rules, skipping", e);
             return "";
@@ -686,8 +695,8 @@ public class ModelService {
             vars.put("outlineJson", outlineJson == null ? "{}" : objectMapper.writeValueAsString(outlineJson));
             vars.put("sources", sources == null ? "[]" : objectMapper.writeValueAsString(sources));
             vars.put("ragEvidence", ragEvidence == null ? "[]" : objectMapper.writeValueAsString(ragEvidence));
-            String defaultSystemPrompt = "你是论文写作助手。请基于输入的大纲与文献，输出 JSON：{topic:string,topicRefined:string,researchQuestions:string[],chapters:[{index:number,title:string,summary:string,sections:[{title:string,content:string,citations:string[]}]}]}。仅输出 JSON。";
-            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n大纲：{{outlineJson}}\n候选文献：{{sources}}";
+            String defaultSystemPrompt = "你是论文写作助手。必须仅输出合法 JSON，禁止输出任何占位文本（如 placeholder/TBD/待补充/暂无正文）。每个章节都要有 sections；每个 section 必须有可读的中文 content 与 coreArgument。若证据不足，给出保守但完整的学术表述并标注不确定性。";
+            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n大纲：{{outlineJson}}\n候选文献：{{sources}}\nRAG证据：{{ragEvidence}}\n输出要求：\n1）返回 JSON：{topic,topicRefined,researchQuestions,chapters:[{index,title,summary,objective,sections:[{title,content,coreArgument,method,dataPlan,expectedResult,citations[]}]}],citationMap[]}\n2）content/coreArgument 必须是完整中文论述，不得为空且不得出现 placeholder 文本。\n3）citations 只能引用 citationMap 中存在的整数索引。";
             JsonNode result = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
             if (!result.has("chapters")) {
                 return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);

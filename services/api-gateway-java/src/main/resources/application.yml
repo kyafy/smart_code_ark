@@ -65,6 +65,7 @@ smartark:
       callback-mock-sign-secret: ${RECHARGE_CALLBACK_MOCK_SIGN_SECRET:smartark-recharge-secret}
   rag:
     enabled: ${RAG_ENABLED:true}
+    embedding-base-url: ${RAG_EMBEDDING_BASE_URL:}
     embedding-model: ${RAG_EMBEDDING_MODEL:text-embedding-v3}
     embedding-dimension: ${RAG_EMBEDDING_DIMENSION:1024}
     chunk-max-tokens: ${RAG_CHUNK_MAX_TOKENS:512}

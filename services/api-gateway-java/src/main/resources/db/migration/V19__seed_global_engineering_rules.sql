@@ -31,7 +31,7 @@ SELECT
 10. 启动脚本（start.sh / deploy.sh）必须设置为可执行，并包含健康检查等待逻辑。',
   NULL,
   NULL,
-  NULL,
+  'qwen-plus',
   NULL,
   NULL,
   'published',

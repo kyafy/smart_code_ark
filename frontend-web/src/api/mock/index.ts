@@ -287,6 +287,16 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
     return ok(list)
   }
 
+  if (method === 'DELETE' && url.startsWith('/api/projects/')) {
+    const projectId = url.replace('/api/projects/', '')
+    const idx = state.projects.findIndex((p) => p.id === projectId)
+    if (idx !== -1) {
+      state.projects.splice(idx, 1)
+      setState(state)
+    }
+    return ok(true)
+  }
+
   if (method === 'GET' && url === '/api/user/profile') {
     return ok({
       userId: Number(u.userId),

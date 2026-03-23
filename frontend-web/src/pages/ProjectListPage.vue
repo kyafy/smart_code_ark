@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { paperApi } from '@/api/endpoints'
+import { paperApi, projectApi } from '@/api/endpoints'
+import { ApiRequestError } from '@/api/http'
 import { useProjectStore } from '@/stores/project'
 import type { PaperProjectSummary } from '@/types/api'
-import { LayoutDashboard } from 'lucide-vue-next'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { LayoutDashboard, Trash2 } from 'lucide-vue-next'
 
 const router = useRouter()
 const projectStore = useProjectStore()
@@ -12,6 +14,7 @@ const projectStore = useProjectStore()
 const allProjects = computed(() => projectStore.projects)
 const paperProjects = ref<PaperProjectSummary[]>([])
 const activeTab = ref<'project' | 'paper'>('project')
+const deletingProjectId = ref<string>('')
 
 const statusLabel = (status: string) => {
   if (status === 'finished') return '已完成'
@@ -27,6 +30,44 @@ const openPaper = async (item: PaperProjectSummary) => {
     return
   }
   await router.push({ name: 'paper-outline-progress', params: { taskId: item.taskId } })
+}
+
+const confirmDeleteProject = async () => {
+  await ElMessageBox.confirm('删除后该项目将从列表中移除。', '确认删除项目', {
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
+}
+
+const onDeleteProject = async (projectId: string) => {
+  if (!projectId) return
+  if (deletingProjectId.value) return
+  try {
+    await confirmDeleteProject()
+    deletingProjectId.value = projectId
+    await projectApi.delete(projectId)
+    await projectStore.refresh()
+    ElMessage.success('项目已删除')
+  } catch (err) {
+    if (String((err as any)?.message || '').includes('cancel')) return
+    if (err instanceof ApiRequestError) {
+      if (err.code === 1003 || err.httpStatus === 403) {
+        ElMessage.error('无权限删除该项目')
+        return
+      }
+      if (err.code === 1004 || err.httpStatus === 404) {
+        ElMessage.warning('项目不存在或已删除')
+        await projectStore.refresh()
+        return
+      }
+    }
+    ElMessage.error('删除失败，请稍后重试')
+  } finally {
+    if (deletingProjectId.value === projectId) {
+      deletingProjectId.value = ''
+    }
+  }
 }
 
 onMounted(() => {
@@ -74,16 +115,29 @@ onMounted(() => {
     </div>
 
     <div v-if="activeTab === 'project'" class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-      <button
+      <div
         v-for="p in allProjects"
         :key="p.id"
-        type="button"
-        class="rounded-2xl border bg-white p-5 text-left shadow-sm hover:shadow-md dark:border-slate-900 dark:bg-slate-950"
-        @click="router.push({ name: 'project-detail', params: { projectId: p.id } })"
+        class="relative rounded-2xl border bg-white p-5 text-left shadow-sm hover:shadow-md dark:border-slate-900 dark:bg-slate-950"
       >
-        <div class="truncate text-base font-semibold">{{ p.title }}</div>
-        <div class="mt-2 truncate text-sm text-slate-500 dark:text-slate-400">{{ p.description || '—' }}</div>
-      </button>
+        <button
+          type="button"
+          class="block w-full text-left"
+          @click="router.push({ name: 'project-detail', params: { projectId: p.id } })"
+        >
+          <div class="truncate text-base font-semibold">{{ p.title }}</div>
+          <div class="mt-2 truncate text-sm text-slate-500 dark:text-slate-400">{{ p.description || '—' }}</div>
+        </button>
+
+        <button
+          type="button"
+          class="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-xl border bg-white text-slate-600 shadow-sm hover:bg-slate-50 dark:border-slate-900 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900"
+          :disabled="deletingProjectId === p.id"
+          @click.stop="onDeleteProject(p.id)"
+        >
+          <Trash2 class="h-4 w-4" />
+        </button>
+      </div>
       <div
         v-if="allProjects.length === 0"
         class="col-span-full rounded-2xl border bg-white p-10 text-center text-sm text-slate-500 dark:border-slate-900 dark:bg-slate-950 dark:text-slate-400"

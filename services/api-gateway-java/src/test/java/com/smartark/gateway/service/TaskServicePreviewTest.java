@@ -152,6 +152,20 @@ class TaskServicePreviewTest {
     }
 
     @Test
+    void getPreview_shouldReturnFailedWhenPreviewRecordMissingForFinishedGenerateTask() {
+        RequestContext.setUserId("1");
+        TaskEntity task = buildTask("t4b", "generate", 1L);
+
+        when(taskRepository.findById("t4b")).thenReturn(Optional.of(task));
+        when(taskPreviewRepository.findByTaskId("t4b")).thenReturn(Optional.empty());
+
+        TaskPreviewResult result = taskService.getPreview("t4b");
+
+        assertThat(result.status()).isEqualTo("failed");
+        assertThat(result.lastError()).contains("预览未就绪");
+    }
+
+    @Test
     void getPreview_shouldThrowForUnauthorizedUser() {
         RequestContext.setUserId("999");
         TaskEntity task = buildTask("t5", "generate", 1L);

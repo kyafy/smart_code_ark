@@ -57,6 +57,27 @@ public class PreviewLifecycleService {
         }
     }
 
+    public void cleanupProjectPreviews(String projectId) {
+        if (projectId == null || projectId.isBlank()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        List<TaskPreviewEntity> previews = taskPreviewRepository.findByProjectId(projectId);
+        for (TaskPreviewEntity preview : previews) {
+            try {
+                stopContainer(preview);
+            } catch (Exception e) {
+                logger.warn("Failed to stop preview container for task {}", preview.getTaskId(), e);
+            }
+            preview.setStatus("expired");
+            preview.setPhase(null);
+            preview.setPreviewUrl(null);
+            preview.setExpireAt(now);
+            preview.setUpdatedAt(now);
+            taskPreviewRepository.save(preview);
+        }
+    }
+
     /**
      * Stop container associated with a preview. Idempotent.
      */
