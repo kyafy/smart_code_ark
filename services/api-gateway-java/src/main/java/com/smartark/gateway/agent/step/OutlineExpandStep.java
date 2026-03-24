@@ -93,8 +93,11 @@ public class OutlineExpandStep implements AgentStep {
         String fullCitationMap;
         JsonNode outlineRoot = objectMapper.readTree(version.getOutlineJson());
         JsonNode flattenedOutline = flattenOutlineForExpand(outlineRoot);
-        Map<Integer, Integer> expectedSectionCounts = buildExpectedSectionCounts(flattenedOutline.path("chapters"));
-        int totalFlatSections = expectedSectionCounts.values().stream().mapToInt(Integer::intValue).sum();
+        StructureExpectation structureExpectation = buildStructureExpectation(flattenedOutline.path("chapters"));
+        Map<Integer, Integer> expectedSectionCounts = structureExpectation.expectedSectionCountPerChapter();
+        int totalFlatSections = structureExpectation.expectedSectionCountTotal();
+        validateStructureExpectation(structureExpectation, context.getTask().getId());
+        logGuardProbe(context, "precheck", structureExpectation, null, "allow_write", "none", null, null);
         context.logInfo("Outline flattened: originalSections=" + countOutlineSections(outlineRoot)
                 + ", flattenedSections=" + totalFlatSections);
         if (batchEnabled) {
@@ -109,7 +112,7 @@ public class OutlineExpandStep implements AgentStep {
                 BatchPlanItem plan = plans.get(bi);
                 context.logInfo("Batch " + (bi + 1) + "/" + plans.size()
                         + " start: chapterRange=" + (plan.startIndex() + 1) + "-" + (plan.endIndex() + 1));
-                BatchExpandResult batchResult = executeBatchExpand(context, session, plan, flattenedOutline.path("chapters").size(), ragItems, expectedSectionCounts);
+                BatchExpandResult batchResult = executeBatchExpand(context, session, plan, structureExpectation.expectedChapterCount(), ragItems, expectedSectionCounts);
                 context.logInfo("Batch " + (bi + 1) + "/" + plans.size()
                         + " done: chapters=" + (batchResult.chapters() == null ? 0 : batchResult.chapters().size())
                         + ", citations=" + (batchResult.citationMap() == null ? 0 : batchResult.citationMap().size()));
@@ -124,11 +127,21 @@ public class OutlineExpandStep implements AgentStep {
             normalized.set("researchQuestions", parseJsonArray(session.getResearchQuestionsJson()));
             fullCitationMap = merged.citationMapJson();
         } else {
-            ExpandResult expandResult = executeSingleExpand(context, session, flattenedOutline, sources, ragEvidenceNode, ragItems, expectedSectionCounts);
+            ExpandResult expandResult = executeSingleExpand(context, session, flattenedOutline, sources, ragEvidenceNode, ragItems, structureExpectation);
             normalized = expandResult.normalized();
             fullCitationMap = expandResult.citationMapJson();
         }
         ensureManuscriptQualityGate(normalized, context.getTask().getId(), session.getId());
+        StructureCoverage coverage = evaluateStructureCoverage(normalized.path("chapters"), structureExpectation);
+        if (!isPreCommitPass(coverage, structureExpectation)) {
+            String message = "outline_expand 写回前复检未通过: chapterCoverage="
+                    + formatCoverage(coverage.chapterCoverage())
+                    + ", sectionCoverage=" + formatCoverage(coverage.sectionCoverage());
+            logGuardProbe(context, "precommit", structureExpectation, coverage, "block_write", "task_failed",
+                    "PAPER_PRECOMMIT_COVERAGE_FAILED", message);
+            throw new BusinessException(ErrorCodes.TASK_VALIDATION_ERROR, message);
+        }
+        logGuardProbe(context, "precommit", structureExpectation, coverage, "allow_write", "none", null, null);
         if (!fullCitationMap.isBlank()) {
             version.setChapterEvidenceMapJson(fullCitationMap);
             context.setChapterEvidenceMapJson(fullCitationMap);
@@ -160,7 +173,7 @@ public class OutlineExpandStep implements AgentStep {
                                              List<PaperSourceEntity> sources,
                                              JsonNode ragEvidenceNode,
                                              List<RagEvidenceItem> ragItems,
-                                             Map<Integer, Integer> expectedSectionCounts) {
+                                             StructureExpectation structureExpectation) {
         JsonNode expanded = null;
         ObjectNode normalized = null;
         BusinessException lastQualityError = null;
@@ -179,7 +192,8 @@ public class OutlineExpandStep implements AgentStep {
                     objectMapper.valueToTree(sources),
                     ragEvidenceNode
             );
-            if (!isExpandedSchemaValid(candidateExpanded, expectedSectionCounts)) {
+            if (!isExpandedSchemaValid(candidateExpanded, structureExpectation.expectedChapterCount(),
+                    structureExpectation.expectedSectionCountPerChapter())) {
                 logger.warn("Step outline_expand schema invalid: taskId={}, sessionId={}, attempt={}/{}",
                         context.getTask().getId(), session.getId(), attempt, maxGenerateAttempts);
                 continue;
@@ -261,7 +275,7 @@ public class OutlineExpandStep implements AgentStep {
                     batchExpectedCounts.put(ci - plan.startIndex(), expected);
                 }
             }
-            if (!isExpandedSchemaValid(expanded, batchExpectedCounts)) {
+            if (!isExpandedSchemaValid(expanded, plan.chapters().size(), batchExpectedCounts)) {
                 logger.warn("Batch expand schema invalid: taskId={}, sessionId={}, batchNo={}, attempt={}/{}",
                         context.getTask().getId(), session.getId(), plan.batchNo(), attempt + 1, batchMaxRetries + 1);
                 continue;
@@ -551,44 +565,182 @@ public class OutlineExpandStep implements AgentStep {
         return count;
     }
 
-    private boolean isExpandedSchemaValid(JsonNode root, Map<Integer, Integer> expectedSectionCounts) {
+    private boolean isExpandedSchemaValid(JsonNode root, int expectedChapterCount, Map<Integer, Integer> expectedSectionCounts) {
         if (root == null || !root.path("chapters").isArray()) {
+            logger.warn("Structure mismatch reason=invalid_chapters_root");
             return false;
         }
         JsonNode chapters = root.path("chapters");
         if (chapters.isEmpty()) {
+            logger.warn("Structure mismatch reason=empty_chapters");
+            return false;
+        }
+        if (expectedChapterCount > 0 && chapters.size() != expectedChapterCount) {
+            logger.warn("Structure mismatch reason=chapter_mismatch expected={}, actual={}",
+                    expectedChapterCount, chapters.size());
             return false;
         }
         int chapterIdx = 0;
         for (JsonNode chapter : chapters) {
             if (chapter.path("title").asText("").isBlank()) {
+                logger.warn("Structure mismatch reason=blank_chapter_title chapterIndex={}", chapterIdx);
                 return false;
             }
             JsonNode sections = chapter.path("sections");
             if (!sections.isArray() || sections.isEmpty()) {
+                logger.warn("Structure mismatch reason=empty_sections chapterIndex={}", chapterIdx);
                 return false;
             }
             // 校验 section 数量与扁平化后的大纲一致
             if (expectedSectionCounts != null && !expectedSectionCounts.isEmpty()) {
                 Integer expected = expectedSectionCounts.get(chapterIdx);
-                if (expected != null && expected > 1 && sections.size() < expected) {
-                    logger.warn("Section count mismatch: chapter={}, expected={}, actual={}",
+                if (expected == null) {
+                    logger.warn("Structure mismatch reason=missing_expected_section chapterIndex={}", chapterIdx);
+                    return false;
+                }
+                if (expected > 0 && sections.size() < expected) {
+                    logger.warn("Structure mismatch reason=section_mismatch chapter={}, expected={}, actual={}",
                             chapter.path("title").asText(""), expected, sections.size());
                     return false;
                 }
             }
             for (JsonNode section : sections) {
-                if (section.path("title").asText("").isBlank()) return false;
+                if (section.path("title").asText("").isBlank()) {
+                    logger.warn("Structure mismatch reason=blank_section_title chapterIndex={}", chapterIdx);
+                    return false;
+                }
                 if (section.path("coreArgument").asText("").isBlank() && section.path("content").asText("").isBlank()) {
+                    logger.warn("Structure mismatch reason=empty_section_content chapterIndex={}", chapterIdx);
                     return false;
                 }
                 if (!section.path("citations").isArray()) {
+                    logger.warn("Structure mismatch reason=invalid_section_citations chapterIndex={}", chapterIdx);
                     return false;
                 }
             }
             chapterIdx++;
         }
         return true;
+    }
+
+    private StructureExpectation buildStructureExpectation(JsonNode flattenedChapters) {
+        Map<Integer, Integer> expectedSections = buildExpectedSectionCounts(flattenedChapters);
+        int expectedChapterCount = flattenedChapters != null && flattenedChapters.isArray() ? flattenedChapters.size() : 0;
+        int expectedSectionCountTotal = expectedSections.values().stream().mapToInt(Integer::intValue).sum();
+        return new StructureExpectation(expectedChapterCount, expectedSections, expectedSectionCountTotal);
+    }
+
+    private void validateStructureExpectation(StructureExpectation expectation, String taskId) {
+        boolean invalid = expectation.expectedChapterCount() <= 0
+                || expectation.expectedSectionCountTotal() <= 0
+                || expectation.expectedSectionCountPerChapter().size() != expectation.expectedChapterCount()
+                || expectation.expectedSectionCountPerChapter().values().stream().anyMatch(count -> count == null || count <= 0);
+        if (!invalid) {
+            return;
+        }
+        String message = "outline_expand 生成前约束输入无效";
+        logGuardProbe(taskId, "outline_expand", "precheck", expectation.expectedChapterCount(), expectation.expectedSectionCountTotal(),
+                null, null, "block_write", "task_failed", "PAPER_PRECHECK_INVALID_INPUT", message);
+        throw new BusinessException(ErrorCodes.TASK_VALIDATION_ERROR, message);
+    }
+
+    private StructureCoverage evaluateStructureCoverage(JsonNode manuscriptChapters, StructureExpectation expectation) {
+        int generatedChapterCount = manuscriptChapters != null && manuscriptChapters.isArray() ? manuscriptChapters.size() : 0;
+        int generatedSectionCount = 0;
+        int matchedSectionCount = 0;
+        if (manuscriptChapters != null && manuscriptChapters.isArray()) {
+            int chapterIndex = 0;
+            for (JsonNode chapter : manuscriptChapters) {
+                JsonNode sections = chapter.path("sections");
+                int actualSections = sections.isArray() ? sections.size() : 0;
+                generatedSectionCount += actualSections;
+                Integer expectedSections = expectation.expectedSectionCountPerChapter().get(chapterIndex);
+                if (expectedSections != null && expectedSections > 0) {
+                    matchedSectionCount += Math.min(actualSections, expectedSections);
+                }
+                chapterIndex++;
+            }
+        }
+        double chapterCoverage = expectation.expectedChapterCount() <= 0
+                ? 0D
+                : (double) generatedChapterCount / (double) expectation.expectedChapterCount();
+        double sectionCoverage = expectation.expectedSectionCountTotal() <= 0
+                ? 0D
+                : (double) matchedSectionCount / (double) expectation.expectedSectionCountTotal();
+        return new StructureCoverage(generatedChapterCount, generatedSectionCount, matchedSectionCount, chapterCoverage, sectionCoverage);
+    }
+
+    private boolean isPreCommitPass(StructureCoverage coverage, StructureExpectation expectation) {
+        return coverage.generatedChapterCount() == expectation.expectedChapterCount()
+                && coverage.matchedSectionCount() == expectation.expectedSectionCountTotal()
+                && coverage.chapterCoverage() >= 1.0D
+                && coverage.sectionCoverage() >= 1.0D;
+    }
+
+    private String formatCoverage(double value) {
+        return String.format(Locale.ROOT, "%.4f", value);
+    }
+
+    private void logGuardProbe(AgentExecutionContext context,
+                               String guardStage,
+                               StructureExpectation expectation,
+                               StructureCoverage coverage,
+                               String decision,
+                               String fallbackAction,
+                               String errorCode,
+                               String errorMessage) {
+        logGuardProbe(context.getTask().getId(), "outline_expand", guardStage,
+                expectation.expectedChapterCount(), expectation.expectedSectionCountTotal(),
+                coverage == null ? null : coverage.chapterCoverage(),
+                coverage == null ? null : coverage.sectionCoverage(),
+                decision, fallbackAction, errorCode, errorMessage);
+        if (context != null) {
+            context.logInfo("paper_guard taskId=" + context.getTask().getId()
+                    + ", stepCode=outline_expand"
+                    + ", guardStage=" + guardStage
+                    + ", chapterCoverage=" + (coverage == null ? "na" : formatCoverage(coverage.chapterCoverage()))
+                    + ", sectionCoverage=" + (coverage == null ? "na" : formatCoverage(coverage.sectionCoverage()))
+                    + ", decision=" + decision
+                    + ", fallbackAction=" + fallbackAction
+                    + ", errorCode=" + (errorCode == null ? "none" : errorCode));
+        }
+    }
+
+    private void logGuardProbe(String taskId,
+                               String stepCode,
+                               String guardStage,
+                               int expectedChapterCount,
+                               int expectedSectionCount,
+                               Double chapterCoverage,
+                               Double sectionCoverage,
+                               String decision,
+                               String fallbackAction,
+                               String errorCode,
+                               String errorMessage) {
+        logger.info("paper_guard taskId={}, stepCode={}, guardStage={}, expectedChapterCount={}, expectedSectionCount={}, chapterCoverage={}, sectionCoverage={}, decision={}, fallbackAction={}, errorCode={}, errorMessage={}",
+                taskId,
+                stepCode,
+                guardStage,
+                expectedChapterCount,
+                expectedSectionCount,
+                chapterCoverage == null ? "na" : formatCoverage(chapterCoverage),
+                sectionCoverage == null ? "na" : formatCoverage(sectionCoverage),
+                decision,
+                fallbackAction,
+                errorCode == null ? "none" : errorCode,
+                errorMessage == null ? "" : errorMessage);
+    }
+
+    private record StructureExpectation(int expectedChapterCount,
+                                        Map<Integer, Integer> expectedSectionCountPerChapter,
+                                        int expectedSectionCountTotal) {
+    }
+
+    private record StructureCoverage(int generatedChapterCount,
+                                     int generatedSectionCount,
+                                     int matchedSectionCount,
+                                     double chapterCoverage,
+                                     double sectionCoverage) {
     }
 
     private ObjectNode normalizeExpanded(JsonNode expanded, PaperTopicSessionEntity session) {

@@ -17,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -56,7 +57,8 @@ class QualityRewriteStepTest {
         version.setSessionId(11L);
         version.setVersionNo(1);
         version.setRewriteRound(0);
-        version.setManuscriptJson("{\"chapters\":[]}");
+        version.setOutlineJson("{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\"}]}]}");
+        version.setManuscriptJson("{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\",\"content\":\"原正文\",\"coreArgument\":\"原论点\",\"citations\":[]}]}]}");
         version.setQualityReportJson("{\"overallScore\":60,\"issues\":[\"缺少方法细节\"]}");
 
         when(paperTopicSessionRepository.findByTaskId("task-rewrite")).thenReturn(Optional.of(session));
@@ -69,7 +71,7 @@ class QualityRewriteStepTest {
                 org.mockito.ArgumentMatchers.nullable(String.class),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any()
-        )).thenReturn(new ObjectMapper().readTree("{\"manuscript\":{\"chapters\":[],\"revisionNotes\":[\"ok\"]},\"appliedIssues\":[\"缺少方法细节\"],\"summary\":\"done\"}"));
+        )).thenReturn(new ObjectMapper().readTree("{\"manuscript\":{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\",\"content\":\"改写正文\",\"coreArgument\":\"改写论点\",\"citations\":[]}]}],\"revisionNotes\":[\"ok\"]},\"appliedIssues\":[\"缺少方法细节\"],\"summary\":\"done\"}"));
 
         step.execute(context);
 
@@ -109,7 +111,8 @@ class QualityRewriteStepTest {
         version.setSessionId(12L);
         version.setVersionNo(1);
         version.setRewriteRound(0);
-        version.setManuscriptJson("{\"chapters\":[]}");
+        version.setOutlineJson("{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\"}]}]}");
+        version.setManuscriptJson("{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\",\"content\":\"原正文\",\"coreArgument\":\"原论点\",\"citations\":[]}]}]}");
         version.setQualityReportJson("{\"overallScore\":88,\"issues\":[\"可优化\"]}");
 
         when(paperTopicSessionRepository.findByTaskId("task-no-rewrite")).thenReturn(Optional.of(session));
@@ -130,5 +133,61 @@ class QualityRewriteStepTest {
         verify(paperOutlineVersionRepository).save(vCap.capture());
         assertEquals(0, vCap.getValue().getRewriteRound());
         assertEquals(0, java.math.BigDecimal.valueOf(88).compareTo(vCap.getValue().getQualityScore()));
+    }
+
+    @Test
+    void execute_keepStableManuscriptWhenRewriteRegressed() throws Exception {
+        QualityRewriteStep step = new QualityRewriteStep(
+                modelService,
+                paperTopicSessionRepository,
+                paperOutlineVersionRepository,
+                new ObjectMapper(),
+                75,
+                1
+        );
+
+        TaskEntity task = new TaskEntity();
+        task.setId("task-regression-block");
+        AgentExecutionContext context = new AgentExecutionContext();
+        context.setTask(task);
+
+        PaperTopicSessionEntity session = new PaperTopicSessionEntity();
+        session.setId(13L);
+        session.setTaskId("task-regression-block");
+
+        String stableManuscript = """
+                {"chapters":[{"title":"Chapter 1","sections":[
+                  {"title":"1.1","content":"原正文1","coreArgument":"原论点1","citations":[]},
+                  {"title":"1.2","content":"原正文2","coreArgument":"原论点2","citations":[]}
+                ]}]}
+                """;
+
+        PaperOutlineVersionEntity version = new PaperOutlineVersionEntity();
+        version.setSessionId(13L);
+        version.setVersionNo(1);
+        version.setRewriteRound(0);
+        version.setOutlineJson("{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\"},{\"title\":\"1.2\"}]}]}");
+        version.setManuscriptJson(stableManuscript);
+        version.setQualityReportJson("{\"overallScore\":65,\"issues\":[\"结构需优化\"]}");
+
+        when(paperTopicSessionRepository.findByTaskId("task-regression-block")).thenReturn(Optional.of(session));
+        when(paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(13L)).thenReturn(Optional.of(version));
+        when(modelService.rewriteOutlineByQualityIssues(
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()
+        )).thenReturn(new ObjectMapper().readTree("{\"manuscript\":{\"chapters\":[{\"title\":\"Chapter 1\",\"sections\":[{\"title\":\"1.1\",\"content\":\"回写正文\",\"coreArgument\":\"回写论点\",\"citations\":[]}]}]},\"appliedIssues\":[\"结构需优化\"],\"summary\":\"done\"}"));
+
+        step.execute(context);
+
+        ArgumentCaptor<PaperOutlineVersionEntity> vCap = ArgumentCaptor.forClass(PaperOutlineVersionEntity.class);
+        verify(paperOutlineVersionRepository).save(vCap.capture());
+        assertEquals(1, vCap.getValue().getRewriteRound());
+        assertTrue(vCap.getValue().getManuscriptJson().contains("原正文1"));
+        assertFalse(vCap.getValue().getManuscriptJson().contains("回写正文"));
     }
 }
