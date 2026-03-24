@@ -33,6 +33,7 @@ public final class ErrorCodes {
     public static final int RAG_INDEX_FAILED = 4004;
     public static final int RAG_RETRIEVE_FAILED = 4005;
     public static final int TASK_RAG_ERROR = 3008;
+    public static final int MODEL_OUTPUT_SCHEMA_VIOLATION = 3009;
 
     public static final int INTERNAL_ERROR = 9000;
 

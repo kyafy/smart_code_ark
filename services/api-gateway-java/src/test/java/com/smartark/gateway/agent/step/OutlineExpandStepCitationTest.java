@@ -40,7 +40,11 @@ class OutlineExpandStepCitationTest {
                 paperTopicSessionRepository,
                 paperOutlineVersionRepository,
                 paperSourceRepository,
-                new ObjectMapper()
+                new ObjectMapper(),
+                false,
+                2,
+                2,
+                8
         );
 
         AgentExecutionContext context = baseContext();
@@ -70,7 +74,11 @@ class OutlineExpandStepCitationTest {
                 paperTopicSessionRepository,
                 paperOutlineVersionRepository,
                 paperSourceRepository,
-                new ObjectMapper()
+                new ObjectMapper(),
+                false,
+                2,
+                2,
+                8
         );
 
         AgentExecutionContext context = baseContext();
@@ -101,7 +109,11 @@ class OutlineExpandStepCitationTest {
                 paperTopicSessionRepository,
                 paperOutlineVersionRepository,
                 paperSourceRepository,
-                new ObjectMapper()
+                new ObjectMapper(),
+                false,
+                2,
+                2,
+                8
         );
 
         AgentExecutionContext context = baseContext();

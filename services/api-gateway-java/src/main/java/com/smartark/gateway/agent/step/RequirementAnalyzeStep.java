@@ -55,6 +55,23 @@ public class RequirementAnalyzeStep implements AgentStep {
             fileList = fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb);
         }
         fileList = sanitizeFileList(fileList, prd, projectType, stackBackend, stackFrontend, stackDb);
+        StructureCompleteness completeness = validateStructureCompleteness(fileList, stackBackend, stackFrontend, stackDb);
+        if (!completeness.passed() && !completeness.missingFiles().isEmpty()) {
+            String retryInstruction = (context.getInstructions() == null ? "" : context.getInstructions()) +
+                    "\n\n请补齐以下缺失关键文件：\n" + String.join("\n", completeness.missingFiles());
+            try {
+                logger.warn("Project structure missing critical files, corrective retry: taskId={}, missing={}",
+                        context.getTask().getId(), completeness.missingFiles());
+                List<String> retried = modelService.generateProjectStructure(
+                        context.getTask().getId(),
+                        context.getTask().getProjectId(),
+                        prd, stackBackend, stackFrontend, stackDb, retryInstruction
+                );
+                fileList = sanitizeFileList(retried, prd, projectType, stackBackend, stackFrontend, stackDb);
+            } catch (Exception e) {
+                logger.warn("Corrective retry for project structure failed", e);
+            }
+        }
 
         List<FilePlanItem> filePlan = new ArrayList<>();
         for (String path : fileList) {
@@ -240,5 +257,57 @@ public class RequirementAnalyzeStep implements AgentStep {
         if (frontend.contains("vue") || frontend.contains("react") || frontend.contains("uni")) {
             files.add("frontend/package.json");
         }
+    }
+
+    private StructureCompleteness validateStructureCompleteness(List<String> fileList,
+                                                                String stackBackend,
+                                                                String stackFrontend,
+                                                                String stackDb) {
+        Set<String> missing = new LinkedHashSet<>();
+        Set<String> files = new LinkedHashSet<>(fileList == null ? List.of() : fileList);
+        require(files, missing, "README.md");
+        require(files, missing, "docker-compose.yml");
+        require(files, missing, "scripts/start.sh");
+        require(files, missing, "scripts/deploy.sh");
+        require(files, missing, "docs/deploy.md");
+
+        String backend = stackBackend == null ? "" : stackBackend.toLowerCase();
+        if (backend.contains("spring") || backend.contains("java")) {
+            require(files, missing, "backend/pom.xml");
+            require(files, missing, "backend/mvnw");
+            require(files, missing, "backend/src/main/resources/application.yml");
+            if (files.stream().noneMatch(p -> p.startsWith("backend/src/main/java/") && p.endsWith("/Application.java"))) {
+                missing.add("backend/src/main/java/**/Application.java");
+            }
+        } else if (backend.contains("node") || backend.contains("express") || backend.contains("nestjs")) {
+            require(files, missing, "backend/package.json");
+            require(files, missing, "backend/src/main.ts");
+        }
+
+        String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
+        if (frontend.contains("vue")) {
+            require(files, missing, "frontend/package.json");
+            require(files, missing, "frontend/src/main.ts");
+            require(files, missing, "frontend/src/App.vue");
+        } else if (frontend.contains("react")) {
+            require(files, missing, "frontend/package.json");
+            require(files, missing, "frontend/src/main.tsx");
+            require(files, missing, "frontend/src/App.tsx");
+        }
+
+        String db = stackDb == null ? "" : stackDb.toLowerCase();
+        if (db.contains("mysql") || db.contains("postgres") || db.contains("sql")) {
+            require(files, missing, "database/schema.sql");
+        }
+        return new StructureCompleteness(missing.isEmpty(), new ArrayList<>(missing));
+    }
+
+    private void require(Set<String> files, Set<String> missing, String expected) {
+        if (!files.contains(expected)) {
+            missing.add(expected);
+        }
+    }
+
+    private record StructureCompleteness(boolean passed, List<String> missingFiles) {
     }
 }

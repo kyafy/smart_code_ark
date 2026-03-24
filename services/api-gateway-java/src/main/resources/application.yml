@@ -59,6 +59,8 @@ smartark:
     mock-enabled: ${MODEL_MOCK_ENABLED:false}
     chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
     code-model: ${CODE_MODEL:qwen-plus}
+    schema-validation-enabled: ${MODEL_SCHEMA_VALIDATION_ENABLED:true}
+    corrective-retry-max: ${MODEL_CORRECTIVE_RETRY_MAX:2}
   billing:
     recharge:
       callback-mock-sign-enabled: ${RECHARGE_CALLBACK_MOCK_SIGN_ENABLED:true}
@@ -77,6 +79,14 @@ smartark:
       port: ${QDRANT_GRPC_PORT:6334}
       collection-name: ${QDRANT_COLLECTION:paper_chunks}
   paper:
+    expand:
+      batch-enabled: ${PAPER_EXPAND_BATCH_ENABLED:true}
+      batch-chapter-size: ${PAPER_EXPAND_BATCH_CHAPTER_SIZE:2}
+      batch-max-retries: ${PAPER_EXPAND_BATCH_MAX_RETRIES:2}
+      batch-max-workers: ${PAPER_EXPAND_BATCH_MAX_WORKERS:1}
+      chapter-evidence-topk: ${PAPER_EXPAND_CHAPTER_EVIDENCE_TOPK:8}
+    model:
+      request-timeout-ms: ${PAPER_MODEL_REQUEST_TIMEOUT_MS:45000}
     semantic-scholar:
       base-url: ${SEMANTIC_SCHOLAR_BASE_URL:https://api.semanticscholar.org}
       api-key: ${SEMANTIC_SCHOLAR_API_KEY:}

@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 public abstract class AbstractCodegenStep implements AgentStep {
     protected final Logger logger = LoggerFactory.getLogger(getClass());
@@ -32,6 +33,7 @@ public abstract class AbstractCodegenStep implements AgentStep {
         String fullStack = getFullStack(context);
         List<FilePlanItem> filePlan = context.getFilePlan();
         String instructions = context.getNormalizedInstructions() != null ? context.getNormalizedInstructions() : context.getInstructions();
+        String groupStructure = buildGroupStructure(filePlan, groups);
 
         if (filePlan == null || filePlan.isEmpty()) {
             logger.warn("File plan is empty, skip generating files for groups: {}", groups);
@@ -56,13 +58,26 @@ public abstract class AbstractCodegenStep implements AgentStep {
                                 prd,
                                 filePath,
                                 fullStack,
-                                instructions
+                                instructions,
+                                groupStructure
                         );
                         saveFile(context, filePath, content);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
                 });
+    }
+
+    private String buildGroupStructure(List<FilePlanItem> filePlan, Set<String> groups) {
+        if (filePlan == null || filePlan.isEmpty()) {
+            return "";
+        }
+        return filePlan.stream()
+                .filter(item -> item.getPath() != null && !item.getPath().isBlank())
+                .filter(item -> item.getGroup() != null && groups.contains(item.getGroup()))
+                .map(FilePlanItem::getPath)
+                .distinct()
+                .collect(Collectors.joining("\n"));
     }
 
     private String normalizeAndValidatePath(String input) {

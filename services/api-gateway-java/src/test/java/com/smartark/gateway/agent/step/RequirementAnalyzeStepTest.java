@@ -61,6 +61,36 @@ class RequirementAnalyzeStepTest {
         assertFalse(context.getFileList().stream().anyMatch(p -> p.startsWith("/") || p.contains("..")));
     }
 
+    @Test
+    void execute_shouldCorrectiveRetryWhenCriticalFilesMissing() throws Exception {
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper());
+        AgentExecutionContext context = buildContext();
+
+        when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of("frontend/package.json"))
+                .thenReturn(List.of(
+                        "backend/pom.xml",
+                        "backend/mvnw",
+                        "backend/src/main/java/com/example/DemoApplication.java",
+                        "backend/src/main/resources/application.yml",
+                        "frontend/package.json",
+                        "frontend/src/main.ts",
+                        "frontend/src/App.vue",
+                        "database/schema.sql",
+                        "README.md",
+                        "docker-compose.yml",
+                        "scripts/start.sh",
+                        "scripts/deploy.sh",
+                        "docs/deploy.md"
+                ));
+
+        step.execute(context);
+
+        assertTrue(context.getFileList().contains("backend/pom.xml"));
+        assertTrue(context.getFileList().contains("docker-compose.yml"));
+        assertTrue(context.getFileList().contains("scripts/start.sh"));
+    }
+
     private AgentExecutionContext buildContext() {
         AgentExecutionContext context = new AgentExecutionContext();
         TaskEntity task = new TaskEntity();

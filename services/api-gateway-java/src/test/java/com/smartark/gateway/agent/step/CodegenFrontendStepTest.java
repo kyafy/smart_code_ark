@@ -38,9 +38,9 @@ class CodegenFrontendStepTest {
         CodegenFrontendStep step = new CodegenFrontendStep(modelService, new ObjectMapper());
         AgentExecutionContext context = buildContext();
 
-        when(modelService.generateFileContent(any(), any(), any(), eq("frontend/src/App.vue"), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), eq("frontend/src/App.vue"), any(), any(), any()))
                 .thenReturn("<template><div>Hello</div></template>");
-        when(modelService.generateFileContent(any(), any(), any(), eq("frontend/src/main.ts"), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), eq("frontend/src/main.ts"), any(), any(), any()))
                 .thenReturn("import { createApp } from 'vue'");
 
         step.execute(context);
@@ -49,7 +49,7 @@ class CodegenFrontendStepTest {
         assertThat(Files.exists(tempDir.resolve("frontend/src/main.ts"))).isTrue();
         // Backend file should NOT have been generated
         verify(modelService, never())
-                .generateFileContent(any(), any(), any(), eq("backend/src/main/java/App.java"), any(), any());
+                .generateFileContent(any(), any(), any(), eq("backend/src/main/java/App.java"), any(), any(), any());
     }
 
     @Test
@@ -62,7 +62,7 @@ class CodegenFrontendStepTest {
         plan.add(makeItem("frontend/src/components/Header.tsx", "frontend", 20));
         context.setFilePlan(plan);
 
-        when(modelService.generateFileContent(any(), any(), any(), any(), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn("// content");
 
         step.execute(context);

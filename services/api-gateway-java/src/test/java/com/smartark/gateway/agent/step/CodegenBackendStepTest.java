@@ -38,7 +38,7 @@ class CodegenBackendStepTest {
         CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper());
         AgentExecutionContext context = buildContext();
 
-        when(modelService.generateFileContent(any(), any(), any(), eq("backend/src/main/java/App.java"), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), eq("backend/src/main/java/App.java"), any(), any(), any()))
                 .thenReturn("public class App {}");
 
         step.execute(context);
@@ -48,7 +48,7 @@ class CodegenBackendStepTest {
                 .isEqualTo("public class App {}");
         // Frontend file should NOT have been generated
         verify(modelService, never())
-                .generateFileContent(any(), any(), any(), eq("frontend/src/App.vue"), any(), any());
+                .generateFileContent(any(), any(), any(), eq("frontend/src/App.vue"), any(), any(), any());
     }
 
     @Test
@@ -59,7 +59,7 @@ class CodegenBackendStepTest {
 
         step.execute(context);
 
-        verify(modelService, never()).generateFileContent(any(), any(), any(), any(), any(), any());
+        verify(modelService, never()).generateFileContent(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -69,7 +69,7 @@ class CodegenBackendStepTest {
         context.setFilePlan(null);
         context.setFileList(List.of("backend/pom.xml", "frontend/package.json"));
 
-        when(modelService.generateFileContent(any(), any(), any(), eq("backend/pom.xml"), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), eq("backend/pom.xml"), any(), any(), any()))
                 .thenReturn("<project/>");
 
         step.execute(context);
@@ -77,7 +77,7 @@ class CodegenBackendStepTest {
         assertThat(context.getFilePlan()).isNotNull();
         assertThat(Files.exists(tempDir.resolve("backend/pom.xml"))).isTrue();
         verify(modelService, never())
-                .generateFileContent(any(), any(), any(), eq("frontend/package.json"), any(), any());
+                .generateFileContent(any(), any(), any(), eq("frontend/package.json"), any(), any(), any());
     }
 
     @Test
@@ -90,14 +90,14 @@ class CodegenBackendStepTest {
         plan.add(makeItem("backend/safe.java", "backend", 20));
         context.setFilePlan(plan);
 
-        when(modelService.generateFileContent(any(), any(), any(), eq("backend/safe.java"), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), eq("backend/safe.java"), any(), any(), any()))
                 .thenReturn("// safe");
 
         step.execute(context);
 
         assertThat(Files.exists(tempDir.resolve("backend/safe.java"))).isTrue();
         verify(modelService, never())
-                .generateFileContent(any(), any(), any(), eq("../etc/passwd"), any(), any());
+                .generateFileContent(any(), any(), any(), eq("../etc/passwd"), any(), any(), any());
     }
 
     private AgentExecutionContext buildContext() {

@@ -52,17 +52,23 @@ public class ModelService {
     private final PromptResolver promptResolver;
     private final PromptRenderer promptRenderer;
     private final PromptHistoryRepository promptHistoryRepository;
+    private final OutputSchemaValidator outputSchemaValidator;
+    private final boolean schemaValidationEnabled;
+    private final int correctiveRetryMax;
 
     public ModelService(
             ObjectMapper objectMapper,
             PromptResolver promptResolver,
             PromptRenderer promptRenderer,
             PromptHistoryRepository promptHistoryRepository,
+            OutputSchemaValidator outputSchemaValidator,
             @Value("${smartark.model.base-url:}") String baseUrl,
             @Value("${smartark.model.api-key:}") String apiKey,
             @Value("${smartark.model.mock-enabled:false}") boolean mockEnabled,
             @Value("${smartark.model.chat-model:Qwen3.5-Plus}") String chatModel,
-            @Value("${smartark.model.code-model:qwen-plus}") String codeModel
+            @Value("${smartark.model.code-model:qwen-plus}") String codeModel,
+            @Value("${smartark.model.schema-validation-enabled:true}") boolean schemaValidationEnabled,
+            @Value("${smartark.model.corrective-retry-max:2}") int correctiveRetryMax
     ) {
         this.objectMapper = objectMapper;
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
@@ -73,6 +79,9 @@ public class ModelService {
         this.promptResolver = promptResolver;
         this.promptRenderer = promptRenderer;
         this.promptHistoryRepository = promptHistoryRepository;
+        this.outputSchemaValidator = outputSchemaValidator;
+        this.schemaValidationEnabled = schemaValidationEnabled;
+        this.correctiveRetryMax = Math.max(0, correctiveRetryMax);
         this.restClient = RestClient.builder().build();
     }
 
@@ -400,32 +409,46 @@ public class ModelService {
             messages.add(Map.of("role", "system", "content", globalRules + promptRenderer.render(systemPrompt, vars)));
             messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
 
-            Map<String, Object> payload = Map.of(
-                    "model", modelName,
-                    "messages", messages
-            );
-            requestJson = objectMapper.writeValueAsString(payload);
-            requestHash = hash(requestJson);
-            String response = callModelApi(payload);
-            JsonNode root = objectMapper.readTree(response);
-            String content = root.at("/choices/0/message/content").asText("");
-
-            // Clean up markdown if present
-            if (content.contains("```json")) {
-                content = content.substring(content.indexOf("```json") + 7);
-                if (content.contains("```")) {
-                    content = content.substring(0, content.indexOf("```"));
+            String correctivePrompt = null;
+            for (int attempt = 0; attempt <= correctiveRetryMax; attempt++) {
+                List<Map<String, String>> attemptMessages = new ArrayList<>(messages);
+                if (correctivePrompt != null) {
+                    attemptMessages.add(Map.of("role", "user", "content", correctivePrompt));
                 }
-            } else if (content.contains("```")) {
-                 content = content.substring(content.indexOf("```") + 3);
-                 if (content.contains("```")) {
-                     content = content.substring(0, content.indexOf("```"));
-                 }
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("model", modelName);
+                payload.put("messages", attemptMessages);
+                if (schemaValidationEnabled) {
+                    Map<String, Object> responseFormat = outputSchemaValidator.buildResponseFormat(templateKey);
+                    if (responseFormat != null) {
+                        payload.put("response_format", responseFormat);
+                    }
+                }
+                requestJson = objectMapper.writeValueAsString(payload);
+                requestHash = hash(requestJson);
+                String response = callModelApi(payload);
+                JsonNode root = objectMapper.readTree(response);
+                String content = cleanupJsonContent(root.at("/choices/0/message/content").asText(""));
+                JsonNode parsedNode = objectMapper.readTree(content);
+                OutputSchemaValidator.ValidationResult validationResult = schemaValidationEnabled
+                        ? outputSchemaValidator.validate(templateKey, parsedNode)
+                        : OutputSchemaValidator.ValidationResult.skippedResult();
+                if (validationResult.passed()) {
+                    List<String> result = objectMapper.convertValue(parsedNode, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+                    savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
+                    return result;
+                }
+                if (attempt >= correctiveRetryMax) {
+                    savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_OUTPUT_SCHEMA_VIOLATION), String.join("; ", validationResult.errors()));
+                    throw new BusinessException(ErrorCodes.MODEL_OUTPUT_SCHEMA_VIOLATION, "模型输出不符合结构约束");
+                }
+                correctivePrompt = outputSchemaValidator.buildCorrectivePrompt(content, validationResult.errors());
+                logger.warn("Project structure schema validation failed, corrective retry: taskId={}, attempt={}/{}, errors={}",
+                        taskId, attempt + 1, correctiveRetryMax + 1, validationResult.errors());
             }
-
-            List<String> result = objectMapper.readValue(content.trim(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>(){});
-            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
-            return result;
+            throw new BusinessException(ErrorCodes.MODEL_OUTPUT_SCHEMA_VIOLATION, "模型输出不符合结构约束");
+        } catch (BusinessException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Failed to generate project structure", e);
             savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), detailMessage(e));
@@ -434,10 +457,20 @@ public class ModelService {
     }
 
     public String generateFileContent(String prd, String filePath, String techStack, String instructions) {
-        return generateFileContent(null, null, prd, filePath, techStack, instructions);
+        return generateFileContent(null, null, prd, filePath, techStack, instructions, null);
     }
 
     public String generateFileContent(String taskId, String projectId, String prd, String filePath, String techStack, String instructions) {
+        return generateFileContent(taskId, projectId, prd, filePath, techStack, instructions, null);
+    }
+
+    public String generateFileContent(String taskId,
+                                      String projectId,
+                                      String prd,
+                                      String filePath,
+                                      String techStack,
+                                      String instructions,
+                                      String projectStructure) {
         if (baseUrl.isEmpty()) {
             return "// Mock content for " + filePath;
         }
@@ -453,6 +486,8 @@ public class ModelService {
             vars.put("filePath", filePath);
             vars.put("techStack", techStack);
             vars.put("instructions", instructions == null ? "" : instructions);
+            vars.put("projectStructure", projectStructure == null ? "" : projectStructure);
+            vars.put("currentGroup", detectGroupByPath(filePath));
 
             String defaultSystemPrompt =
                     "你是一个全栈工程师。请根据PRD和技术栈，生成指定文件的完整代码内容。\n" +
@@ -461,6 +496,7 @@ public class ModelService {
                     "必须将 PRD 中的业务对象、关键流程、约束规则落实到代码中，禁止仅输出空壳框架、占位 TODO 或示例模板。\n" +
                     "如果目标是 Controller/Service/Repository/Entity/Page/Store/SQL 等业务文件，必须包含具体业务字段、接口、校验或流程实现。\n" +
                     "请直接输出文件内容，不要包含Markdown标记（如 ```java ... ```），除非文件本身是Markdown格式。\n" +
+                    "项目文件结构（{{currentGroup}}组）：\n{{projectStructure}}\n" +
                     "如果文件是代码，请确保可以直接运行或编译。";
             String defaultUserPrompt = "PRD内容：\n{{prd}}\n\n额外指令：\n{{instructions}}\n\n输出要求：\n1) 必须体现至少2个业务字段或业务规则；\n2) 如果是接口层需包含参数校验与错误处理；\n3) 如果是数据层需体现实体字段与约束；\n4) 不能只输出项目脚手架样例。";
 
@@ -510,6 +546,16 @@ public class ModelService {
             savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), detail);
             return "// Failed to generate content: " + detail;
         }
+    }
+
+    private String detectGroupByPath(String filePath) {
+        String p = filePath == null ? "" : filePath.toLowerCase();
+        if (p.contains("backend/")) return "backend";
+        if (p.contains("frontend/")) return "frontend";
+        if (p.endsWith(".sql") || p.contains("/db/") || p.contains("database")) return "database";
+        if (p.contains("docker") || p.contains(".yml") || p.startsWith("scripts/") || p.endsWith(".sh") || p.endsWith(".bat")) return "infra";
+        if (p.startsWith("docs/") || p.endsWith("readme.md")) return "docs";
+        return "backend";
     }
 
     public JsonNode clarifyPaperTopic(String taskId,
@@ -708,6 +754,53 @@ public class ModelService {
         }
     }
 
+    public JsonNode expandPaperOutlineBatch(String taskId,
+                                            String projectId,
+                                            String topic,
+                                            String topicRefined,
+                                            String discipline,
+                                            String degreeLevel,
+                                            String methodPreference,
+                                            String researchQuestionsJson,
+                                            JsonNode batchOutlineJson,
+                                            JsonNode batchEvidence,
+                                            String batchRange,
+                                            int totalChapters) {
+        if (baseUrl.isEmpty()) {
+            return objectMapper.valueToTree(Map.of(
+                    "chapters", batchOutlineJson == null ? List.of() : batchOutlineJson.path("chapters"),
+                    "citationMap", List.of()
+            ));
+        }
+        long start = System.currentTimeMillis();
+        String templateKey = "paper_outline_expand_batch";
+        int versionNo = 1;
+        String modelName = codeModel;
+        try {
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("topic", topic == null ? "" : topic);
+            vars.put("topicRefined", topicRefined == null ? "" : topicRefined);
+            vars.put("discipline", discipline == null ? "" : discipline);
+            vars.put("degreeLevel", degreeLevel == null ? "" : degreeLevel);
+            vars.put("methodPreference", methodPreference == null ? "" : methodPreference);
+            vars.put("researchQuestions", researchQuestionsJson == null ? "[]" : researchQuestionsJson);
+            vars.put("outlineJson", batchOutlineJson == null ? "{\"chapters\":[]}" : objectMapper.writeValueAsString(batchOutlineJson));
+            vars.put("ragEvidence", batchEvidence == null ? "[]" : objectMapper.writeValueAsString(batchEvidence));
+            vars.put("batchRange", batchRange == null ? "" : batchRange);
+            vars.put("totalChapters", String.valueOf(Math.max(0, totalChapters)));
+            String defaultSystemPrompt = "你是严谨的论文写作助手。你将只扩写论文的一部分章节。必须仅输出合法 JSON，不得输出 Markdown。禁止占位文本。";
+            String defaultUserPrompt = "全局主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n批次范围：{{batchRange}}\n总章节数：{{totalChapters}}\n本批大纲：{{outlineJson}}\n本批证据：{{ragEvidence}}\n仅输出本批 JSON：{chapters:[...],citationMap:[...]}";
+            JsonNode result = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
+            if (!result.has("chapters")) {
+                return objectMapper.valueToTree(Map.of("chapters", List.of(), "citationMap", List.of()));
+            }
+            return result;
+        } catch (Exception e) {
+            logger.error("Failed to expand paper outline batch", e);
+            return objectMapper.valueToTree(Map.of("chapters", List.of(), "citationMap", List.of()));
+        }
+    }
+
     public JsonNode rewriteOutlineByQualityIssues(String taskId,
                                                   String projectId,
                                                   String topic,
@@ -773,22 +866,53 @@ public class ModelService {
         messages.add(Map.of("role", "system", "content", promptRenderer.render(systemPrompt, vars)));
         messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
 
-        Map<String, Object> payload = Map.of("model", modelName, "messages", messages);
-        String requestJson = objectMapper.writeValueAsString(payload);
-        String requestHash = hash(requestJson);
-        try {
-            String response = callModelApi(payload);
-            JsonNode root = objectMapper.readTree(response);
-            String content = root.at("/choices/0/message/content").asText("");
-            String cleaned = cleanupJsonContent(content);
-            JsonNode parsed = objectMapper.readTree(cleaned);
-            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
-            return parsed;
-        } catch (Exception e) {
-            String errorCode = e instanceof BusinessException be ? String.valueOf(be.getCode()) : String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR);
-            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", errorCode, e.getMessage());
-            throw e;
+        String correctivePrompt = null;
+        String requestJson = null;
+        String requestHash = null;
+        String response = null;
+        for (int attempt = 0; attempt <= correctiveRetryMax; attempt++) {
+            List<Map<String, String>> attemptMessages = new ArrayList<>(messages);
+            if (correctivePrompt != null) {
+                attemptMessages.add(Map.of("role", "user", "content", correctivePrompt));
+            }
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("model", modelName);
+            payload.put("messages", attemptMessages);
+            requestJson = objectMapper.writeValueAsString(payload);
+            requestHash = hash(requestJson);
+            try {
+                response = callModelApi(payload);
+                JsonNode root = objectMapper.readTree(response);
+                String content = root.at("/choices/0/message/content").asText("");
+                String cleaned = cleanupJsonContent(content);
+                JsonNode parsed = objectMapper.readTree(cleaned);
+                OutputSchemaValidator.ValidationResult validationResult = schemaValidationEnabled
+                        ? outputSchemaValidator.validate(templateKey, parsed)
+                        : OutputSchemaValidator.ValidationResult.skippedResult();
+                if (validationResult.passed()) {
+                    savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
+                    return parsed;
+                }
+                if (attempt >= correctiveRetryMax) {
+                    savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_OUTPUT_SCHEMA_VIOLATION), String.join("; ", validationResult.errors()));
+                    throw new BusinessException(ErrorCodes.MODEL_OUTPUT_SCHEMA_VIOLATION, "模型输出不符合结构约束");
+                }
+                correctivePrompt = outputSchemaValidator.buildCorrectivePrompt(cleaned, validationResult.errors());
+                logger.warn("Prompt JSON validation failed, corrective retry: taskId={}, templateKey={}, attempt={}/{}, errors={}",
+                        taskId, templateKey, attempt + 1, correctiveRetryMax + 1, validationResult.errors());
+            } catch (BusinessException e) {
+                if (e.getCode() == ErrorCodes.MODEL_OUTPUT_SCHEMA_VIOLATION && attempt < correctiveRetryMax) {
+                    continue;
+                }
+                savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "failed", String.valueOf(e.getCode()), e.getMessage());
+                throw e;
+            } catch (Exception e) {
+                String errorCode = String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR);
+                savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "failed", errorCode, e.getMessage());
+                throw e;
+            }
         }
+        throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型调用失败");
     }
 
     private String cleanupJsonContent(String content) {

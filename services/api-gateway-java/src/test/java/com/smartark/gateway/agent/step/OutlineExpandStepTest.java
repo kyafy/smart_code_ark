@@ -44,7 +44,11 @@ class OutlineExpandStepTest {
                 paperTopicSessionRepository,
                 paperOutlineVersionRepository,
                 paperSourceRepository,
-                new ObjectMapper()
+                new ObjectMapper(),
+                false,
+                2,
+                2,
+                8
         );
         TaskEntity task = new TaskEntity();
         task.setId("task-expand");

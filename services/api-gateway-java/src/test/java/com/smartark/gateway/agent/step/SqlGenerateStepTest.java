@@ -38,7 +38,7 @@ class SqlGenerateStepTest {
         SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper());
         AgentExecutionContext context = buildContext();
 
-        when(modelService.generateFileContent(any(), any(), any(), any(), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn("-- generated content");
 
         step.execute(context);
@@ -48,7 +48,7 @@ class SqlGenerateStepTest {
         assertThat(Files.exists(tempDir.resolve("docs/README.md"))).isTrue();
         // Backend should NOT be processed
         verify(modelService, never())
-                .generateFileContent(any(), any(), any(), eq("backend/src/main/java/App.java"), any(), any());
+                .generateFileContent(any(), any(), any(), eq("backend/src/main/java/App.java"), any(), any(), any());
     }
 
     @Test
@@ -61,7 +61,7 @@ class SqlGenerateStepTest {
         plan.add(makeItem("scripts/start.sh", "infra", 20));
         context.setFilePlan(plan);
 
-        when(modelService.generateFileContent(any(), any(), any(), any(), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn("# infra content");
 
         step.execute(context);
@@ -79,7 +79,7 @@ class SqlGenerateStepTest {
         plan.add(makeItem("docs/deploy.md", "docs", 10));
         context.setFilePlan(plan);
 
-        when(modelService.generateFileContent(any(), any(), any(), eq("docs/deploy.md"), any(), any()))
+        when(modelService.generateFileContent(any(), any(), any(), eq("docs/deploy.md"), any(), any(), any()))
                 .thenReturn("# Deploy Guide");
 
         step.execute(context);
