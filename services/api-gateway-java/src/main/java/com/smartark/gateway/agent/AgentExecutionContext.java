@@ -34,6 +34,10 @@ public class AgentExecutionContext {
     private List<RagEvidenceItem> ragEvidenceItems;
     private String chapterEvidenceMapJson;
     private List<String> contractViolations;
+    private List<String> shortTermMemories;
+    private List<String> longTermMemories;
+    private String assembledContextPack;
+    private int sidecarCallCount;
     private BiConsumer<String, String> taskLogger;
 
     public TaskEntity getTask() {
@@ -218,6 +222,42 @@ public class AgentExecutionContext {
 
     public void setContractViolations(List<String> contractViolations) {
         this.contractViolations = contractViolations;
+    }
+
+    public int getSidecarCallCount() {
+        return sidecarCallCount;
+    }
+
+    public void setSidecarCallCount(int sidecarCallCount) {
+        this.sidecarCallCount = Math.max(0, sidecarCallCount);
+    }
+
+    public void incrementSidecarCallCount() {
+        this.sidecarCallCount++;
+    }
+
+    public List<String> getShortTermMemories() {
+        return shortTermMemories;
+    }
+
+    public void setShortTermMemories(List<String> shortTermMemories) {
+        this.shortTermMemories = shortTermMemories;
+    }
+
+    public List<String> getLongTermMemories() {
+        return longTermMemories;
+    }
+
+    public void setLongTermMemories(List<String> longTermMemories) {
+        this.longTermMemories = longTermMemories;
+    }
+
+    public String getAssembledContextPack() {
+        return assembledContextPack;
+    }
+
+    public void setAssembledContextPack(String assembledContextPack) {
+        this.assembledContextPack = assembledContextPack;
     }
 
     public BiConsumer<String, String> getTaskLogger() {

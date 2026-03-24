@@ -44,12 +44,15 @@ public class RequirementAnalyzeStep implements AgentStep {
         String stackFrontend = reqJson.at("/stack/frontend").asText("vue3");
         String stackDb = reqJson.at("/stack/db").asText("mysql");
         
+        String effectiveInstructions = context.getNormalizedInstructions() != null
+                ? context.getNormalizedInstructions()
+                : context.getInstructions();
         List<String> fileList;
         try {
             fileList = modelService.generateProjectStructure(
                     context.getTask().getId(),
                     context.getTask().getProjectId(),
-                    prd, stackBackend, stackFrontend, stackDb, context.getInstructions()
+                    prd, stackBackend, stackFrontend, stackDb, effectiveInstructions
             );
         } catch (Exception e) {
             logger.warn("Project structure generation failed, fallback to builtin structure", e);
@@ -63,7 +66,7 @@ public class RequirementAnalyzeStep implements AgentStep {
         }
         if (!completeness.passed() && !completeness.missingFiles().isEmpty()) {
             context.logWarn("Structure completeness check FAILED: missing=" + completeness.missingFiles());
-            String retryInstruction = (context.getInstructions() == null ? "" : context.getInstructions()) +
+            String retryInstruction = (effectiveInstructions == null ? "" : effectiveInstructions) +
                     "\n\n请补齐以下缺失关键文件：\n" + String.join("\n", completeness.missingFiles());
             try {
                 logger.warn("Project structure missing critical files, corrective retry: taskId={}, missing={}",

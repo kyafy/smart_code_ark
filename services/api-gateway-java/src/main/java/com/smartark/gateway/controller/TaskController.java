@@ -1,6 +1,8 @@
 package com.smartark.gateway.controller;
 
 import com.smartark.gateway.common.response.ApiResponse;
+import com.smartark.gateway.dto.ContractReportResult;
+import com.smartark.gateway.dto.DeliveryValidateRequest;
 import com.smartark.gateway.dto.GenerateRequest;
 import com.smartark.gateway.dto.GenerateResult;
 import com.smartark.gateway.dto.PreviewLogsResult;
@@ -41,6 +43,18 @@ public class TaskController {
     @GetMapping("/task/{taskId}/preview")
     public ApiResponse<TaskPreviewResult> getPreview(@PathVariable("taskId") String taskId) {
         return ApiResponse.success(taskService.getPreview(taskId));
+    }
+
+    @GetMapping("/task/{taskId}/contract-report")
+    public ApiResponse<ContractReportResult> getContractReport(@PathVariable("taskId") String taskId) {
+        return ApiResponse.success(taskService.getContractReport(taskId));
+    }
+
+    @PostMapping("/task/{taskId}/delivery/validate")
+    public ApiResponse<ContractReportResult> validateDelivery(
+            @PathVariable("taskId") String taskId,
+            @RequestBody(required = false) DeliveryValidateRequest request) {
+        return ApiResponse.success(taskService.validateDelivery(taskId, request == null ? null : request.autoFix()));
     }
 
     @PostMapping("/task/{taskId}/preview/rebuild")

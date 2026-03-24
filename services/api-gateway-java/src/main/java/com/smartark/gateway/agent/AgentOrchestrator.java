@@ -12,7 +12,16 @@ import com.smartark.gateway.db.repo.ProjectSpecRepository;
 import com.smartark.gateway.db.repo.TaskLogRepository;
 import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
+import com.smartark.gateway.service.ContextAssembler;
+import com.smartark.gateway.dto.LangchainHealthResult;
+import com.smartark.gateway.dto.LangchainMemoryReadRequest;
+import com.smartark.gateway.dto.LangchainMemoryReadResult;
+import com.smartark.gateway.dto.LangchainMemoryWriteRequest;
+import com.smartark.gateway.service.LangchainSidecarClient;
+import com.smartark.gateway.service.LongTermMemoryService;
 import com.smartark.gateway.service.PreviewDeployService;
+import com.smartark.gateway.service.QualityGateService;
+import com.smartark.gateway.service.TaskMemoryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -42,6 +52,11 @@ public class AgentOrchestrator {
     private final TaskLogRepository taskLogRepository;
     private final ProjectSpecRepository projectSpecRepository;
     private final PreviewDeployService previewDeployService;
+    private final LangchainSidecarClient langchainSidecarClient;
+    private final TaskMemoryService taskMemoryService;
+    private final LongTermMemoryService longTermMemoryService;
+    private final ContextAssembler contextAssembler;
+    private final QualityGateService qualityGateService;
     private final Map<String, AgentStep> stepMap;
     private final ObjectMapper objectMapper;
 
@@ -51,12 +66,31 @@ public class AgentOrchestrator {
     private int maxRetries;
     @Value("${smartark.agent.retryable-step-codes:requirement_analyze,codegen_backend,codegen_frontend,sql_generate,rag_index_enrich,rag_retrieve_rerank}")
     private String retryableStepCodes;
+    @Value("${smartark.langchain.enabled:false}")
+    private boolean langchainEnabled;
+    @Value("${smartark.memory.short-term.top-k:8}")
+    private int shortTermTopK;
+    @Value("${smartark.memory.long-term.top-k:8}")
+    private int longTermTopK;
+    @Value("${smartark.quality-gate.enabled:false}")
+    private boolean qualityGateEnabled;
+    @Value("${smartark.quality-gate.min-score:0.66}")
+    private double qualityGateMinScore;
+    @Value("${smartark.quality-gate.auto-fix-enabled:true}")
+    private boolean qualityGateAutoFixEnabled;
+    @Value("${smartark.quality-gate.max-retries:2}")
+    private int qualityGateMaxRetries;
 
     public AgentOrchestrator(TaskRepository taskRepository,
                              TaskStepRepository taskStepRepository,
                              TaskLogRepository taskLogRepository,
                              ProjectSpecRepository projectSpecRepository,
                              PreviewDeployService previewDeployService,
+                             LangchainSidecarClient langchainSidecarClient,
+                             TaskMemoryService taskMemoryService,
+                             LongTermMemoryService longTermMemoryService,
+                             ContextAssembler contextAssembler,
+                             QualityGateService qualityGateService,
                              ObjectMapper objectMapper,
                              List<AgentStep> agentSteps) {
         this.taskRepository = taskRepository;
@@ -64,11 +98,17 @@ public class AgentOrchestrator {
         this.taskLogRepository = taskLogRepository;
         this.projectSpecRepository = projectSpecRepository;
         this.previewDeployService = previewDeployService;
+        this.langchainSidecarClient = langchainSidecarClient;
+        this.taskMemoryService = taskMemoryService;
+        this.longTermMemoryService = longTermMemoryService;
+        this.contextAssembler = contextAssembler;
+        this.qualityGateService = qualityGateService;
         this.objectMapper = objectMapper;
         this.stepMap = agentSteps.stream().collect(Collectors.toMap(AgentStep::getStepCode, step -> step));
     }
 
     public void run(String taskId) {
+        long taskStartedAt = System.currentTimeMillis();
         try {
             TaskEntity task = loadTask(taskId);
             if ("cancelled".equals(task.getStatus())) {
@@ -96,10 +136,12 @@ public class AgentOrchestrator {
             context.setNormalizedInstructions(normalizeInstructions(task.getInstructions()));
             Path workspaceDir = Paths.get(workspaceRoot, taskId);
             context.setWorkspaceDir(workspaceDir);
+            context.setSidecarCallCount(0);
             context.setTaskLogger((level, content) -> log(taskId, level, content));
             if ("paper_outline".equals(task.getTaskType())) {
                 fillPaperContext(context, task.getInstructions());
             }
+            probeSidecarHealth(taskId, context);
 
             List<TaskStepEntity> steps = taskStepRepository.findByTaskIdOrderByStepOrderAsc(taskId);
 
@@ -126,9 +168,15 @@ public class AgentOrchestrator {
                     task.setProgress((i * 100) / steps.size());
                     task.setUpdatedAt(LocalDateTime.now());
                     taskRepository.save(task);
+                    loadAndAttachShortTermMemory(taskId, stepEntity.getStepCode(), context);
+                    loadAndAttachLongTermMemory(task, stepEntity.getStepCode(), context);
+                    assembleContextPack(taskId, stepEntity.getStepCode(), context);
 
                     log(taskId, "info", "Executing step: " + stepEntity.getStepName() + " (attempt " + attempt + ")");
                     long startedAt = System.currentTimeMillis();
+                    int sidecarCallsBeforeStep = context.getSidecarCallCount();
+                    log(taskId, "info", "step_probe event=start taskId=" + taskId + ", stepCode=" + stepEntity.getStepCode()
+                            + ", sidecarCallCount=" + sidecarCallsBeforeStep);
 
                     try {
                         AgentStep agentStep = stepMap.get(stepEntity.getStepCode());
@@ -136,9 +184,14 @@ public class AgentOrchestrator {
                             throw new IllegalArgumentException("Unsupported step code: " + stepEntity.getStepCode());
                         }
                         agentStep.execute(context);
+                        runQualityGateIfNeeded(taskId, stepEntity.getStepCode(), context);
                         long elapsedMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+                        int stepSidecarCalls = Math.max(0, context.getSidecarCallCount() - sidecarCallsBeforeStep);
                         log(taskId, "info", "Step completed: " + stepEntity.getStepCode() + ", elapsedMs=" + elapsedMs);
+                        log(taskId, "info", "step_probe event=finish taskId=" + taskId + ", stepCode=" + stepEntity.getStepCode()
+                                + ", durationMs=" + elapsedMs + ", sidecarCallCount=" + stepSidecarCalls);
                         logStepOutputSummary(taskId, stepEntity.getStepCode(), context);
+                        writeShortTermMemory(taskId, stepEntity.getStepCode(), i + 1, context, null);
                         stepEntity.setStatus("finished");
                         stepEntity.setProgress(100);
                         stepEntity.setFinishedAt(LocalDateTime.now());
@@ -149,6 +202,8 @@ public class AgentOrchestrator {
                         break;
                     } catch (Exception e) {
                         String errorCode = classifyError(e);
+                        long elapsedMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+                        int stepSidecarCalls = Math.max(0, context.getSidecarCallCount() - sidecarCallsBeforeStep);
                         stepEntity.setStatus("failed");
                         stepEntity.setErrorCode(errorCode);
                         stepEntity.setErrorMessage(messageOf(e));
@@ -156,6 +211,10 @@ public class AgentOrchestrator {
                         stepEntity.setUpdatedAt(LocalDateTime.now());
                         taskStepRepository.save(stepEntity);
                         log(taskId, "error", "Step failed: " + stepEntity.getStepCode() + ", code=" + errorCode + ", msg=" + messageOf(e));
+                        log(taskId, "error", "step_probe event=failed taskId=" + taskId + ", stepCode=" + stepEntity.getStepCode()
+                                + ", durationMs=" + elapsedMs + ", sidecarCallCount=" + stepSidecarCalls
+                                + ", errorCode=" + errorCode);
+                        writeShortTermMemory(taskId, stepEntity.getStepCode(), i + 1, context, messageOf(e));
 
                         if (shouldRetry(stepEntity)) {
                             log(taskId, "warn", "Retrying step: " + stepEntity.getStepCode() + ", retryCount=" + stepEntity.getRetryCount());
@@ -175,7 +234,10 @@ public class AgentOrchestrator {
             task.setUpdatedAt(LocalDateTime.now());
             taskRepository.save(task);
 
+            long totalDurationMs = Math.max(0L, System.currentTimeMillis() - taskStartedAt);
             log(taskId, "info", "Task finished successfully");
+            log(taskId, "info", "task_probe event=finish taskId=" + taskId + ", durationMs=" + totalDurationMs
+                    + ", sidecarCallCount=" + context.getSidecarCallCount());
             if (shouldTriggerPreviewDeploy(task)) {
                 previewDeployService.deployPreviewAsync(taskId);
             }
@@ -183,7 +245,10 @@ public class AgentOrchestrator {
         } catch (Exception e) {
             logger.error("Task execution failed", e);
             String errorCode = classifyError(e);
+            long totalDurationMs = Math.max(0L, System.currentTimeMillis() - taskStartedAt);
             log(taskId, "error", "Task failed: code=" + errorCode + ", message=" + messageOf(e));
+            log(taskId, "error", "task_probe event=failed taskId=" + taskId + ", durationMs=" + totalDurationMs
+                    + ", sidecarCallCount=-1, errorCode=" + errorCode);
             taskRepository.findById(taskId).ifPresent(t -> {
                 if ("cancelled".equals(t.getStatus()) || ErrorCodes.TASK_CANCELLED == extractBusinessCode(e)) {
                     t.setStatus("cancelled");
@@ -197,6 +262,333 @@ public class AgentOrchestrator {
                 t.setUpdatedAt(LocalDateTime.now());
                 taskRepository.save(t);
             });
+        }
+    }
+
+    private void probeSidecarHealth(String taskId, AgentExecutionContext context) {
+        if (!langchainEnabled) {
+            return;
+        }
+        long startedAt = System.currentTimeMillis();
+        try {
+            LangchainHealthResult result = langchainSidecarClient.health();
+            context.incrementSidecarCallCount();
+            long durationMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+            log(taskId, "info", "sidecar_probe endpoint=/health status=" + result.status()
+                    + ", durationMs=" + durationMs + ", sidecarCallCount=" + context.getSidecarCallCount());
+        } catch (Exception e) {
+            long durationMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+            log(taskId, "warn", "sidecar_probe endpoint=/health status=failed, durationMs=" + durationMs
+                    + ", error=" + messageOf(e));
+        }
+    }
+
+    private void runQualityGateIfNeeded(String taskId, String stepCode, AgentExecutionContext context) {
+        if (!qualityGateEnabled) {
+            return;
+        }
+        if (!"artifact_contract_validate".equals(stepCode)) {
+            return;
+        }
+        int configuredRetries = Math.max(0, qualityGateMaxRetries);
+        int maxAttempts = qualityGateAutoFixEnabled
+                ? Math.max(2, configuredRetries + 1)
+                : Math.max(1, configuredRetries + 1);
+        boolean autoFixApplied = false;
+        int attempt = 0;
+        while (attempt < maxAttempts) {
+            attempt++;
+            long startedAt = System.currentTimeMillis();
+            QualityGateService.QualityGateResult result = qualityGateService.evaluate(context.getWorkspaceDir());
+            qualityGateService.persistReport(context.getWorkspaceDir(), result);
+            long durationMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+            log(taskId, "info", "quality_gate event=finish taskId=" + taskId + ", stepCode=" + stepCode
+                    + ", attempt=" + attempt + "/" + maxAttempts
+                    + ", passed=" + result.passed() + ", score=" + result.score()
+                    + ", failedRules=" + result.failedRules() + ", durationMs=" + durationMs
+                    + ", autoFixApplied=" + autoFixApplied);
+            if (result.passed() && result.score() >= qualityGateMinScore) {
+                return;
+            }
+
+            if (!autoFixApplied && qualityGateAutoFixEnabled) {
+                List<String> fixedActions = qualityGateService.autoFix(context.getWorkspaceDir(), result.failedRules());
+                autoFixApplied = true;
+                log(taskId, "info", "quality_gate event=autofix taskId=" + taskId + ", stepCode=" + stepCode
+                        + ", fixedActions=" + fixedActions);
+            }
+
+            if (attempt < maxAttempts) {
+                log(taskId, "warn", "quality_gate event=retry taskId=" + taskId + ", stepCode=" + stepCode
+                        + ", nextAttempt=" + (attempt + 1));
+            } else {
+                throw new BusinessException(
+                        ErrorCodes.TASK_VALIDATION_ERROR,
+                        "quality gate failed, score=" + result.score() + ", failedRules=" + result.failedRules()
+                );
+            }
+        }
+    }
+
+    private void loadAndAttachShortTermMemory(String taskId, String stepCode, AgentExecutionContext context) {
+        List<TaskMemoryService.MemoryEntry> recent = taskMemoryService.readRecent(taskId, shortTermTopK);
+        List<String> localMemoryLines = recent.stream()
+                .map(entry -> "[" + entry.sequence() + "] " + entry.stepCode()
+                        + " prompt=" + truncateForLog(entry.promptSummary(), 120)
+                        + " output=" + truncateForLog(entry.outputSummary(), 120)
+                        + (entry.failureReason() == null || entry.failureReason().isBlank() ? "" : ", failure=" + truncateForLog(entry.failureReason(), 120)))
+                .toList();
+        List<String> sidecarMemoryLines = loadShortTermMemoryFromSidecar(taskId, stepCode, context);
+        List<String> memoryLines = new java.util.ArrayList<>(localMemoryLines);
+        memoryLines.addAll(sidecarMemoryLines);
+        context.setShortTermMemories(memoryLines);
+        log(taskId, "info", "memory_probe event=load taskId=" + taskId + ", stepCode=" + stepCode
+                + ", entries=" + memoryLines.size() + ", localEntries=" + localMemoryLines.size()
+                + ", sidecarEntries=" + sidecarMemoryLines.size());
+    }
+
+    private void loadAndAttachLongTermMemory(TaskEntity task, String stepCode, AgentExecutionContext context) {
+        String stackSignature = resolveStackSignature(context);
+        List<LongTermMemoryService.MemoryItem> items = longTermMemoryService.readTopK(
+                task.getProjectId(),
+                task.getUserId(),
+                stackSignature,
+                longTermTopK
+        );
+        List<String> localMemoryLines = items.stream()
+                .map(item -> "[" + item.memoryType() + "] " + item.stepCode() + ": " + truncateForLog(item.summary(), 150))
+                .toList();
+        List<String> sidecarMemoryLines = loadLongTermMemoryFromSidecar(task, stepCode, stackSignature, context);
+        List<String> memoryLines = new java.util.ArrayList<>(localMemoryLines);
+        memoryLines.addAll(sidecarMemoryLines);
+        context.setLongTermMemories(memoryLines);
+        log(task.getId(), "info", "memory_probe event=load_long_term taskId=" + task.getId()
+                + ", stepCode=" + stepCode + ", entries=" + memoryLines.size()
+                + ", localEntries=" + localMemoryLines.size()
+                + ", sidecarEntries=" + sidecarMemoryLines.size()
+                + ", stackSignature=" + stackSignature);
+    }
+
+    private void assembleContextPack(String taskId, String stepCode, AgentExecutionContext context) {
+        String prd = extractPrd(context);
+        String baseInstructions = normalizeInstructions(context.getInstructions());
+        ContextAssembler.AssembledContext assembled = contextAssembler.assemble(
+                stepCode,
+                prd,
+                baseInstructions,
+                context.getShortTermMemories(),
+                context.getLongTermMemories()
+        );
+        context.setAssembledContextPack(assembled.contextPack());
+        context.setNormalizedInstructions(assembled.contextPack());
+        log(taskId, "info", "context_probe taskId=" + taskId + ", stepCode=" + stepCode
+                + ", sources=" + assembled.sources()
+                + ", shortTermCount=" + assembled.shortTermCount()
+                + ", longTermCount=" + assembled.longTermCount()
+                + ", truncated=" + assembled.truncated()
+                + ", contextLength=" + assembled.contextPack().length());
+    }
+
+    private void writeShortTermMemory(String taskId, String stepCode, int sequence, AgentExecutionContext context, String failureReason) {
+        String promptSummary = summarizePrompt(context);
+        String outputSummary = summarizeStepOutput(stepCode, context);
+        List<String> fixedActions = "package".equals(stepCode)
+                ? extractPackageFixedActions(context)
+                : List.of();
+        taskMemoryService.append(taskId, stepCode, sequence, promptSummary, outputSummary, failureReason, fixedActions);
+        TaskEntity task = context.getTask();
+        if (task != null) {
+            String stackSignature = resolveStackSignature(context);
+            String memoryType = failureReason == null || failureReason.isBlank() ? "success_pattern" : "failure_pattern";
+            String summary = memoryType + " | step=" + stepCode + " | output=" + outputSummary
+                    + (failureReason == null || failureReason.isBlank() ? "" : " | failure=" + failureReason);
+            longTermMemoryService.append(
+                    task.getProjectId(),
+                    task.getUserId(),
+                    stackSignature,
+                    taskId,
+                    stepCode,
+                    memoryType,
+                    summary,
+                    fixedActions
+            );
+            writeMemoryToSidecar(task, stackSignature, stepCode, memoryType, summary, fixedActions, context);
+        }
+        log(taskId, "info", "memory_probe event=write taskId=" + taskId + ", stepCode=" + stepCode
+                + ", sequence=" + sequence + ", hasFailure=" + (failureReason != null && !failureReason.isBlank()));
+    }
+
+    private List<String> loadShortTermMemoryFromSidecar(String taskId, String stepCode, AgentExecutionContext context) {
+        if (!langchainEnabled) {
+            return List.of();
+        }
+        try {
+            LangchainMemoryReadResult result = langchainSidecarClient.readMemory(
+                    new LangchainMemoryReadRequest("task", taskId, stepCode, shortTermTopK)
+            );
+            context.incrementSidecarCallCount();
+            if (result == null || result.items() == null || result.items().isEmpty()) {
+                return List.of();
+            }
+            List<String> lines = result.items().stream()
+                    .map(item -> "[sidecar:" + item.memoryType() + "] " + truncateForLog(item.content(), 160))
+                    .toList();
+            return lines;
+        } catch (Exception e) {
+            logger.warn("Load short-term memory from sidecar failed taskId={}, stepCode={}, error={}",
+                    taskId, stepCode, messageOf(e));
+            return List.of();
+        }
+    }
+
+    private List<String> loadLongTermMemoryFromSidecar(TaskEntity task, String stepCode, String stackSignature, AgentExecutionContext context) {
+        if (!langchainEnabled) {
+            return List.of();
+        }
+        String scopeId = task.getProjectId() + ":" + task.getUserId() + ":" + stackSignature;
+        try {
+            LangchainMemoryReadResult result = langchainSidecarClient.readMemory(
+                    new LangchainMemoryReadRequest("project_user_stack", scopeId, stepCode, longTermTopK)
+            );
+            context.incrementSidecarCallCount();
+            if (result == null || result.items() == null || result.items().isEmpty()) {
+                return List.of();
+            }
+            return result.items().stream()
+                    .map(item -> "[sidecar:" + item.memoryType() + "] " + truncateForLog(item.content(), 180))
+                    .toList();
+        } catch (Exception e) {
+            logger.warn("Load long-term memory from sidecar failed taskId={}, stepCode={}, error={}",
+                    task.getId(), stepCode, messageOf(e));
+            return List.of();
+        }
+    }
+
+    private void writeMemoryToSidecar(TaskEntity task,
+                                      String stackSignature,
+                                      String stepCode,
+                                      String memoryType,
+                                      String summary,
+                                      List<String> fixedActions,
+                                      AgentExecutionContext context) {
+        if (!langchainEnabled) {
+            return;
+        }
+        try {
+            HashMap<String, Object> metadata = new HashMap<>();
+            metadata.put("taskId", task.getId());
+            metadata.put("projectId", task.getProjectId());
+            metadata.put("userId", task.getUserId());
+            metadata.put("stepCode", stepCode);
+            metadata.put("stackSignature", stackSignature);
+            metadata.put("fixedActions", fixedActions == null ? List.of() : fixedActions);
+
+            langchainSidecarClient.writeMemory(new LangchainMemoryWriteRequest(
+                    "project_user_stack",
+                    task.getProjectId() + ":" + task.getUserId() + ":" + stackSignature,
+                    memoryType,
+                    summary,
+                    metadata
+            ));
+            context.incrementSidecarCallCount();
+        } catch (Exception e) {
+            logger.warn("Write memory to sidecar failed taskId={}, stepCode={}, error={}",
+                    task.getId(), stepCode, messageOf(e));
+        }
+    }
+
+    private String summarizePrompt(AgentExecutionContext context) {
+        String normalized = context.getNormalizedInstructions();
+        if (normalized == null || normalized.isBlank()) {
+            normalized = context.getInstructions();
+        }
+        if (normalized == null || normalized.isBlank()) {
+            return "";
+        }
+        return truncateForLog(normalized, 200);
+    }
+
+    private String summarizeStepOutput(String stepCode, AgentExecutionContext context) {
+        if ("requirement_analyze".equals(stepCode)) {
+            int planSize = context.getFilePlan() == null ? 0 : context.getFilePlan().size();
+            int listSize = context.getFileList() == null ? 0 : context.getFileList().size();
+            return "filePlan=" + planSize + ",fileList=" + listSize;
+        }
+        if ("artifact_contract_validate".equals(stepCode)) {
+            int violations = context.getContractViolations() == null ? 0 : context.getContractViolations().size();
+            return "violations=" + violations;
+        }
+        Path workspaceDir = context.getWorkspaceDir();
+        if (workspaceDir == null || !Files.exists(workspaceDir)) {
+            return "workspace=missing";
+        }
+        try (Stream<Path> stream = Files.walk(workspaceDir)) {
+            long fileCount = stream.filter(Files::isRegularFile).count();
+            return "workspaceFileCount=" + fileCount;
+        } catch (IOException e) {
+            return "workspaceScanFailed";
+        }
+    }
+
+    private List<String> extractPackageFixedActions(AgentExecutionContext context) {
+        Path reportPath = context.getWorkspaceDir() == null ? null : context.getWorkspaceDir().resolve("contract_report.json");
+        if (reportPath == null || !Files.exists(reportPath)) {
+            return List.of();
+        }
+        try {
+            JsonNode root = objectMapper.readTree(Files.readString(reportPath));
+            JsonNode fixedNode = root.path("fixedActions");
+            if (!fixedNode.isArray()) {
+                return List.of();
+            }
+            List<String> actions = new java.util.ArrayList<>();
+            fixedNode.forEach(node -> {
+                String value = node.asText("");
+                if (!value.isBlank()) {
+                    actions.add(value);
+                }
+            });
+            return actions;
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private String truncateForLog(String text, int maxLength) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = text.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        return normalized.substring(0, maxLength);
+    }
+
+    private String extractPrd(AgentExecutionContext context) {
+        if (context.getSpec() == null || context.getSpec().getRequirementJson() == null) {
+            return "";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(context.getSpec().getRequirementJson());
+            return root.path("prd").asText("");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String resolveStackSignature(AgentExecutionContext context) {
+        if (context.getSpec() == null || context.getSpec().getRequirementJson() == null) {
+            return "springboot+vue3+mysql";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(context.getSpec().getRequirementJson());
+            String backend = root.at("/stack/backend").asText("springboot");
+            String frontend = root.at("/stack/frontend").asText("vue3");
+            String db = root.at("/stack/db").asText("mysql");
+            return backend + "+" + frontend + "+" + db;
+        } catch (Exception e) {
+            return "springboot+vue3+mysql";
         }
     }
 

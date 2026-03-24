@@ -23,6 +23,8 @@ public class PreviewLifecycleService {
 
     @Autowired(required = false)
     private ContainerRuntimeService containerRuntimeService;
+    @Autowired(required = false)
+    private PreviewGatewayService previewGatewayService;
 
     @Value("${smartark.preview.enabled:false}")
     private boolean previewEnabled;
@@ -38,12 +40,18 @@ public class PreviewLifecycleService {
         if (!previewEnabled) {
             return;
         }
+        if (previewGatewayService != null) {
+            previewGatewayService.recycleExpiredRoutes();
+        }
         LocalDateTime now = LocalDateTime.now();
         List<TaskPreviewEntity> expired = taskPreviewRepository.findByStatusAndExpireAtBefore("ready", now);
         for (TaskPreviewEntity preview : expired) {
             try {
                 // Stop and remove the container if runtime is available
                 stopContainer(preview);
+                if (previewGatewayService != null) {
+                    previewGatewayService.unregisterRoute(preview.getTaskId());
+                }
 
                 preview.setStatus("expired");
                 preview.setPhase(null);
@@ -68,6 +76,9 @@ public class PreviewLifecycleService {
                 stopContainer(preview);
             } catch (Exception e) {
                 logger.warn("Failed to stop preview container for task {}", preview.getTaskId(), e);
+            }
+            if (previewGatewayService != null) {
+                previewGatewayService.unregisterRoute(preview.getTaskId());
             }
             preview.setStatus("expired");
             preview.setPhase(null);

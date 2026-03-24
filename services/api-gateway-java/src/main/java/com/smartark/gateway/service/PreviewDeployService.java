@@ -43,6 +43,8 @@ public class PreviewDeployService {
 
     @Autowired(required = false)
     private ContainerRuntimeService containerRuntimeService;
+    @Autowired(required = false)
+    private PreviewGatewayService previewGatewayService;
 
     @Autowired
     private PreviewSseRegistry previewSseRegistry;
@@ -63,6 +65,8 @@ public class PreviewDeployService {
     private int healthCheckIntervalMs;
     @Value("${smartark.preview.log-dir:/tmp/smartark/preview-logs}")
     private String previewLogDir;
+    @Value("${smartark.preview.gateway.enabled:false}")
+    private boolean previewGatewayEnabled;
 
     public PreviewDeployService(TaskPreviewRepository taskPreviewRepository,
                                 TaskRepository taskRepository,
@@ -109,6 +113,9 @@ public class PreviewDeployService {
             }
 
             // Reset to provisioning
+            if (previewGatewayService != null) {
+                previewGatewayService.unregisterRoute(taskId);
+            }
             preview.setStatus("provisioning");
             preview.setPhase(null);
             preview.setPreviewUrl(null);
@@ -202,12 +209,16 @@ public class PreviewDeployService {
             // ===== Phase 6: publish_gateway =====
             updatePhase(preview, PHASE_PUBLISH_GATEWAY);
             appendTaskLog(taskId, "info", "Phase: publish_gateway - publishing preview URL");
-
-            // Route through reverse proxy for same-origin access
-            String previewUrl = "/api/preview/" + taskId + "/";
+            appendTaskLog(taskId, "info", "Preview gateway switch: enabled=" + previewGatewayEnabled);
 
             LocalDateTime readyAt = LocalDateTime.now();
             LocalDateTime expireAt = readyAt.plusHours(Math.max(previewDefaultTtlHours, 1));
+            String previewUrl;
+            if (previewGatewayEnabled && previewGatewayService != null) {
+                previewUrl = previewGatewayService.registerRoute(taskId, hostPort, expireAt);
+            } else {
+                previewUrl = "/api/preview/" + taskId + "/";
+            }
             preview.setStatus("ready");
             preview.setPhase(null);
             preview.setPreviewUrl(previewUrl);
@@ -226,6 +237,9 @@ public class PreviewDeployService {
             appendTaskLog(taskId, "info", "Preview deployment succeeded in " + duration + "ms, URL: " + previewUrl);
         } catch (Exception e) {
             logger.error("Preview deployment failed for task {}", taskId, e);
+            if (previewGatewayService != null) {
+                previewGatewayService.unregisterRoute(taskId);
+            }
             int errorCode = resolvePreviewErrorCode(e);
             LocalDateTime failedAt = LocalDateTime.now();
 

@@ -35,6 +35,8 @@ class PreviewLifecycleServiceTest {
     private TaskLogRepository taskLogRepository;
     @Mock
     private ContainerRuntimeService containerRuntimeService;
+    @Mock
+    private PreviewGatewayService previewGatewayService;
 
     private PreviewLifecycleService previewLifecycleService;
 
@@ -42,6 +44,7 @@ class PreviewLifecycleServiceTest {
     void setUp() {
         previewLifecycleService = new PreviewLifecycleService(taskPreviewRepository, taskLogRepository);
         ReflectionTestUtils.setField(previewLifecycleService, "containerRuntimeService", containerRuntimeService);
+        ReflectionTestUtils.setField(previewLifecycleService, "previewGatewayService", previewGatewayService);
         ReflectionTestUtils.setField(previewLifecycleService, "previewEnabled", true);
         when(taskPreviewRepository.save(any(TaskPreviewEntity.class))).thenAnswer(i -> i.getArgument(0));
         when(taskLogRepository.save(any(TaskLogEntity.class))).thenAnswer(i -> i.getArgument(0));
@@ -70,6 +73,8 @@ class PreviewLifecycleServiceTest {
         ArgumentCaptor<TaskLogEntity> logCaptor = ArgumentCaptor.forClass(TaskLogEntity.class);
         verify(taskLogRepository).save(logCaptor.capture());
         assertThat(logCaptor.getValue().getContent()).contains("recycled as expired");
+        verify(previewGatewayService).recycleExpiredRoutes();
+        verify(previewGatewayService).unregisterRoute("t1");
     }
 
     @Test
@@ -111,6 +116,7 @@ class PreviewLifecycleServiceTest {
         previewLifecycleService.recycleExpiredPreviews();
 
         verify(taskPreviewRepository, never()).findByStatusAndExpireAtBefore(any(), any());
+        verify(previewGatewayService, never()).recycleExpiredRoutes();
     }
 
     @Test

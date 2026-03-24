@@ -31,6 +31,8 @@ public class GlobalExceptionHandler {
             case ErrorCodes.PREVIEW_REBUILD_STATE_INVALID -> HttpStatus.CONFLICT;
             case ErrorCodes.PREVIEW_CONCURRENCY_LIMIT -> HttpStatus.TOO_MANY_REQUESTS;
             case ErrorCodes.PREVIEW_BUILD_FAILED, ErrorCodes.PREVIEW_START_FAILED, ErrorCodes.PREVIEW_PROXY_FAILED -> HttpStatus.BAD_GATEWAY;
+            case ErrorCodes.DELIVERY_REPORT_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case ErrorCodes.DELIVERY_VALIDATE_STATE_INVALID -> HttpStatus.CONFLICT;
             case ErrorCodes.TASK_FAILED, ErrorCodes.INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
             default -> HttpStatus.BAD_REQUEST;
         };

@@ -25,6 +25,8 @@ public final class ErrorCodes {
     public static final int PREVIEW_TIMEOUT = 3104;
     public static final int PREVIEW_REBUILD_STATE_INVALID = 3105;
     public static final int PREVIEW_CONCURRENCY_LIMIT = 3106;
+    public static final int DELIVERY_REPORT_NOT_FOUND = 3201;
+    public static final int DELIVERY_VALIDATE_STATE_INVALID = 3202;
 
     // RAG 错误码 (4xxx)
     public static final int RAG_EMBEDDING_FAILED = 4001;

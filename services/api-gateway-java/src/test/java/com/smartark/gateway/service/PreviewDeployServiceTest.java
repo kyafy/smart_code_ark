@@ -46,6 +46,8 @@ class PreviewDeployServiceTest {
     private TaskLogRepository taskLogRepository;
     @Mock
     private PreviewSseRegistry previewSseRegistry;
+    @Mock
+    private PreviewGatewayService previewGatewayService;
 
     private PreviewDeployService previewDeployService;
 
@@ -68,6 +70,7 @@ class PreviewDeployServiceTest {
         ReflectionTestUtils.setField(previewDeployService, "previewLogDir", "/tmp/smartark/preview-logs");
         ReflectionTestUtils.setField(previewDeployService, "healthCheckTimeoutSeconds", 60);
         ReflectionTestUtils.setField(previewDeployService, "healthCheckIntervalMs", 3000);
+        ReflectionTestUtils.setField(previewDeployService, "previewGatewayEnabled", false);
 
         savedStatuses.clear();
         savedPhases.clear();
@@ -285,6 +288,40 @@ class PreviewDeployServiceTest {
 
         // Verify SSE broadcast: 6 phases + 1 ready
         verify(previewSseRegistry, times(7)).broadcast(eq("t10"), any(TaskPreviewResult.class));
+    }
+
+    @Test
+    void deployPreviewAsync_withGatewayEnabled_shouldPublishGatewayPath() throws IOException {
+        ContainerRuntimeService containerRuntime = org.mockito.Mockito.mock(ContainerRuntimeService.class);
+        ReflectionTestUtils.setField(previewDeployService, "containerRuntimeService", containerRuntime);
+        ReflectionTestUtils.setField(previewDeployService, "previewGatewayService", previewGatewayService);
+        ReflectionTestUtils.setField(previewDeployService, "previewGatewayEnabled", true);
+        ReflectionTestUtils.setField(previewDeployService, "workspaceRoot", tempDir.toString());
+        ReflectionTestUtils.setField(previewDeployService, "previewLogDir", tempDir.resolve("logs").toString());
+
+        Path workspace = tempDir.resolve("t10g");
+        Files.createDirectories(workspace);
+        Files.writeString(workspace.resolve("package.json"), "{}");
+
+        TaskEntity task = buildTask("t10g", "generate", "finished");
+        when(taskRepository.findById("t10g")).thenReturn(Optional.of(task));
+        when(taskPreviewRepository.findByTaskId("t10g")).thenReturn(Optional.empty());
+        when(containerRuntime.findAvailablePort()).thenReturn(30005);
+        when(containerRuntime.createAndStartContainer(any(), eq(30005), eq("t10g"))).thenReturn("container-gw");
+        when(containerRuntime.execInContainer(eq("container-gw"), any(), any(), any()))
+                .thenReturn(new ContainerRuntimeService.ExecResult(0, "npm install done"));
+        when(containerRuntime.checkHealth(eq("localhost"), eq(30005), eq(60), eq(3000))).thenReturn(true);
+        when(previewGatewayService.registerRoute(eq("t10g"), eq(30005), any())).thenReturn("/p/t10g/");
+
+        previewDeployService.deployPreviewAsync("t10g");
+
+        ArgumentCaptor<TaskPreviewEntity> captor = ArgumentCaptor.forClass(TaskPreviewEntity.class);
+        verify(taskPreviewRepository, org.mockito.Mockito.atLeast(1)).save(captor.capture());
+        TaskPreviewEntity finalEntity = captor.getAllValues().get(captor.getAllValues().size() - 1);
+        assertThat(finalEntity.getStatus()).isEqualTo("ready");
+        assertThat(finalEntity.getPreviewUrl()).isEqualTo("/p/t10g/");
+        verify(previewGatewayService).unregisterRoute("t10g");
+        verify(previewGatewayService).registerRoute(eq("t10g"), eq(30005), any());
     }
 
     @Test

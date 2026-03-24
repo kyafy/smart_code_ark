@@ -28,6 +28,27 @@ spring:
         enabled: false
 
 smartark:
+  langchain:
+    enabled: ${LANGCHAIN_ENABLED:false}
+    sidecar:
+      base-url: ${LANGCHAIN_SIDECAR_BASE_URL:http://localhost:18080}
+      timeout-ms: ${LANGCHAIN_SIDECAR_TIMEOUT_MS:3000}
+      api-version: ${LANGCHAIN_SIDECAR_API_VERSION:v1}
+  delivery:
+    guard:
+      enabled: ${DELIVERY_GUARD_ENABLED:true}
+  memory:
+    short-term:
+      top-k: ${MEMORY_SHORT_TERM_TOP_K:8}
+    long-term:
+      top-k: ${MEMORY_LONG_TERM_TOP_K:8}
+    context:
+      max-chars: ${MEMORY_CONTEXT_MAX_CHARS:4000}
+  quality-gate:
+    enabled: ${QUALITY_GATE_ENABLED:false}
+    min-score: ${QUALITY_GATE_MIN_SCORE:0.66}
+    auto-fix-enabled: ${QUALITY_GATE_AUTO_FIX_ENABLED:true}
+    max-retries: ${QUALITY_GATE_MAX_RETRIES:2}
   agent:
     workspace-root: /tmp/smartark/
     max-retries: 2
@@ -48,6 +69,8 @@ smartark:
     health-check-timeout-seconds: ${PREVIEW_HEALTH_CHECK_TIMEOUT:60}
     health-check-interval-ms: ${PREVIEW_HEALTH_CHECK_INTERVAL:3000}
     log-dir: ${PREVIEW_LOG_DIR:/tmp/smartark/preview-logs}
+    gateway:
+      enabled: ${PREVIEW_GATEWAY_ENABLED:false}
   cors:
     allowed-origins: "*"
   auth:

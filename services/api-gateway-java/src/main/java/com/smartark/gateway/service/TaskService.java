@@ -24,6 +24,7 @@ import com.smartark.gateway.db.repo.TaskPreviewRepository;
 import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
 import com.smartark.gateway.db.repo.ArtifactRepository;
+import com.smartark.gateway.dto.ContractReportResult;
 import com.smartark.gateway.dto.GenerateRequest;
 import com.smartark.gateway.dto.GenerateResult;
 import com.smartark.gateway.dto.PaperOutlineGenerateRequest;
@@ -42,11 +43,17 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -61,11 +68,16 @@ import java.time.ZoneId;
 @Service
 public class TaskService {
     private static final Pattern CITATION_PATTERN = Pattern.compile("\\[(\\d+)]");
+    private static final String RULE_MISSING_REQUIRED_FILE = "missing_required_file";
+    private static final String RULE_INVALID_COMPOSE_CONTEXT = "invalid_compose_context";
+    private static final String RULE_INVALID_START_SCRIPT = "invalid_start_script";
 
     @Value("${smartark.preview.max-concurrent-per-user:2}")
     private int previewMaxConcurrentPerUser;
     @Value("${smartark.preview.log-dir:/tmp/smartark/preview-logs}")
     private String previewLogDir;
+    @Value("${smartark.agent.workspace-root:/tmp/smartark/}")
+    private String workspaceRoot;
 
     @Autowired(required = false)
     private ContainerRuntimeService containerRuntimeService;
@@ -334,6 +346,46 @@ public class TaskService {
                 startedAt,
                 finishedAt
         );
+    }
+
+    public ContractReportResult getContractReport(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "task not found"));
+
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "forbidden");
+        }
+
+        Path reportPath = resolveTaskWorkspacePath(taskId).resolve("contract_report.json");
+        if (!Files.exists(reportPath)) {
+            throw new BusinessException(ErrorCodes.DELIVERY_REPORT_NOT_FOUND, "contract_report.json not found");
+        }
+        try {
+            String json = Files.readString(reportPath, StandardCharsets.UTF_8);
+            return objectMapper.readValue(json, ContractReportResult.class);
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCodes.INTERNAL_ERROR, "failed to parse contract_report.json");
+        }
+    }
+
+    public ContractReportResult validateDelivery(String taskId, Boolean autoFix) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "task not found"));
+
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "forbidden");
+        }
+        if (!"finished".equals(task.getStatus())) {
+            throw new BusinessException(ErrorCodes.DELIVERY_VALIDATE_STATE_INVALID, "task status must be finished for delivery validation");
+        }
+
+        boolean autoFixEnabled = Boolean.TRUE.equals(autoFix);
+        appendTaskLog(taskId, "info", "Delivery validate start, autoFix=" + autoFixEnabled);
+        ContractReportResult result = validateDeliveryWorkspace(taskId, autoFixEnabled);
+        appendTaskLog(taskId, "info", "Delivery validate result, passed=" + result.passed());
+        return result;
     }
 
     public TaskPreviewResult getPreview(String taskId) {
@@ -980,6 +1032,279 @@ public class TaskService {
         return paperId.substring(0, idx);
     }
 
+    private ContractReportResult validateDeliveryWorkspace(String taskId, boolean autoFixEnabled) {
+        Path workspacePath = resolveTaskWorkspacePath(taskId);
+        String backendDir = detectBackendDirForDelivery(workspacePath);
+        String frontendDir = detectFrontendDirForDelivery(workspacePath);
+        List<String> fixedActions = new ArrayList<>();
+
+        if (autoFixEnabled) {
+            tryAutoFixDelivery(workspacePath, backendDir, frontendDir, fixedActions);
+        }
+
+        List<String> failedRules = collectDeliveryFailedRules(workspacePath, frontendDir);
+        ContractReportResult report = new ContractReportResult(
+                failedRules.isEmpty(),
+                failedRules,
+                fixedActions,
+                LocalDateTime.now().toString()
+        );
+        try {
+            writeContractReportFile(workspacePath.resolve("contract_report.json"), report);
+            return report;
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCodes.INTERNAL_ERROR, "failed to write contract_report.json");
+        }
+    }
+
+    private List<String> collectDeliveryFailedRules(Path workspacePath, String frontendDir) {
+        List<String> failedRules = new ArrayList<>();
+        if (hasMissingRequiredFileForDelivery(workspacePath, frontendDir)) {
+            addUnique(failedRules, RULE_MISSING_REQUIRED_FILE);
+        }
+        if (hasInvalidComposeContextForDelivery(workspacePath)) {
+            addUnique(failedRules, RULE_INVALID_COMPOSE_CONTEXT);
+        }
+        if (hasInvalidStartScriptForDelivery(workspacePath)) {
+            addUnique(failedRules, RULE_INVALID_START_SCRIPT);
+        }
+        return failedRules;
+    }
+
+    private void tryAutoFixDelivery(Path workspacePath, String backendDir, String frontendDir, List<String> fixedActions) {
+        try {
+            Files.createDirectories(workspacePath);
+            ensureStartScriptForDelivery(workspacePath, fixedActions);
+            ensureFrontendPackageJsonForDelivery(workspacePath, frontendDir, fixedActions);
+            ensureComposeForDelivery(workspacePath, backendDir, frontendDir, fixedActions);
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCodes.INTERNAL_ERROR, "auto-fix delivery artifacts failed");
+        }
+    }
+
+    private void ensureStartScriptForDelivery(Path workspacePath, List<String> fixedActions) throws IOException {
+        Path scriptPath = workspacePath.resolve("scripts/start.sh");
+        String content =
+                "#!/usr/bin/env bash\n" +
+                        "set -euo pipefail\n\n" +
+                        "ROOT_DIR=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\n" +
+                        "cd \"$ROOT_DIR\"\n" +
+                        "docker compose up --build -d\n" +
+                        "echo \"services started\"\n";
+        if (!Files.exists(scriptPath)) {
+            if (scriptPath.getParent() != null) {
+                Files.createDirectories(scriptPath.getParent());
+            }
+            Files.writeString(scriptPath, content, StandardCharsets.UTF_8);
+            addUnique(fixedActions, "generated_scripts_start_sh");
+            return;
+        }
+        String existing = Files.readString(scriptPath, StandardCharsets.UTF_8);
+        if (!existing.contains("docker compose up --build -d") && !existing.contains("docker compose up -d")) {
+            Files.writeString(scriptPath, content, StandardCharsets.UTF_8);
+            addUnique(fixedActions, "generated_scripts_start_sh");
+        }
+    }
+
+    private void ensureFrontendPackageJsonForDelivery(Path workspacePath, String frontendDir, List<String> fixedActions) throws IOException {
+        Path frontendPath = workspacePath.resolve(frontendDir);
+        Path packageJsonPath = frontendPath.resolve("package.json");
+        if (Files.exists(packageJsonPath)) {
+            return;
+        }
+        Files.createDirectories(frontendPath);
+        String appName = frontendDir.replace("/", "-");
+        String packageJson =
+                "{\n" +
+                        "  \"name\": \"" + appName + "\",\n" +
+                        "  \"private\": true,\n" +
+                        "  \"version\": \"0.0.1\",\n" +
+                        "  \"scripts\": {\n" +
+                        "    \"dev\": \"vite\",\n" +
+                        "    \"build\": \"vite build\",\n" +
+                        "    \"preview\": \"vite preview\"\n" +
+                        "  },\n" +
+                        "  \"dependencies\": {\n" +
+                        "    \"vue\": \"^3.5.13\"\n" +
+                        "  },\n" +
+                        "  \"devDependencies\": {\n" +
+                        "    \"vite\": \"^5.4.10\",\n" +
+                        "    \"@vitejs/plugin-vue\": \"^5.1.4\"\n" +
+                        "  }\n" +
+                        "}\n";
+        Files.writeString(packageJsonPath, packageJson, StandardCharsets.UTF_8);
+        addUnique(fixedActions, "generated_frontend_package_json");
+    }
+
+    private void ensureComposeForDelivery(Path workspacePath, String backendDir, String frontendDir, List<String> fixedActions) throws IOException {
+        Path composePath = workspacePath.resolve("docker-compose.yml");
+        if (!Files.exists(composePath)) {
+            String content =
+                    "services:\n" +
+                            "  backend:\n" +
+                            "    build:\n" +
+                            "      context: ./" + backendDir + "\n" +
+                            "    ports:\n" +
+                            "      - \"8080:8080\"\n" +
+                            "  frontend:\n" +
+                            "    build:\n" +
+                            "      context: ./" + frontendDir + "\n" +
+                            "    ports:\n" +
+                            "      - \"5173:5173\"\n";
+            Files.writeString(composePath, content, StandardCharsets.UTF_8);
+            addUnique(fixedActions, "generated_docker_compose_yml");
+            return;
+        }
+
+        List<String> lines = Files.readAllLines(composePath, StandardCharsets.UTF_8);
+        List<String> fixed = new ArrayList<>();
+        String activeService = "";
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (line.startsWith("  ") && !line.startsWith("    ") && trimmed.endsWith(":")) {
+                activeService = trimmed.substring(0, trimmed.length() - 1).toLowerCase(Locale.ROOT);
+            }
+
+            if (!trimmed.startsWith("context:")) {
+                fixed.add(line);
+                continue;
+            }
+            String raw = trimmed.substring("context:".length()).trim().replace("\"", "").replace("'", "");
+            String normalized = raw.startsWith("./") ? raw.substring(2) : raw;
+            Path candidate = workspacePath.resolve(normalized).normalize();
+            if (!raw.isBlank() && Files.isDirectory(candidate)) {
+                fixed.add(line);
+                continue;
+            }
+
+            String replacement = chooseComposeContextForDelivery(activeService, backendDir, frontendDir);
+            int contextIndex = line.indexOf("context:");
+            String indent = contextIndex < 0 ? "" : line.substring(0, contextIndex);
+            fixed.add(indent + "context: ./" + replacement);
+            addUnique(fixedActions, "repaired_compose_context:" + normalizeComposeServiceForDelivery(activeService, replacement, backendDir, frontendDir));
+        }
+        Files.write(composePath, fixed, StandardCharsets.UTF_8);
+    }
+
+    private boolean hasMissingRequiredFileForDelivery(Path workspacePath, String frontendDir) {
+        if (!Files.exists(workspacePath.resolve("docker-compose.yml"))) {
+            return true;
+        }
+        if (!Files.exists(workspacePath.resolve("scripts/start.sh"))) {
+            return true;
+        }
+        return !Files.exists(workspacePath.resolve(frontendDir).resolve("package.json"));
+    }
+
+    private boolean hasInvalidComposeContextForDelivery(Path workspacePath) {
+        Path composePath = workspacePath.resolve("docker-compose.yml");
+        if (!Files.exists(composePath)) {
+            return true;
+        }
+        try {
+            List<String> lines = Files.readAllLines(composePath, StandardCharsets.UTF_8);
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (!trimmed.startsWith("context:")) {
+                    continue;
+                }
+                String raw = trimmed.substring("context:".length()).trim().replace("\"", "").replace("'", "");
+                if (raw.isBlank()) {
+                    return true;
+                }
+                String normalized = raw.startsWith("./") ? raw.substring(2) : raw;
+                if (!Files.isDirectory(workspacePath.resolve(normalized).normalize())) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (IOException e) {
+            return true;
+        }
+    }
+
+    private boolean hasInvalidStartScriptForDelivery(Path workspacePath) {
+        Path startScript = workspacePath.resolve("scripts/start.sh");
+        if (!Files.exists(startScript)) {
+            return true;
+        }
+        try {
+            String content = Files.readString(startScript, StandardCharsets.UTF_8);
+            return !content.contains("docker compose up --build -d") && !content.contains("docker compose up -d");
+        } catch (IOException e) {
+            return true;
+        }
+    }
+
+    private String detectBackendDirForDelivery(Path workspacePath) {
+        List<String> candidates = List.of("backend", "services/api-gateway-java", "api", "server");
+        for (String candidate : candidates) {
+            Path candidatePath = workspacePath.resolve(candidate);
+            if (Files.exists(candidatePath.resolve("pom.xml"))
+                    || Files.exists(candidatePath.resolve("build.gradle"))
+                    || Files.exists(candidatePath.resolve("package.json"))) {
+                return candidate.replace("\\", "/").replaceAll("^\\./+", "");
+            }
+        }
+        return "backend";
+    }
+
+    private String detectFrontendDirForDelivery(Path workspacePath) {
+        List<String> candidates = List.of("frontend", "frontend-web", "web", "client", "app");
+        for (String candidate : candidates) {
+            Path candidatePath = workspacePath.resolve(candidate);
+            if (Files.exists(candidatePath.resolve("package.json"))
+                    || Files.exists(candidatePath.resolve("vite.config.ts"))
+                    || Files.exists(candidatePath.resolve("src"))) {
+                return candidate.replace("\\", "/").replaceAll("^\\./+", "");
+            }
+        }
+        return "frontend";
+    }
+
+    private String chooseComposeContextForDelivery(String serviceName, String backendDir, String frontendDir) {
+        String service = serviceName == null ? "" : serviceName.toLowerCase(Locale.ROOT);
+        if (service.contains("front") || service.contains("web") || service.contains("client")) {
+            return frontendDir;
+        }
+        if (service.contains("back") || service.contains("api") || service.contains("server")) {
+            return backendDir;
+        }
+        return backendDir;
+    }
+
+    private String normalizeComposeServiceForDelivery(String serviceName, String replacement, String backendDir, String frontendDir) {
+        String service = serviceName == null ? "" : serviceName.toLowerCase(Locale.ROOT);
+        if (service.contains("front") || service.contains("web") || service.contains("client")) {
+            return "frontend";
+        }
+        if (service.contains("back") || service.contains("api") || service.contains("server")) {
+            return "backend";
+        }
+        if (frontendDir.equals(replacement)) {
+            return "frontend";
+        }
+        if (backendDir.equals(replacement)) {
+            return "backend";
+        }
+        return service.isBlank() ? "backend" : service;
+    }
+
+    private void writeContractReportFile(Path reportPath, ContractReportResult report) throws IOException {
+        if (reportPath.getParent() != null) {
+            Files.createDirectories(reportPath.getParent());
+        }
+        String content = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(report);
+        Files.writeString(reportPath, content, StandardCharsets.UTF_8);
+    }
+
+    private void addUnique(List<String> values, String value) {
+        if (value == null || value.isBlank() || values.contains(value)) {
+            return;
+        }
+        values.add(value);
+    }
+
     private TaskPreviewEntity buildPreviewFallback(TaskEntity task) {
         if (!isPreviewTargetTask(task)) {
             return null;
@@ -1018,6 +1343,10 @@ public class TaskService {
 
     private boolean isPreviewTargetTask(TaskEntity task) {
         return "generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType());
+    }
+
+    private Path resolveTaskWorkspacePath(String taskId) {
+        return Paths.get(workspaceRoot, taskId).toAbsolutePath();
     }
 
 }
