@@ -37,8 +37,15 @@ public abstract class AbstractCodegenStep implements AgentStep {
 
         if (filePlan == null || filePlan.isEmpty()) {
             logger.warn("File plan is empty, skip generating files for groups: {}", groups);
+            context.logWarn("File plan is empty, skip codegen for groups: " + groups);
             return;
         }
+        long groupFileCount = filePlan.stream()
+                .filter(item -> item.getPath() != null && !item.getPath().isBlank())
+                .filter(item -> item.getGroup() != null && groups.contains(item.getGroup()))
+                .count();
+        context.logInfo("Codegen start: groups=" + groups + ", fileCount=" + groupFileCount
+                + ", projectStructureLength=" + groupStructure.length());
 
         filePlan.stream()
                 .filter(item -> item.getPath() != null && !item.getPath().isBlank())

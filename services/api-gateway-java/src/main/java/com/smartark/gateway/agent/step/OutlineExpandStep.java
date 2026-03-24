@@ -82,6 +82,9 @@ public class OutlineExpandStep implements AgentStep {
         List<RagEvidenceItem> ragItems = context.getRagEvidenceItems();
         logger.info("Step outline_expand start: taskId={}, sessionId={}, sourceCount={}, ragEvidenceCount={}",
                 context.getTask().getId(), session.getId(), sources.size(), ragItems == null ? 0 : ragItems.size());
+        context.logInfo("Step outline_expand start: batchEnabled=" + batchEnabled
+                + ", sourceCount=" + sources.size()
+                + ", ragEvidenceCount=" + (ragItems == null ? 0 : ragItems.size()));
         JsonNode ragEvidenceNode = (ragItems == null || ragItems.isEmpty())
                 ? objectMapper.createArrayNode()
                 : objectMapper.valueToTree(ragItems);
@@ -93,12 +96,23 @@ public class OutlineExpandStep implements AgentStep {
             List<BatchPlanItem> plans = planBatches(outlineRoot.path("chapters"));
             logger.info("Step outline_expand batch plan: taskId={}, sessionId={}, totalChapters={}, batchCount={}",
                     context.getTask().getId(), session.getId(), outlineRoot.path("chapters").size(), plans.size());
+            context.logInfo("Batch plan: totalChapters=" + outlineRoot.path("chapters").size()
+                    + ", batchCount=" + plans.size()
+                    + ", batchChapterSize=" + batchChapterSize);
             List<BatchExpandResult> batchResults = new ArrayList<>();
-            for (BatchPlanItem plan : plans) {
+            for (int bi = 0; bi < plans.size(); bi++) {
+                BatchPlanItem plan = plans.get(bi);
+                context.logInfo("Batch " + (bi + 1) + "/" + plans.size()
+                        + " start: chapterRange=" + (plan.startIndex() + 1) + "-" + (plan.endIndex() + 1));
                 BatchExpandResult batchResult = executeBatchExpand(context, session, plan, outlineRoot.path("chapters").size(), ragItems);
+                context.logInfo("Batch " + (bi + 1) + "/" + plans.size()
+                        + " done: chapters=" + (batchResult.chapters() == null ? 0 : batchResult.chapters().size())
+                        + ", citations=" + (batchResult.citationMap() == null ? 0 : batchResult.citationMap().size()));
                 batchResults.add(batchResult);
             }
             MergeResult merged = mergeBatchResults(batchResults, ragItems);
+            context.logInfo("Batch merge done: mergedChapters=" + merged.normalized().path("chapters").size()
+                    + ", citationMapLength=" + merged.citationMapJson().length());
             normalized = merged.normalized();
             normalized.put("topic", session.getTopic());
             normalized.put("topicRefined", session.getTopicRefined());
@@ -126,6 +140,10 @@ public class OutlineExpandStep implements AgentStep {
 
         context.setExpandedOutlineJson(objectMapper.writeValueAsString(normalized.path("chapters")));
         context.setManuscriptJson(version.getManuscriptJson());
+        context.logInfo("Step outline_expand output: chapterCount="
+                + (normalized.path("chapters").isArray() ? normalized.path("chapters").size() : 0)
+                + ", sectionCount=" + countSections(normalized)
+                + ", citationMapCount=" + countCitationMap(fullCitationMap));
         session.setStatus("expanded");
         session.setUpdatedAt(LocalDateTime.now());
         paperTopicSessionRepository.save(session);

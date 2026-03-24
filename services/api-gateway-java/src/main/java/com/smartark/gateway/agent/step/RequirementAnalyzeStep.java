@@ -34,8 +34,9 @@ public class RequirementAnalyzeStep implements AgentStep {
 
     @Override
     public void execute(AgentExecutionContext context) throws Exception {
-        logger.info("Analyzing requirements and planning project structure...");
-        
+        logger.info("Analyzing requirements and planning project structure: taskId={}", context.getTask().getId());
+        context.logInfo("Step requirement_analyze start: taskId=" + context.getTask().getId());
+
         JsonNode reqJson = objectMapper.readTree(context.getSpec().getRequirementJson());
         String prd = reqJson.path("prd").asText("");
         String projectType = reqJson.path("projectType").asText("");
@@ -55,8 +56,13 @@ public class RequirementAnalyzeStep implements AgentStep {
             fileList = fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb);
         }
         fileList = sanitizeFileList(fileList, prd, projectType, stackBackend, stackFrontend, stackDb);
+        context.logInfo("Structure after sanitize: fileCount=" + fileList.size());
         StructureCompleteness completeness = validateStructureCompleteness(fileList, stackBackend, stackFrontend, stackDb);
+        if (completeness.passed()) {
+            context.logInfo("Structure completeness check PASSED: all critical files present");
+        }
         if (!completeness.passed() && !completeness.missingFiles().isEmpty()) {
+            context.logWarn("Structure completeness check FAILED: missing=" + completeness.missingFiles());
             String retryInstruction = (context.getInstructions() == null ? "" : context.getInstructions()) +
                     "\n\n请补齐以下缺失关键文件：\n" + String.join("\n", completeness.missingFiles());
             try {
@@ -68,8 +74,10 @@ public class RequirementAnalyzeStep implements AgentStep {
                         prd, stackBackend, stackFrontend, stackDb, retryInstruction
                 );
                 fileList = sanitizeFileList(retried, prd, projectType, stackBackend, stackFrontend, stackDb);
+                context.logInfo("Corrective retry result: fileCount=" + fileList.size());
             } catch (Exception e) {
                 logger.warn("Corrective retry for project structure failed", e);
+                context.logWarn("Corrective retry failed: " + e.getMessage());
             }
         }
 
@@ -86,6 +94,8 @@ public class RequirementAnalyzeStep implements AgentStep {
         context.setFileList(fileList);
         context.setFilePlan(filePlan);
         logger.info("Generated {} files in plan.", fileList.size());
+        context.logInfo("Step requirement_analyze output: filePlanSize=" + filePlan.size()
+                + ", groups=" + filePlan.stream().map(FilePlanItem::getGroup).distinct().toList());
     }
 
     private List<String> sanitizeFileList(List<String> fileList, String prd, String projectType, String stackBackend, String stackFrontend, String stackDb) {
