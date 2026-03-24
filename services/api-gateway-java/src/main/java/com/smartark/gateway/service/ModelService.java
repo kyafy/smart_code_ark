@@ -741,8 +741,8 @@ public class ModelService {
             vars.put("outlineJson", outlineJson == null ? "{}" : objectMapper.writeValueAsString(outlineJson));
             vars.put("sources", sources == null ? "[]" : objectMapper.writeValueAsString(sources));
             vars.put("ragEvidence", ragEvidence == null ? "[]" : objectMapper.writeValueAsString(ragEvidence));
-            String defaultSystemPrompt = "你是论文写作助手。必须仅输出合法 JSON，禁止输出任何占位文本（如 placeholder/TBD/待补充/暂无正文）。每个章节都要有 sections；每个 section 必须有可读的中文 content 与 coreArgument。若证据不足，给出保守但完整的学术表述并标注不确定性。";
-            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n大纲：{{outlineJson}}\n候选文献：{{sources}}\nRAG证据：{{ragEvidence}}\n输出要求：\n1）返回 JSON：{topic,topicRefined,researchQuestions,chapters:[{index,title,summary,objective,sections:[{title,content,coreArgument,method,dataPlan,expectedResult,citations[]}]}],citationMap[]}\n2）content/coreArgument 必须是完整中文论述，不得为空且不得出现 placeholder 文本。\n3）citations 只能引用 citationMap 中存在的整数索引。";
+            String defaultSystemPrompt = "你是论文写作助手。必须仅输出合法 JSON，禁止输出任何占位文本（如 placeholder/TBD/待补充/暂无正文）。每个章节都要有 sections；每个 section 必须有可读的中文 content 与 coreArgument。每章的 sections 数量必须与输入大纲中该章的 sections 数量严格一致，逐一扩写每个 section，不得合并或省略。若证据不足，给出保守但完整的学术表述并标注不确定性。";
+            String defaultUserPrompt = "主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n大纲：{{outlineJson}}\n候选文献：{{sources}}\nRAG证据：{{ragEvidence}}\n输出要求：\n1）返回 JSON：{topic,topicRefined,researchQuestions,chapters:[{index,title,summary,objective,sections:[{title,content,coreArgument,method,dataPlan,expectedResult,citations[]}]}],citationMap[]}\n2）content/coreArgument 必须是完整中文论述，不得为空且不得出现 placeholder 文本。\n3）chapters 与 sections 数量必须与输入大纲严格一致，每个 section 逐一扩写。\n4）citations 只能引用 citationMap 中存在的整数索引。";
             JsonNode result = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
             if (!result.has("chapters")) {
                 return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);
@@ -788,8 +788,8 @@ public class ModelService {
             vars.put("ragEvidence", batchEvidence == null ? "[]" : objectMapper.writeValueAsString(batchEvidence));
             vars.put("batchRange", batchRange == null ? "" : batchRange);
             vars.put("totalChapters", String.valueOf(Math.max(0, totalChapters)));
-            String defaultSystemPrompt = "你是严谨的论文写作助手。你将只扩写论文的一部分章节。必须仅输出合法 JSON，不得输出 Markdown。禁止占位文本。";
-            String defaultUserPrompt = "全局主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n批次范围：{{batchRange}}\n总章节数：{{totalChapters}}\n本批大纲：{{outlineJson}}\n本批证据：{{ragEvidence}}\n仅输出本批 JSON：{chapters:[...],citationMap:[...]}";
+            String defaultSystemPrompt = "你是严谨的论文写作助手。你将只扩写论文的一部分章节。必须仅输出合法 JSON，不得输出 Markdown。禁止占位文本。每章的 sections 数量必须与输入大纲中该章的 sections 数量严格一致，逐一扩写每个 section，不得合并或省略。";
+            String defaultUserPrompt = "全局主题：{{topic}}\n细化题目：{{topicRefined}}\n学科：{{discipline}}\n学位层次：{{degreeLevel}}\n方法偏好：{{methodPreference}}\n研究问题：{{researchQuestions}}\n批次范围：{{batchRange}}\n总章节数：{{totalChapters}}\n本批大纲：{{outlineJson}}\n本批证据：{{ragEvidence}}\n\n重要约束：输出的每章 sections 数量必须与输入大纲中对应章节的 sections 数量完全一致。\n仅输出本批 JSON：{chapters:[...],citationMap:[...]}";
             JsonNode result = runPromptForJson(taskId, projectId, templateKey, versionNo, modelName, vars, defaultSystemPrompt, defaultUserPrompt, start);
             if (!result.has("chapters")) {
                 return objectMapper.valueToTree(Map.of("chapters", List.of(), "citationMap", List.of()));

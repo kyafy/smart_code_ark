@@ -92,11 +92,16 @@ public class OutlineExpandStep implements AgentStep {
         ObjectNode normalized;
         String fullCitationMap;
         JsonNode outlineRoot = objectMapper.readTree(version.getOutlineJson());
+        JsonNode flattenedOutline = flattenOutlineForExpand(outlineRoot);
+        Map<Integer, Integer> expectedSectionCounts = buildExpectedSectionCounts(flattenedOutline.path("chapters"));
+        int totalFlatSections = expectedSectionCounts.values().stream().mapToInt(Integer::intValue).sum();
+        context.logInfo("Outline flattened: originalSections=" + countOutlineSections(outlineRoot)
+                + ", flattenedSections=" + totalFlatSections);
         if (batchEnabled) {
-            List<BatchPlanItem> plans = planBatches(outlineRoot.path("chapters"));
+            List<BatchPlanItem> plans = planBatches(flattenedOutline.path("chapters"));
             logger.info("Step outline_expand batch plan: taskId={}, sessionId={}, totalChapters={}, batchCount={}",
-                    context.getTask().getId(), session.getId(), outlineRoot.path("chapters").size(), plans.size());
-            context.logInfo("Batch plan: totalChapters=" + outlineRoot.path("chapters").size()
+                    context.getTask().getId(), session.getId(), flattenedOutline.path("chapters").size(), plans.size());
+            context.logInfo("Batch plan: totalChapters=" + flattenedOutline.path("chapters").size()
                     + ", batchCount=" + plans.size()
                     + ", batchChapterSize=" + batchChapterSize);
             List<BatchExpandResult> batchResults = new ArrayList<>();
@@ -104,7 +109,7 @@ public class OutlineExpandStep implements AgentStep {
                 BatchPlanItem plan = plans.get(bi);
                 context.logInfo("Batch " + (bi + 1) + "/" + plans.size()
                         + " start: chapterRange=" + (plan.startIndex() + 1) + "-" + (plan.endIndex() + 1));
-                BatchExpandResult batchResult = executeBatchExpand(context, session, plan, outlineRoot.path("chapters").size(), ragItems);
+                BatchExpandResult batchResult = executeBatchExpand(context, session, plan, flattenedOutline.path("chapters").size(), ragItems, expectedSectionCounts);
                 context.logInfo("Batch " + (bi + 1) + "/" + plans.size()
                         + " done: chapters=" + (batchResult.chapters() == null ? 0 : batchResult.chapters().size())
                         + ", citations=" + (batchResult.citationMap() == null ? 0 : batchResult.citationMap().size()));
@@ -119,7 +124,7 @@ public class OutlineExpandStep implements AgentStep {
             normalized.set("researchQuestions", parseJsonArray(session.getResearchQuestionsJson()));
             fullCitationMap = merged.citationMapJson();
         } else {
-            ExpandResult expandResult = executeSingleExpand(context, session, version, sources, ragEvidenceNode, ragItems);
+            ExpandResult expandResult = executeSingleExpand(context, session, flattenedOutline, sources, ragEvidenceNode, ragItems, expectedSectionCounts);
             normalized = expandResult.normalized();
             fullCitationMap = expandResult.citationMapJson();
         }
@@ -151,10 +156,11 @@ public class OutlineExpandStep implements AgentStep {
 
     private ExpandResult executeSingleExpand(AgentExecutionContext context,
                                              PaperTopicSessionEntity session,
-                                             PaperOutlineVersionEntity version,
+                                             JsonNode flattenedOutline,
                                              List<PaperSourceEntity> sources,
                                              JsonNode ragEvidenceNode,
-                                             List<RagEvidenceItem> ragItems) {
+                                             List<RagEvidenceItem> ragItems,
+                                             Map<Integer, Integer> expectedSectionCounts) {
         JsonNode expanded = null;
         ObjectNode normalized = null;
         BusinessException lastQualityError = null;
@@ -169,11 +175,11 @@ public class OutlineExpandStep implements AgentStep {
                     session.getDegreeLevel(),
                     session.getMethodPreference(),
                     session.getResearchQuestionsJson(),
-                    readJson(version.getOutlineJson()),
+                    flattenedOutline,
                     objectMapper.valueToTree(sources),
                     ragEvidenceNode
             );
-            if (!isExpandedSchemaValid(candidateExpanded)) {
+            if (!isExpandedSchemaValid(candidateExpanded, expectedSectionCounts)) {
                 logger.warn("Step outline_expand schema invalid: taskId={}, sessionId={}, attempt={}/{}",
                         context.getTask().getId(), session.getId(), attempt, maxGenerateAttempts);
                 continue;
@@ -228,7 +234,8 @@ public class OutlineExpandStep implements AgentStep {
                                                  PaperTopicSessionEntity session,
                                                  BatchPlanItem plan,
                                                  int totalChapters,
-                                                 List<RagEvidenceItem> ragItems) throws Exception {
+                                                 List<RagEvidenceItem> ragItems,
+                                                 Map<Integer, Integer> expectedSectionCounts) throws Exception {
         JsonNode batchOutlineJson = objectMapper.createObjectNode().set("chapters", objectMapper.valueToTree(plan.chapters()));
         JsonNode batchEvidence = selectEvidenceForBatch(plan.chapters(), ragItems);
         BusinessException lastError = null;
@@ -247,7 +254,14 @@ public class OutlineExpandStep implements AgentStep {
                     (plan.startIndex() + 1) + "-" + (plan.endIndex() + 1),
                     totalChapters
             );
-            if (!isExpandedSchemaValid(expanded)) {
+            Map<Integer, Integer> batchExpectedCounts = new LinkedHashMap<>();
+            for (int ci = plan.startIndex(); ci <= plan.endIndex(); ci++) {
+                Integer expected = expectedSectionCounts.get(ci);
+                if (expected != null) {
+                    batchExpectedCounts.put(ci - plan.startIndex(), expected);
+                }
+            }
+            if (!isExpandedSchemaValid(expanded, batchExpectedCounts)) {
                 logger.warn("Batch expand schema invalid: taskId={}, sessionId={}, batchNo={}, attempt={}/{}",
                         context.getTask().getId(), session.getId(), plan.batchNo(), attempt + 1, batchMaxRetries + 1);
                 continue;
@@ -451,7 +465,93 @@ public class OutlineExpandStep implements AgentStep {
     private record MergeResult(ObjectNode normalized, String citationMapJson) {
     }
 
-    private boolean isExpandedSchemaValid(JsonNode root) {
+    /**
+     * 将三级大纲（chapters → sections → subsections）扁平化为二级（chapters → sections）。
+     * 如果 section 有 subsections，则每个 subsection 提升为独立 section，标题格式为 "sectionTitle — subsectionTitle"。
+     * 如果 section 没有 subsections，则保持原样。
+     */
+    private JsonNode flattenOutlineForExpand(JsonNode outlineRoot) {
+        if (outlineRoot == null) {
+            return objectMapper.createObjectNode();
+        }
+        JsonNode chapters = outlineRoot.path("chapters");
+        if (!chapters.isArray() || chapters.isEmpty()) {
+            return outlineRoot.deepCopy();
+        }
+        ObjectNode result = outlineRoot.deepCopy();
+        ArrayNode flattenedChapters = objectMapper.createArrayNode();
+        for (JsonNode chapter : chapters) {
+            ObjectNode flatChapter = chapter.deepCopy();
+            JsonNode sections = chapter.path("sections");
+            if (!sections.isArray() || sections.isEmpty()) {
+                flattenedChapters.add(flatChapter);
+                continue;
+            }
+            ArrayNode flatSections = objectMapper.createArrayNode();
+            for (JsonNode section : sections) {
+                String sectionTitle = section.path("title").asText(section.path("section").asText(""));
+                JsonNode subsections = section.path("subsections");
+                if (subsections.isArray() && !subsections.isEmpty()) {
+                    for (JsonNode sub : subsections) {
+                        String subTitle = sub.path("subsection").asText(sub.path("title").asText(""));
+                        ObjectNode flatSection = objectMapper.createObjectNode();
+                        String combinedTitle = sectionTitle.isBlank() ? subTitle
+                                : subTitle.isBlank() ? sectionTitle
+                                : sectionTitle + " — " + subTitle;
+                        flatSection.put("title", combinedTitle);
+                        // carry over evidence from subsection if present
+                        if (sub.has("evidence")) {
+                            flatSection.set("evidence", sub.path("evidence"));
+                        }
+                        // carry over evidenceMapping from parent section if present
+                        if (section.has("evidenceMapping")) {
+                            flatSection.set("evidenceMapping", section.path("evidenceMapping"));
+                        }
+                        flatSections.add(flatSection);
+                    }
+                } else {
+                    // no subsections — keep section as-is (remove subsections field to avoid confusion)
+                    ObjectNode flatSection = section.deepCopy();
+                    flatSection.remove("subsections");
+                    flatSections.add(flatSection);
+                }
+            }
+            flatChapter.set("sections", flatSections);
+            flattenedChapters.add(flatChapter);
+        }
+        result.set("chapters", flattenedChapters);
+        return result;
+    }
+
+    /**
+     * 构建每章期望的 section 数量映射（key=章索引从0开始，value=该章期望的 section 数量）。
+     */
+    private Map<Integer, Integer> buildExpectedSectionCounts(JsonNode flattenedChapters) {
+        Map<Integer, Integer> counts = new LinkedHashMap<>();
+        if (flattenedChapters == null || !flattenedChapters.isArray()) {
+            return counts;
+        }
+        int index = 0;
+        for (JsonNode chapter : flattenedChapters) {
+            JsonNode sections = chapter.path("sections");
+            counts.put(index, sections.isArray() ? sections.size() : 0);
+            index++;
+        }
+        return counts;
+    }
+
+    private int countOutlineSections(JsonNode outlineRoot) {
+        JsonNode chapters = outlineRoot.path("chapters");
+        if (!chapters.isArray()) return 0;
+        int count = 0;
+        for (JsonNode ch : chapters) {
+            JsonNode sections = ch.path("sections");
+            if (sections.isArray()) count += sections.size();
+        }
+        return count;
+    }
+
+    private boolean isExpandedSchemaValid(JsonNode root, Map<Integer, Integer> expectedSectionCounts) {
         if (root == null || !root.path("chapters").isArray()) {
             return false;
         }
@@ -459,6 +559,7 @@ public class OutlineExpandStep implements AgentStep {
         if (chapters.isEmpty()) {
             return false;
         }
+        int chapterIdx = 0;
         for (JsonNode chapter : chapters) {
             if (chapter.path("title").asText("").isBlank()) {
                 return false;
@@ -466,6 +567,15 @@ public class OutlineExpandStep implements AgentStep {
             JsonNode sections = chapter.path("sections");
             if (!sections.isArray() || sections.isEmpty()) {
                 return false;
+            }
+            // 校验 section 数量与扁平化后的大纲一致
+            if (expectedSectionCounts != null && !expectedSectionCounts.isEmpty()) {
+                Integer expected = expectedSectionCounts.get(chapterIdx);
+                if (expected != null && expected > 1 && sections.size() < expected) {
+                    logger.warn("Section count mismatch: chapter={}, expected={}, actual={}",
+                            chapter.path("title").asText(""), expected, sections.size());
+                    return false;
+                }
             }
             for (JsonNode section : sections) {
                 if (section.path("title").asText("").isBlank()) return false;
@@ -476,6 +586,7 @@ public class OutlineExpandStep implements AgentStep {
                     return false;
                 }
             }
+            chapterIdx++;
         }
         return true;
     }

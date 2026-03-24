@@ -513,4 +513,179 @@ class OutlineExpandStepBatchTest {
         assertThat(ch2Cites.get(0).asInt()).isEqualTo(2); // chunk-Z
         assertThat(ch2Cites.get(1).asInt()).isEqualTo(1); // chunk-Y (dedup)
     }
+
+    // ───────── 11. Flatten: 3-level outline → model receives 2-level sections ─────────
+
+    @Test
+    void execute_shouldFlattenSubsectionsIntoSections() throws Exception {
+        OutlineExpandStep s = step(true, 2, 0, 8);
+        // 三级大纲：1 chapter, 1 section with 3 subsections → 扁平化后应有 3 sections
+        String threeLevel = """
+                {"chapters":[{
+                  "title":"绪论","summary":"绪论摘要",
+                  "sections":[{
+                    "title":"研究背景",
+                    "subsections":[
+                      {"subsection":"问题提出","evidence":[]},
+                      {"subsection":"研究意义","evidence":[]},
+                      {"subsection":"研究范围","evidence":[]}
+                    ]
+                  }]
+                }]}""";
+        AgentExecutionContext ctx = baseContext(threeLevel);
+
+        // Model must return 3 sections (matching the flattened outline)
+        when(modelService.expandPaperOutlineBatch(anyString(), anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(om.readTree("""
+                        {
+                          "chapters":[{"index":1,"title":"绪论","summary":"绪论摘要","objective":"O","sections":[
+                            {"title":"研究背景 — 问题提出","content":"问题提出的完整正文","coreArgument":"核心论点1","citations":[]},
+                            {"title":"研究背景 — 研究意义","content":"研究意义的完整正文","coreArgument":"核心论点2","citations":[]},
+                            {"title":"研究背景 — 研究范围","content":"研究范围的完整正文","coreArgument":"核心论点3","citations":[]}
+                          ]}],
+                          "citationMap":[]
+                        }
+                        """));
+
+        s.execute(ctx);
+
+        ArgumentCaptor<PaperOutlineVersionEntity> cap = ArgumentCaptor.forClass(PaperOutlineVersionEntity.class);
+        verify(paperOutlineVersionRepository).save(cap.capture());
+        JsonNode manuscript = om.readTree(cap.getValue().getManuscriptJson());
+        // Verify all 3 sections are present in the manuscript
+        assertThat(manuscript.path("chapters").get(0).path("sections").size()).isEqualTo(3);
+        assertThat(manuscript.path("chapters").get(0).path("sections").get(0).path("content").asText())
+                .contains("问题提出");
+        assertThat(manuscript.path("chapters").get(0).path("sections").get(2).path("content").asText())
+                .contains("研究范围");
+    }
+
+    // ───────── 12. Flatten: mixed levels (some sections with subsections, some without) ─────────
+
+    @Test
+    void execute_shouldHandleMixedSectionsWithAndWithoutSubsections() throws Exception {
+        OutlineExpandStep s = step(true, 2, 0, 8);
+        // Chapter with 2 sections: first has 2 subsections, second has none → total 3 flat sections
+        String mixedOutline = """
+                {"chapters":[{
+                  "title":"方法论","summary":"方法",
+                  "sections":[
+                    {"title":"实验设计","subsections":[
+                      {"subsection":"变量控制"},
+                      {"subsection":"样本选择"}
+                    ]},
+                    {"title":"数据分析方法"}
+                  ]
+                }]}""";
+        AgentExecutionContext ctx = baseContext(mixedOutline);
+
+        // Must return 3 sections (2 from flattened subsections + 1 direct)
+        when(modelService.expandPaperOutlineBatch(anyString(), anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(om.readTree("""
+                        {
+                          "chapters":[{"index":1,"title":"方法论","summary":"方法","objective":"O","sections":[
+                            {"title":"实验设计 — 变量控制","content":"变量控制方法的完整正文","coreArgument":"论点A","citations":[]},
+                            {"title":"实验设计 — 样本选择","content":"样本选择策略的完整正文","coreArgument":"论点B","citations":[]},
+                            {"title":"数据分析方法","content":"数据分析方法的完整正文","coreArgument":"论点C","citations":[]}
+                          ]}],
+                          "citationMap":[]
+                        }
+                        """));
+
+        s.execute(ctx);
+
+        ArgumentCaptor<PaperOutlineVersionEntity> cap = ArgumentCaptor.forClass(PaperOutlineVersionEntity.class);
+        verify(paperOutlineVersionRepository).save(cap.capture());
+        JsonNode manuscript = om.readTree(cap.getValue().getManuscriptJson());
+        assertThat(manuscript.path("chapters").get(0).path("sections").size()).isEqualTo(3);
+    }
+
+    // ───────── 13. Section count mismatch → schema invalid, triggers retry ─────────
+
+    @Test
+    void execute_shouldRejectWhenModelReturnsTooFewSections() throws Exception {
+        OutlineExpandStep s = step(true, 2, 1, 8);
+        // Outline expects 3 sections after flattening
+        String outline = """
+                {"chapters":[{
+                  "title":"C1","summary":"S",
+                  "sections":[{
+                    "title":"研究背景",
+                    "subsections":[
+                      {"subsection":"子节1"},
+                      {"subsection":"子节2"},
+                      {"subsection":"子节3"}
+                    ]
+                  }]
+                }]}""";
+        AgentExecutionContext ctx = baseContext(outline);
+
+        // First attempt: model only returns 1 section (mismatch → schema invalid)
+        // Second attempt: model returns correct 3 sections
+        when(modelService.expandPaperOutlineBatch(anyString(), anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(om.readTree("""
+                        {
+                          "chapters":[{"index":1,"title":"C1","summary":"S","objective":"O","sections":[
+                            {"title":"研究背景","content":"只有一段正文","coreArgument":"论点","citations":[]}
+                          ]}],
+                          "citationMap":[]
+                        }
+                        """))
+                .thenReturn(om.readTree("""
+                        {
+                          "chapters":[{"index":1,"title":"C1","summary":"S","objective":"O","sections":[
+                            {"title":"研究背景 — 子节1","content":"子节1完整正文","coreArgument":"论点1","citations":[]},
+                            {"title":"研究背景 — 子节2","content":"子节2完整正文","coreArgument":"论点2","citations":[]},
+                            {"title":"研究背景 — 子节3","content":"子节3完整正文","coreArgument":"论点3","citations":[]}
+                          ]}],
+                          "citationMap":[]
+                        }
+                        """));
+
+        s.execute(ctx);
+
+        // Should have called model twice (first attempt rejected due to section count)
+        verify(modelService, times(2)).expandPaperOutlineBatch(
+                anyString(), anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt());
+
+        ArgumentCaptor<PaperOutlineVersionEntity> cap = ArgumentCaptor.forClass(PaperOutlineVersionEntity.class);
+        verify(paperOutlineVersionRepository).save(cap.capture());
+        JsonNode manuscript = om.readTree(cap.getValue().getManuscriptJson());
+        assertThat(manuscript.path("chapters").get(0).path("sections").size()).isEqualTo(3);
+    }
+
+    // ───────── 14. Already flat outline → no change after flatten ─────────
+
+    @Test
+    void execute_shouldPassThroughAlreadyFlatOutline() throws Exception {
+        OutlineExpandStep s = step(true, 2, 0, 8);
+        // 已经是二级结构的大纲（没有 subsections）
+        String flatOutline = """
+                {"chapters":[{
+                  "title":"结论","summary":"S",
+                  "sections":[
+                    {"title":"研究总结"},
+                    {"title":"未来展望"}
+                  ]
+                }]}""";
+        AgentExecutionContext ctx = baseContext(flatOutline);
+
+        when(modelService.expandPaperOutlineBatch(anyString(), anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(om.readTree("""
+                        {
+                          "chapters":[{"index":1,"title":"结论","summary":"S","objective":"O","sections":[
+                            {"title":"研究总结","content":"研究总结完整正文","coreArgument":"总结论点","citations":[]},
+                            {"title":"未来展望","content":"未来展望完整正文","coreArgument":"展望论点","citations":[]}
+                          ]}],
+                          "citationMap":[]
+                        }
+                        """));
+
+        s.execute(ctx);
+
+        ArgumentCaptor<PaperOutlineVersionEntity> cap = ArgumentCaptor.forClass(PaperOutlineVersionEntity.class);
+        verify(paperOutlineVersionRepository).save(cap.capture());
+        JsonNode manuscript = om.readTree(cap.getValue().getManuscriptJson());
+        assertThat(manuscript.path("chapters").get(0).path("sections").size()).isEqualTo(2);
+    }
 }
