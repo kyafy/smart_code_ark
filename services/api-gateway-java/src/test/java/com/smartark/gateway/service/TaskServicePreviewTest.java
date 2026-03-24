@@ -55,6 +55,7 @@ class TaskServicePreviewTest {
     @Mock private TaskExecutorService taskExecutorService;
     @Mock private PreviewDeployService previewDeployService;
     @Mock private BillingService billingService;
+    @Mock private StepMemoryService stepMemoryService;
 
     private TaskService taskService;
 
@@ -66,7 +67,7 @@ class TaskServicePreviewTest {
                 paperTopicSessionRepository, paperOutlineVersionRepository,
                 paperCorpusDocRepository, paperCorpusChunkRepository,
                 taskExecutorService, previewDeployService, billingService,
-                new ObjectMapper()
+                stepMemoryService, new ObjectMapper()
         );
         ReflectionTestUtils.setField(taskService, "previewMaxConcurrentPerUser", 2);
         ReflectionTestUtils.setField(taskService, "previewLogDir", "/tmp/smartark/preview-logs");

@@ -78,6 +78,7 @@ public class ArtifactContractValidateStep implements AgentStep {
                 "backend");
         Path backendPath = workspace.resolve(backendDir);
         if (Files.exists(backendPath)) {
+            checkFileExists(context, workspace, backendDir + "/Dockerfile", violations);
             boolean isJava = Files.exists(backendPath.resolve("pom.xml"))
                     || Files.exists(backendPath.resolve("build.gradle"));
             if (isJava) {
@@ -93,6 +94,9 @@ public class ArtifactContractValidateStep implements AgentStep {
         Path frontendPath = workspace.resolve(frontendDir);
         if (Files.exists(frontendPath)) {
             checkFileExists(context, workspace, frontendDir + "/package.json", violations);
+            checkFileExists(context, workspace, frontendDir + "/index.html", violations);
+            checkFileExists(context, workspace, frontendDir + "/vite.config.ts", violations);
+            checkFileExists(context, workspace, frontendDir + "/Dockerfile", violations);
         }
     }
 

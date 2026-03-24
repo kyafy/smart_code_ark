@@ -71,6 +71,8 @@ class TaskServicePaperOutlineTest {
     private PreviewDeployService previewDeployService;
     @Mock
     private BillingService billingService;
+    @Mock
+    private StepMemoryService stepMemoryService;
 
     private TaskService taskService;
 
@@ -90,6 +92,7 @@ class TaskServicePaperOutlineTest {
                 taskExecutorService,
                 previewDeployService,
                 billingService,
+                stepMemoryService,
                 new ObjectMapper()
         );
     }

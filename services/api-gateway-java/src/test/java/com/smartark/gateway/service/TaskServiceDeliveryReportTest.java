@@ -53,6 +53,7 @@ class TaskServiceDeliveryReportTest {
     @Mock private TaskExecutorService taskExecutorService;
     @Mock private PreviewDeployService previewDeployService;
     @Mock private BillingService billingService;
+    @Mock private StepMemoryService stepMemoryService;
 
     @TempDir
     Path tempDir;
@@ -67,7 +68,7 @@ class TaskServiceDeliveryReportTest {
                 paperTopicSessionRepository, paperOutlineVersionRepository,
                 paperCorpusDocRepository, paperCorpusChunkRepository,
                 taskExecutorService, previewDeployService, billingService,
-                new ObjectMapper()
+                stepMemoryService, new ObjectMapper()
         );
         ReflectionTestUtils.setField(taskService, "workspaceRoot", tempDir.toString());
     }

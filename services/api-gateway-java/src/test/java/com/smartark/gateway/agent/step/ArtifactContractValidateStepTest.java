@@ -114,7 +114,11 @@ class ArtifactContractValidateStepTest {
         Files.writeString(workspace.resolve("backend/pom.xml"), "<project/>", StandardCharsets.UTF_8);
         Files.writeString(workspace.resolve("backend/mvnw"), "#!/bin/sh\nmvn \"$@\"", StandardCharsets.UTF_8);
         Files.writeString(workspace.resolve("backend/mvnw.cmd"), "@echo off\nmvn %*", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve("backend/Dockerfile"), "FROM eclipse-temurin:17-jre", StandardCharsets.UTF_8);
         Files.writeString(workspace.resolve("frontend/package.json"), "{\"name\":\"app\"}", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve("frontend/index.html"), "<!DOCTYPE html><html><body><div id=\"app\"></div></body></html>", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve("frontend/vite.config.ts"), "import { defineConfig } from 'vite'\nexport default defineConfig({})", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve("frontend/Dockerfile"), "FROM node:20-alpine", StandardCharsets.UTF_8);
 
         return workspace;
     }

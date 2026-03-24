@@ -1,7 +1,9 @@
 package com.smartark.gateway.agent;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
@@ -21,6 +23,7 @@ import com.smartark.gateway.service.LangchainSidecarClient;
 import com.smartark.gateway.service.LongTermMemoryService;
 import com.smartark.gateway.service.PreviewDeployService;
 import com.smartark.gateway.service.QualityGateService;
+import com.smartark.gateway.service.StepMemoryService;
 import com.smartark.gateway.service.TaskMemoryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +60,7 @@ public class AgentOrchestrator {
     private final LongTermMemoryService longTermMemoryService;
     private final ContextAssembler contextAssembler;
     private final QualityGateService qualityGateService;
+    private final StepMemoryService stepMemoryService;
     private final Map<String, AgentStep> stepMap;
     private final ObjectMapper objectMapper;
 
@@ -91,6 +95,7 @@ public class AgentOrchestrator {
                              LongTermMemoryService longTermMemoryService,
                              ContextAssembler contextAssembler,
                              QualityGateService qualityGateService,
+                             StepMemoryService stepMemoryService,
                              ObjectMapper objectMapper,
                              List<AgentStep> agentSteps) {
         this.taskRepository = taskRepository;
@@ -103,6 +108,7 @@ public class AgentOrchestrator {
         this.longTermMemoryService = longTermMemoryService;
         this.contextAssembler = contextAssembler;
         this.qualityGateService = qualityGateService;
+        this.stepMemoryService = stepMemoryService;
         this.objectMapper = objectMapper;
         this.stepMap = agentSteps.stream().collect(Collectors.toMap(AgentStep::getStepCode, step -> step));
     }
@@ -148,6 +154,7 @@ public class AgentOrchestrator {
             for (int i = 0; i < steps.size(); i++) {
                 TaskStepEntity stepEntity = steps.get(i);
                 if ("finished".equals(stepEntity.getStatus())) {
+                    hydrateContextFromStepMemory(taskId, stepEntity.getStepCode(), context);
                     continue;
                 }
 
@@ -380,7 +387,6 @@ public class AgentOrchestrator {
                 context.getLongTermMemories()
         );
         context.setAssembledContextPack(assembled.contextPack());
-        context.setNormalizedInstructions(assembled.contextPack());
         log(taskId, "info", "context_probe taskId=" + taskId + ", stepCode=" + stepCode
                 + ", sources=" + assembled.sources()
                 + ", shortTermCount=" + assembled.shortTermCount()
@@ -679,6 +685,36 @@ public class AgentOrchestrator {
     private boolean shouldTriggerPreviewDeploy(TaskEntity task) {
         return "finished".equals(task.getStatus())
                 && ("generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType()));
+    }
+
+    private void hydrateContextFromStepMemory(String taskId, String stepCode, AgentExecutionContext context) {
+        try {
+            if ("requirement_analyze".equals(stepCode)) {
+                if (context.getFilePlan() == null || context.getFilePlan().isEmpty()) {
+                    stepMemoryService.loadRaw(taskId, stepCode, "filePlan").ifPresent(json -> {
+                        try {
+                            List<FilePlanItem> plan = objectMapper.readValue(json, new TypeReference<List<FilePlanItem>>() {});
+                            context.setFilePlan(plan);
+                            log(taskId, "info", "Hydrated filePlan from step memory: size=" + plan.size());
+                        } catch (Exception e) {
+                            logger.warn("Failed to deserialize filePlan from step memory", e);
+                        }
+                    });
+                }
+                if (context.getFileList() == null || context.getFileList().isEmpty()) {
+                    stepMemoryService.loadRaw(taskId, stepCode, "fileList").ifPresent(json -> {
+                        try {
+                            List<String> list = objectMapper.readValue(json, new TypeReference<List<String>>() {});
+                            context.setFileList(list);
+                        } catch (Exception e) {
+                            logger.warn("Failed to deserialize fileList from step memory", e);
+                        }
+                    });
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("hydrateContextFromStepMemory failed for taskId={}, stepCode={}", taskId, stepCode, e);
+        }
     }
 
     private void fillPaperContext(AgentExecutionContext context, String instructionsJson) {

@@ -51,6 +51,7 @@ class PaperTraceabilityTest {
     @Mock private TaskExecutorService taskExecutorService;
     @Mock private PreviewDeployService previewDeployService;
     @Mock private BillingService billingService;
+    @Mock private StepMemoryService stepMemoryService;
 
     private TaskService taskService;
 
@@ -70,6 +71,7 @@ class PaperTraceabilityTest {
                 taskExecutorService,
                 previewDeployService,
                 billingService,
+                stepMemoryService,
                 new ObjectMapper()
         );
     }

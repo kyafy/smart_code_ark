@@ -95,6 +95,7 @@ public class TaskService {
     private final TaskExecutorService taskExecutorService;
     private final PreviewDeployService previewDeployService;
     private final BillingService billingService;
+    private final StepMemoryService stepMemoryService;
     private final ObjectMapper objectMapper;
 
     public TaskService(TaskRepository taskRepository,
@@ -110,6 +111,7 @@ public class TaskService {
                        TaskExecutorService taskExecutorService,
                        PreviewDeployService previewDeployService,
                        BillingService billingService,
+                       StepMemoryService stepMemoryService,
                        ObjectMapper objectMapper) {
         this.taskRepository = taskRepository;
         this.taskStepRepository = taskStepRepository;
@@ -124,6 +126,7 @@ public class TaskService {
         this.taskExecutorService = taskExecutorService;
         this.previewDeployService = previewDeployService;
         this.billingService = billingService;
+        this.stepMemoryService = stepMemoryService;
         this.objectMapper = objectMapper;
     }
 
@@ -225,6 +228,7 @@ public class TaskService {
                 step.setErrorMessage(null);
                 step.setUpdatedAt(LocalDateTime.now());
                 taskStepRepository.save(step);
+                stepMemoryService.clearStep(taskId, step.getStepCode());
             }
         }
 

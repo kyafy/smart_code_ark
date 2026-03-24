@@ -6,6 +6,7 @@ import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.service.ModelService;
+import com.smartark.gateway.service.StepMemoryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -18,13 +19,15 @@ import java.util.Set;
 @Component
 public class RequirementAnalyzeStep implements AgentStep {
     private static final Logger logger = LoggerFactory.getLogger(RequirementAnalyzeStep.class);
-    
+
     private final ModelService modelService;
     private final ObjectMapper objectMapper;
+    private final StepMemoryService stepMemoryService;
 
-    public RequirementAnalyzeStep(ModelService modelService, ObjectMapper objectMapper) {
+    public RequirementAnalyzeStep(ModelService modelService, ObjectMapper objectMapper, StepMemoryService stepMemoryService) {
         this.modelService = modelService;
         this.objectMapper = objectMapper;
+        this.stepMemoryService = stepMemoryService;
     }
 
     @Override
@@ -99,6 +102,11 @@ public class RequirementAnalyzeStep implements AgentStep {
         logger.info("Generated {} files in plan.", fileList.size());
         context.logInfo("Step requirement_analyze output: filePlanSize=" + filePlan.size()
                 + ", groups=" + filePlan.stream().map(FilePlanItem::getGroup).distinct().toList());
+
+        // Persist filePlan to step memory for recovery on retry
+        String taskId = context.getTask().getId();
+        stepMemoryService.save(taskId, "requirement_analyze", "filePlan", filePlan);
+        stepMemoryService.save(taskId, "requirement_analyze", "fileList", fileList);
     }
 
     private List<String> sanitizeFileList(List<String> fileList, String prd, String projectType, String stackBackend, String stackFrontend, String stackDb) {
@@ -141,6 +149,7 @@ public class RequirementAnalyzeStep implements AgentStep {
             files.add("backend/pom.xml");
             files.add("backend/mvnw");
             files.add("backend/mvnw.cmd");
+            files.add("backend/Dockerfile");
             files.add("backend/src/main/java/com/example/Application.java");
             files.add("backend/src/main/resources/application.yml");
             files.add("backend/src/main/java/com/example/common/ApiResponse.java");
@@ -154,6 +163,7 @@ public class RequirementAnalyzeStep implements AgentStep {
             }
         } else if (backend.contains("node") || backend.contains("express") || backend.contains("nestjs")) {
             files.add("backend/package.json");
+            files.add("backend/Dockerfile");
             files.add("backend/src/main.ts");
             for (String module : modules) {
                 String base = "backend/src/modules/" + module;
@@ -168,6 +178,9 @@ public class RequirementAnalyzeStep implements AgentStep {
         String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
         if (frontend.contains("vue")) {
             files.add("frontend/package.json");
+            files.add("frontend/index.html");
+            files.add("frontend/vite.config.ts");
+            files.add("frontend/Dockerfile");
             files.add("frontend/src/main.ts");
             files.add("frontend/src/App.vue");
             files.add("frontend/src/router/index.ts");
@@ -178,6 +191,9 @@ public class RequirementAnalyzeStep implements AgentStep {
             }
         } else if (frontend.contains("react")) {
             files.add("frontend/package.json");
+            files.add("frontend/index.html");
+            files.add("frontend/vite.config.ts");
+            files.add("frontend/Dockerfile");
             files.add("frontend/src/main.tsx");
             files.add("frontend/src/App.tsx");
             files.add("frontend/src/router/index.tsx");
@@ -243,13 +259,7 @@ public class RequirementAnalyzeStep implements AgentStep {
     }
 
     private String detectGroup(String path) {
-        String p = path == null ? "" : path.toLowerCase();
-        if (p.contains("backend/")) return "backend";
-        if (p.contains("frontend/")) return "frontend";
-        if (p.endsWith(".sql") || p.contains("/db/") || p.contains("database")) return "database";
-        if (p.contains("docker") || p.contains(".yml") || p.startsWith("scripts/") || p.endsWith(".sh") || p.endsWith(".bat")) return "infra";
-        if (p.startsWith("docs/") || p.endsWith("readme.md")) return "docs";
-        return "backend";
+        return FileGroupDetector.detect(path);
     }
 
     private void ensureDeploymentArtifacts(Set<String> files, String stackBackend, String stackFrontend) {
@@ -264,11 +274,16 @@ public class RequirementAnalyzeStep implements AgentStep {
             files.add("backend/pom.xml");
             files.add("backend/mvnw");
             files.add("backend/mvnw.cmd");
+            files.add("backend/Dockerfile");
         } else if (backend.contains("node") || backend.contains("express") || backend.contains("nestjs")) {
             files.add("backend/package.json");
+            files.add("backend/Dockerfile");
         }
         if (frontend.contains("vue") || frontend.contains("react") || frontend.contains("uni")) {
             files.add("frontend/package.json");
+            files.add("frontend/index.html");
+            files.add("frontend/vite.config.ts");
+            files.add("frontend/Dockerfile");
         }
     }
 
@@ -288,22 +303,30 @@ public class RequirementAnalyzeStep implements AgentStep {
         if (backend.contains("spring") || backend.contains("java")) {
             require(files, missing, "backend/pom.xml");
             require(files, missing, "backend/mvnw");
+            require(files, missing, "backend/Dockerfile");
             require(files, missing, "backend/src/main/resources/application.yml");
             if (files.stream().noneMatch(p -> p.startsWith("backend/src/main/java/") && p.endsWith("/Application.java"))) {
                 missing.add("backend/src/main/java/**/Application.java");
             }
         } else if (backend.contains("node") || backend.contains("express") || backend.contains("nestjs")) {
             require(files, missing, "backend/package.json");
+            require(files, missing, "backend/Dockerfile");
             require(files, missing, "backend/src/main.ts");
         }
 
         String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
         if (frontend.contains("vue")) {
             require(files, missing, "frontend/package.json");
+            require(files, missing, "frontend/index.html");
+            require(files, missing, "frontend/vite.config.ts");
+            require(files, missing, "frontend/Dockerfile");
             require(files, missing, "frontend/src/main.ts");
             require(files, missing, "frontend/src/App.vue");
         } else if (frontend.contains("react")) {
             require(files, missing, "frontend/package.json");
+            require(files, missing, "frontend/index.html");
+            require(files, missing, "frontend/vite.config.ts");
+            require(files, missing, "frontend/Dockerfile");
             require(files, missing, "frontend/src/main.tsx");
             require(files, missing, "frontend/src/App.tsx");
         }

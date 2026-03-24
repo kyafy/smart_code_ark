@@ -47,32 +47,43 @@ public abstract class AbstractCodegenStep implements AgentStep {
         context.logInfo("Codegen start: groups=" + groups + ", fileCount=" + groupFileCount
                 + ", projectStructureLength=" + groupStructure.length());
 
-        filePlan.stream()
+        List<FilePlanItem> targetItems = filePlan.stream()
                 .filter(item -> item.getPath() != null && !item.getPath().isBlank())
                 .filter(item -> item.getGroup() != null && groups.contains(item.getGroup()))
                 .sorted(Comparator.comparing(item -> item.getPriority() == null ? 50 : item.getPriority()))
-                .forEach(item -> {
-                    String filePath = normalizeAndValidatePath(item.getPath());
-                    if (filePath == null) {
-                        logger.warn("Skip unsafe file path: {}", item.getPath());
-                        return;
-                    }
-                    try {
-                        logger.info("Generating file: {} [group={}]", filePath, item.getGroup());
-                        String content = modelService.generateFileContent(
-                                context.getTask().getId(),
-                                context.getTask().getProjectId(),
-                                prd,
-                                filePath,
-                                fullStack,
-                                instructions,
-                                groupStructure
-                        );
-                        saveFile(context, filePath, content);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                });
+                .toList();
+
+        int successCount = 0;
+        int failCount = 0;
+        for (FilePlanItem item : targetItems) {
+            String filePath = normalizeAndValidatePath(item.getPath());
+            if (filePath == null) {
+                logger.warn("Skip unsafe file path: {}", item.getPath());
+                continue;
+            }
+            try {
+                logger.info("Generating file: {} [group={}]", filePath, item.getGroup());
+                String content = modelService.generateFileContent(
+                        context.getTask().getId(),
+                        context.getTask().getProjectId(),
+                        prd,
+                        filePath,
+                        fullStack,
+                        instructions,
+                        groupStructure
+                );
+                saveFile(context, filePath, content);
+                successCount++;
+            } catch (Exception e) {
+                failCount++;
+                logger.error("Failed to generate file: {} [group={}], error={}", filePath, item.getGroup(), e.getMessage());
+                context.logWarn("Codegen file failed: " + filePath + ", error=" + e.getMessage());
+            }
+        }
+        context.logInfo("Codegen completed: groups=" + groups + ", success=" + successCount + ", failed=" + failCount);
+        if (successCount == 0 && !targetItems.isEmpty()) {
+            throw new RuntimeException("All file generation failed for groups: " + groups);
+        }
     }
 
     private String buildGroupStructure(List<FilePlanItem> filePlan, Set<String> groups) {
@@ -122,13 +133,7 @@ public abstract class AbstractCodegenStep implements AgentStep {
     }
 
     protected String detectGroup(String path) {
-        String p = path == null ? "" : path.toLowerCase();
-        if (p.contains("backend/")) return "backend";
-        if (p.contains("frontend/")) return "frontend";
-        if (p.endsWith(".sql") || p.contains("/db/") || p.contains("database")) return "database";
-        if (p.contains("docker") || p.contains(".yml") || p.startsWith("scripts/") || p.endsWith(".sh") || p.endsWith(".bat")) return "infra";
-        if (p.startsWith("docs/") || p.endsWith("readme.md")) return "docs";
-        return "backend";
+        return FileGroupDetector.detect(path);
     }
 
     protected void saveFile(AgentExecutionContext context, String filePath, String content) throws IOException {

@@ -7,6 +7,7 @@ import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.service.ModelService;
+import com.smartark.gateway.service.StepMemoryService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -25,9 +26,12 @@ class RequirementAnalyzeStepTest {
     @Mock
     private ModelService modelService;
 
+    @Mock
+    private StepMemoryService stepMemoryService;
+
     @Test
     void execute_fallbackWhenModelStructureFailed() throws Exception {
-        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper());
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService);
         AgentExecutionContext context = buildContext();
 
         when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
@@ -42,7 +46,7 @@ class RequirementAnalyzeStepTest {
 
     @Test
     void execute_sanitizeUnsafePaths() throws Exception {
-        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper());
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService);
         AgentExecutionContext context = buildContext();
 
         when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
@@ -63,7 +67,7 @@ class RequirementAnalyzeStepTest {
 
     @Test
     void execute_shouldCorrectiveRetryWhenCriticalFilesMissing() throws Exception {
-        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper());
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService);
         AgentExecutionContext context = buildContext();
 
         when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))

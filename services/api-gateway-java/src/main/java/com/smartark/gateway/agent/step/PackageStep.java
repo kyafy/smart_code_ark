@@ -222,6 +222,35 @@ public class PackageStep implements AgentStep {
             )) {
                 addUnique(fixedActions, "generated_backend_pom_xml");
             }
+            if (writeIfMissing(
+                    backendPath.resolve("Dockerfile"),
+                    "FROM maven:3.9-eclipse-temurin-17 AS build\n" +
+                            "WORKDIR /app\n" +
+                            "COPY pom.xml .\n" +
+                            "RUN mvn dependency:go-offline -B || true\n" +
+                            "COPY src ./src\n" +
+                            "RUN mvn package -DskipTests -B\n\n" +
+                            "FROM eclipse-temurin:17-jre\n" +
+                            "WORKDIR /app\n" +
+                            "COPY --from=build /app/target/*.jar app.jar\n" +
+                            "EXPOSE 8080\n" +
+                            "ENTRYPOINT [\"java\", \"-jar\", \"app.jar\"]\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_dockerfile");
+            }
+        } else {
+            if (writeIfMissing(
+                    backendPath.resolve("Dockerfile"),
+                    "FROM node:20-alpine\n" +
+                            "WORKDIR /app\n" +
+                            "COPY package*.json ./\n" +
+                            "RUN npm install\n" +
+                            "COPY . .\n" +
+                            "EXPOSE 3000\n" +
+                            "CMD [\"npm\", \"start\"]\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_dockerfile");
+            }
         }
     }
 
@@ -243,7 +272,9 @@ public class PackageStep implements AgentStep {
                     "  },\n" +
                     "  \"dependencies\": {\n" +
                     "    \"react\": \"^18.3.1\",\n" +
-                    "    \"react-dom\": \"^18.3.1\"\n" +
+                    "    \"react-dom\": \"^18.3.1\",\n" +
+                    "    \"react-router-dom\": \"^6.28.0\",\n" +
+                    "    \"axios\": \"^1.7.7\"\n" +
                     "  },\n" +
                     "  \"devDependencies\": {\n" +
                     "    \"vite\": \"^5.4.10\",\n" +
@@ -260,7 +291,10 @@ public class PackageStep implements AgentStep {
                     "    \"preview\": \"vite preview\"\n" +
                     "  },\n" +
                     "  \"dependencies\": {\n" +
-                    "    \"vue\": \"^3.5.13\"\n" +
+                    "    \"vue\": \"^3.5.13\",\n" +
+                    "    \"vue-router\": \"^4.4.5\",\n" +
+                    "    \"pinia\": \"^2.2.4\",\n" +
+                    "    \"axios\": \"^1.7.7\"\n" +
                     "  },\n" +
                     "  \"devDependencies\": {\n" +
                     "    \"vite\": \"^5.4.10\",\n" +
@@ -269,6 +303,52 @@ public class PackageStep implements AgentStep {
                     "}\n";
             Files.writeString(frontendPath.resolve("package.json"), packageJson, StandardCharsets.UTF_8);
             addUnique(fixedActions, "generated_frontend_package_json");
+        }
+
+        boolean isReactStack = frontendStack != null && frontendStack.toLowerCase(Locale.ROOT).contains("react");
+        String mainEntry = isReactStack ? "/src/main.tsx" : "/src/main.ts";
+        if (writeIfMissing(
+                frontendPath.resolve("index.html"),
+                "<!DOCTYPE html>\n" +
+                        "<html lang=\"zh-CN\">\n" +
+                        "<head>\n" +
+                        "  <meta charset=\"UTF-8\" />\n" +
+                        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n" +
+                        "  <title>App</title>\n" +
+                        "</head>\n" +
+                        "<body>\n" +
+                        "  <div id=\"app\"></div>\n" +
+                        "  <script type=\"module\" src=\"" + mainEntry + "\"></script>\n" +
+                        "</body>\n" +
+                        "</html>\n"
+        )) {
+            addUnique(fixedActions, "generated_frontend_index_html");
+        }
+
+        String vitePlugin = isReactStack
+                ? "import react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: { host: '0.0.0.0', port: 5173 }\n})\n"
+                : "import vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({\n  plugins: [vue()],\n  server: { host: '0.0.0.0', port: 5173 }\n})\n";
+        if (writeIfMissing(
+                frontendPath.resolve("vite.config.ts"),
+                "import { defineConfig } from 'vite'\n" + vitePlugin
+        )) {
+            addUnique(fixedActions, "generated_frontend_vite_config");
+        }
+
+        if (writeIfMissing(
+                frontendPath.resolve("Dockerfile"),
+                "FROM node:20-alpine AS build\n" +
+                        "WORKDIR /app\n" +
+                        "COPY package*.json ./\n" +
+                        "RUN npm install\n" +
+                        "COPY . .\n" +
+                        "RUN npm run build\n\n" +
+                        "FROM nginx:alpine\n" +
+                        "COPY --from=build /app/dist /usr/share/nginx/html\n" +
+                        "EXPOSE 80\n" +
+                        "CMD [\"nginx\", \"-g\", \"daemon off;\"]\n"
+        )) {
+            addUnique(fixedActions, "generated_frontend_dockerfile");
         }
     }
 
@@ -493,7 +573,7 @@ public class PackageStep implements AgentStep {
             Files.walk(sourceDir)
                 .filter(path -> !Files.isDirectory(path))
                 .forEach(path -> {
-                    ZipEntry zipEntry = new ZipEntry(sourceDir.relativize(path).toString());
+                    ZipEntry zipEntry = new ZipEntry(sourceDir.relativize(path).toString().replace('\\', '/'));
                     try {
                         zos.putNextEntry(zipEntry);
                         Files.copy(path, zos);
