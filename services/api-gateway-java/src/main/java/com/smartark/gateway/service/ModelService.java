@@ -55,6 +55,7 @@ public class ModelService {
     private final OutputSchemaValidator outputSchemaValidator;
     private final boolean schemaValidationEnabled;
     private final int correctiveRetryMax;
+    private final ModelRouterService modelRouterService;
 
     public ModelService(
             ObjectMapper objectMapper,
@@ -62,6 +63,7 @@ public class ModelService {
             PromptRenderer promptRenderer,
             PromptHistoryRepository promptHistoryRepository,
             OutputSchemaValidator outputSchemaValidator,
+            ModelRouterService modelRouterService,
             @Value("${smartark.model.base-url:}") String baseUrl,
             @Value("${smartark.model.api-key:}") String apiKey,
             @Value("${smartark.model.mock-enabled:false}") boolean mockEnabled,
@@ -82,7 +84,22 @@ public class ModelService {
         this.outputSchemaValidator = outputSchemaValidator;
         this.schemaValidationEnabled = schemaValidationEnabled;
         this.correctiveRetryMax = Math.max(0, correctiveRetryMax);
+        this.modelRouterService = modelRouterService;
         this.restClient = RestClient.builder().build();
+    }
+
+    /**
+     * Resolve chat model via router (falls back to config default).
+     */
+    private String resolveChatModel() {
+        return modelRouterService.resolve("chat");
+    }
+
+    /**
+     * Resolve code model via router (falls back to config default).
+     */
+    private String resolveCodeModel() {
+        return modelRouterService.resolve("code");
     }
 
     /**
@@ -135,7 +152,8 @@ public class ModelService {
         }
 
         try {
-            logger.info("Starting stream chat with model: {}", chatModel);
+            String resolvedChat = resolveChatModel();
+            logger.info("Starting stream chat with model: {}", resolvedChat);
             List<Map<String, String>> messages = new ArrayList<>();
             messages.add(Map.of("role", "system", "content", 
                 "你是智能助手，请帮助用户梳理软件系统需求。在回复用户时，请先以友好的语气进行对话，帮助澄清和完善需求细节。\n" +
@@ -159,7 +177,7 @@ public class ModelService {
             messages.add(Map.of("role", "user", "content", userMessage));
 
             Map<String, Object> payload = Map.of(
-                    "model", chatModel,
+                    "model", resolvedChat,
                     "messages", messages,
                     "stream", true
             );
@@ -235,6 +253,7 @@ public class ModelService {
     }
 
     public ModelResult chatReply(String sessionTitle, String projectType, String userMessage, List<Map<String, String>> history) {
+        String resolvedChat = resolveChatModel();
         if (baseUrl.isEmpty() || apiKey.isEmpty()) {
             if (!mockEnabled) {
                 throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型配置缺失：请设置 MODEL_BASE_URL 与 MODEL_API_KEY");
@@ -248,7 +267,7 @@ public class ModelService {
                     "history", history
             )));
             int outTok = estimateTokens(reply);
-            return new ModelResult(chatModel, reply, modules, inTok, outTok);
+            return new ModelResult(resolvedChat, reply, modules, inTok, outTok);
         }
         try {
             List<Map<String, String>> messages = new ArrayList<>();
@@ -259,10 +278,10 @@ public class ModelService {
             messages.add(Map.of("role", "user", "content", userMessage));
 
             Map<String, Object> payload = Map.of(
-                    "model", chatModel,
+                    "model", resolvedChat,
                     "messages", messages
             );
-            
+
             String url;
             if (baseUrl.endsWith("/v1/") || baseUrl.endsWith("/v1")) {
                 url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
@@ -285,8 +304,9 @@ public class ModelService {
             String reply = root.at("/choices/0/message/content").asText("");
             int promptTokens = root.at("/usage/prompt_tokens").asInt(estimateTokens(objectMapper.valueToTree(payload)));
             int completionTokens = root.at("/usage/completion_tokens").asInt(estimateTokens(reply));
+            modelRouterService.recordUsage(resolvedChat, promptTokens, completionTokens);
             List<String> modules = guessModules(sessionTitle, reply, projectType);
-            return new ModelResult(chatModel, reply, modules, promptTokens, completionTokens);
+            return new ModelResult(resolvedChat, reply, modules, promptTokens, completionTokens);
         } catch (Exception e) {
             throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败");
         }
@@ -300,6 +320,7 @@ public class ModelService {
             return "Mock PRD for " + sessionTitle + " (" + projectType + ")\n\nGenerated from chat history.";
         }
         try {
+            String resolvedChat = resolveChatModel();
             List<Map<String, String>> messages = new ArrayList<>();
             messages.add(Map.of("role", "system", "content", "你是一个资深产品经理。请根据以下对话历史，整理出一份详细的需求文档（PRD），包含项目目标、核心功能模块、用户角色及关键业务流程。输出格式为 Markdown。"));
             if (history != null) {
@@ -308,7 +329,7 @@ public class ModelService {
             messages.add(Map.of("role", "user", "content", "请根据以上对话，生成最终的需求文档。"));
 
             Map<String, Object> payload = Map.of(
-                    "model", chatModel,
+                    "model", resolvedChat,
                     "messages", messages
             );
             
@@ -368,7 +389,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "project_structure_plan";
         int versionNo = 1;
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         String requestJson = null;
         String requestHash = null;
         try {
@@ -477,7 +498,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "file_content_generate";
         int versionNo = 1;
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         String requestJson = null;
         String requestHash = null;
         try {
@@ -573,7 +594,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_topic_clarify";
         int versionNo = 1;
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic);
@@ -625,7 +646,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_generate";
         int versionNo = ragEvidence != null ? 2 : 1;
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic);
@@ -671,7 +692,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_quality_check";
         int versionNo = ragEvidence != null ? 2 : 1;
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic);
@@ -729,7 +750,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_expand";
         int versionNo = ragEvidence != null ? 3 : 1;
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic);
@@ -775,7 +796,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_expand_batch";
         int versionNo = 1;
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic == null ? "" : topic);
@@ -814,7 +835,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_quality_rewrite";
         int versionNo = 1;
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic == null ? "" : topic);
@@ -1103,7 +1124,8 @@ public class ModelService {
             history.setProjectId(projectId);
             history.setTemplateKey(templateKey);
             history.setVersionNo(versionNo == null ? 1 : versionNo);
-            history.setModel(modelName == null || modelName.isBlank() ? codeModel : modelName);
+            String effectiveModel = modelName == null || modelName.isBlank() ? resolveCodeModel() : modelName;
+            history.setModel(effectiveModel);
             history.setRequestHash(requestHash == null ? "na" : requestHash);
             history.setInputJson(inputJson);
             history.setOutputJson(outputJson);
@@ -1115,6 +1137,15 @@ public class ModelService {
             history.setErrorMessage(errorMessage == null ? null : truncate(errorMessage, 255));
             history.setCreatedAt(LocalDateTime.now());
             promptHistoryRepository.save(history);
+
+            // Record usage for model routing
+            if ("success".equals(status)) {
+                try {
+                    modelRouterService.recordUsage(effectiveModel, Math.max(0, tokenInput), Math.max(0, tokenOutput));
+                } catch (Exception usageEx) {
+                    logger.warn("Failed to record model usage for {}", effectiveModel, usageEx);
+                }
+            }
         } catch (Exception ex) {
             logger.warn("Failed to save prompt history", ex);
         }
@@ -1191,7 +1222,7 @@ public class ModelService {
     }
 
     public String chat(PromptResolver.ResolvedPrompt prompt, Map<String, String> vars) {
-        String modelName = codeModel;
+        String modelName = resolveCodeModel();
         if (prompt.version().getModel() != null && !prompt.version().getModel().isBlank()) {
             modelName = prompt.version().getModel();
         }
