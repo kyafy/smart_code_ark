@@ -61,6 +61,12 @@ public abstract class AbstractCodegenStep implements AgentStep {
                 logger.warn("Skip unsafe file path: {}", item.getPath());
                 continue;
             }
+            if (isTemplateManaged(item) && templateFileAlreadyPresent(context, filePath)) {
+                logger.info("Skip template-managed file already materialized: {}", filePath);
+                context.logInfo("Codegen skip template-managed file: " + filePath);
+                successCount++;
+                continue;
+            }
             try {
                 logger.info("Generating file: {} [group={}]", filePath, item.getGroup());
                 String content = modelService.generateFileContent(
@@ -134,6 +140,17 @@ public abstract class AbstractCodegenStep implements AgentStep {
 
     protected String detectGroup(String path) {
         return FileGroupDetector.detect(path);
+    }
+
+    private boolean isTemplateManaged(FilePlanItem item) {
+        return item != null && item.getReason() != null && item.getReason().startsWith("template_repo:");
+    }
+
+    private boolean templateFileAlreadyPresent(AgentExecutionContext context, String filePath) {
+        if (context.getWorkspaceDir() == null) {
+            return false;
+        }
+        return Files.exists(context.getWorkspaceDir().resolve(filePath).normalize());
     }
 
     protected void saveFile(AgentExecutionContext context, String filePath, String content) throws IOException {

@@ -33,6 +33,11 @@ public class GlobalExceptionHandler {
             case ErrorCodes.PREVIEW_BUILD_FAILED, ErrorCodes.PREVIEW_START_FAILED, ErrorCodes.PREVIEW_PROXY_FAILED -> HttpStatus.BAD_GATEWAY;
             case ErrorCodes.DELIVERY_REPORT_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case ErrorCodes.DELIVERY_VALIDATE_STATE_INVALID -> HttpStatus.CONFLICT;
+            case ErrorCodes.TEMPLATE_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case ErrorCodes.TEMPLATE_REQUIRED_FOR_DELIVERABLE -> HttpStatus.BAD_REQUEST;
+            case ErrorCodes.BUILD_VERIFY_FAILED -> HttpStatus.BAD_GATEWAY;
+            case ErrorCodes.RUNTIME_SMOKE_TEST_FAILED -> HttpStatus.BAD_GATEWAY;
+            case ErrorCodes.DELIVERY_LEVEL_DOWNGRADED -> HttpStatus.CONFLICT;
             case ErrorCodes.TASK_FAILED, ErrorCodes.INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
             default -> HttpStatus.BAD_REQUEST;
         };

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.common.auth.RequestContext;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.db.entity.ProjectEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.db.entity.TaskLogEntity;
 import com.smartark.gateway.db.repo.ArtifactRepository;
@@ -17,6 +18,7 @@ import com.smartark.gateway.db.repo.TaskPreviewRepository;
 import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
 import com.smartark.gateway.dto.ContractReportResult;
+import com.smartark.gateway.dto.DeliveryReportResult;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,6 +30,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,6 +57,7 @@ class TaskServiceDeliveryReportTest {
     @Mock private PreviewDeployService previewDeployService;
     @Mock private BillingService billingService;
     @Mock private StepMemoryService stepMemoryService;
+    @Mock private TemplateRepoService templateRepoService;
 
     @TempDir
     Path tempDir;
@@ -71,6 +75,7 @@ class TaskServiceDeliveryReportTest {
                 stepMemoryService, new ObjectMapper()
         );
         ReflectionTestUtils.setField(taskService, "workspaceRoot", tempDir.toString());
+        ReflectionTestUtils.setField(taskService, "templateRepoService", templateRepoService);
     }
 
     @AfterEach
@@ -105,6 +110,81 @@ class TaskServiceDeliveryReportTest {
                     BusinessException be = (BusinessException) ex;
                     assertThat(be.getCode()).isEqualTo(ErrorCodes.FORBIDDEN);
                     assertThat(be.getMessage()).isEqualTo("forbidden");
+                });
+    }
+
+    @Test
+    void getDeliveryReport_shouldReturnParsedReport() throws Exception {
+        RequestContext.setUserId("1");
+        TaskEntity task = buildTask("task-delivery", 1L, "finished");
+        when(taskRepository.findById("task-delivery")).thenReturn(Optional.of(task));
+
+        Path workspaceDir = tempDir.resolve("task-delivery");
+        java.nio.file.Files.createDirectories(workspaceDir);
+        java.nio.file.Files.writeString(
+                workspaceDir.resolve("delivery_report.json"),
+                """
+                {
+                  "taskId": "task-delivery",
+                  "deliveryLevelRequested": "validated",
+                  "deliveryLevelActual": "validated",
+                  "status": "passed",
+                  "passed": true,
+                  "blockingIssues": [],
+                  "warnings": [],
+                  "reports": {
+                    "contractReportUrl": "contract_report.json",
+                    "buildReportUrl": "build_verify_report.json"
+                  },
+                  "generatedAt": "2026-03-24T12:00:00"
+                }
+                """,
+                StandardCharsets.UTF_8
+        );
+
+        DeliveryReportResult result = taskService.getDeliveryReport("task-delivery");
+
+        assertThat(result.taskId()).isEqualTo("task-delivery");
+        assertThat(result.deliveryLevelRequested()).isEqualTo("validated");
+        assertThat(result.deliveryLevelActual()).isEqualTo("validated");
+        assertThat(result.passed()).isTrue();
+        assertThat(result.reports().buildReportUrl()).isEqualTo("build_verify_report.json");
+    }
+
+    @Test
+    void getDeliveryReport_shouldThrowNotFoundWhenReportMissing() {
+        RequestContext.setUserId("1");
+        TaskEntity task = buildTask("task-e", 1L, "finished");
+        when(taskRepository.findById("task-e")).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.getDeliveryReport("task-e"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(ErrorCodes.DELIVERY_REPORT_NOT_FOUND);
+                    assertThat(be.getMessage()).isEqualTo("delivery_report.json not found");
+                });
+    }
+
+    @Test
+    void generate_shouldRejectUnknownTemplateId() {
+        RequestContext.setUserId("1");
+        ProjectEntity project = new ProjectEntity();
+        project.setId("project-1");
+        project.setUserId(1L);
+        when(projectRepository.findById("project-1")).thenReturn(Optional.of(project));
+        when(templateRepoService.templateExists("missing-template")).thenReturn(false);
+
+        assertThatThrownBy(() -> taskService.generate(new com.smartark.gateway.dto.GenerateRequest(
+                "project-1",
+                "build app",
+                new com.smartark.gateway.dto.GenerateOptions("validated", "missing-template", false, true, true)
+        )))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(ErrorCodes.TEMPLATE_NOT_FOUND);
+                    assertThat(be.getMessage()).isEqualTo("template not found: missing-template");
                 });
     }
 

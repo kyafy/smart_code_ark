@@ -87,6 +87,35 @@ export type GenerateResult = {
   status: string
 }
 
+export type GenerateOptions = {
+  deliveryLevel?: 'draft' | 'validated' | 'deliverable' | string
+  templateId?: string | null
+  strictDelivery?: boolean
+  enablePreview?: boolean
+  enableAutoRepair?: boolean
+}
+
+export type DeliveryReportResult = {
+  taskId: string
+  deliveryLevelRequested: 'draft' | 'validated' | 'deliverable' | string
+  deliveryLevelActual: 'draft' | 'validated' | 'deliverable' | string
+  status: 'pending' | 'passed' | 'failed' | 'degraded' | string
+  passed: boolean
+  blockingIssues: Array<{
+    stage: string
+    code: string
+    message: string
+    logRef?: string | null
+  }>
+  warnings: string[]
+  reports: {
+    contractReportUrl?: string | null
+    buildReportUrl?: string | null
+    runtimeSmokeReportUrl?: string | null
+  }
+  generatedAt: string
+}
+
 export interface TaskStatusResult {
   status: 'queued' | 'running' | 'finished' | 'failed' | 'cancelled' | 'timeout'
   progress: number

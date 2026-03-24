@@ -1,0 +1,13 @@
+{
+  "key": "fastapi-vue3-mysql",
+  "name": "FastAPI + Vue 3 + MySQL",
+  "stack": {
+    "backend": "FastAPI + SQLAlchemy + MySQL",
+    "frontend": "Vue 3 + TypeScript + Vite"
+  },
+  "run": {
+    "docker": "docker compose up --build",
+    "backend": "cd backend && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt && .venv\\Scripts\\python -m uvicorn app.main:app --reload --port 8000",
+    "frontend": "cd frontend && npm install && npm run dev"
+  }
+}

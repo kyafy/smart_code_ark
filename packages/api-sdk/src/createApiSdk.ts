@@ -4,6 +4,8 @@ import type {
   BillingRecordResult,
   ChatReplyResult,
   ChatStartResult,
+  DeliveryReportResult,
+  GenerateOptions,
   GenerateResult,
   PaperManuscriptResult,
   PaperOutlineGenerateRequest,
@@ -87,9 +89,11 @@ export const createApiSdk = (deps: {
   }
 
   const taskApi = {
-    generate: (payload: { projectId: string; instructions?: string }) =>
+    generate: (payload: { projectId: string; instructions?: string; options?: GenerateOptions }) =>
       requestJson<GenerateResult>({ method: 'POST', url: '/api/generate', data: payload }),
     status: (taskId: string) => requestJson<TaskStatusResult>({ method: 'GET', url: `/api/task/${taskId}/status` }),
+    deliveryReport: (taskId: string): Promise<DeliveryReportResult> =>
+      requestJson<DeliveryReportResult>({ method: 'GET', url: `/api/task/${taskId}/delivery-report` }),
     preview: (taskId: string): Promise<TaskPreviewResult> =>
       requestJson<TaskPreviewResult>({ method: 'GET', url: `/api/task/${taskId}/preview` }),
     rebuildPreview: (taskId: string): Promise<TaskPreviewResult> =>

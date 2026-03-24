@@ -100,7 +100,39 @@ class CodegenBackendStepTest {
                 .generateFileContent(any(), any(), any(), eq("../etc/passwd"), any(), any(), any());
     }
 
+    @Test
+    void execute_skipsTemplateManagedFilesAlreadyPresent() throws Exception {
+        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper());
+        AgentExecutionContext context = buildContextMinimal();
+
+        Files.createDirectories(tempDir.resolve("backend/src/main/java/com/example"));
+        Files.writeString(tempDir.resolve("backend/src/main/java/com/example/TemplateApplication.java"), "template");
+
+        List<FilePlanItem> plan = new ArrayList<>();
+        FilePlanItem templateItem = makeItem("backend/src/main/java/com/example/TemplateApplication.java", "backend", 10);
+        templateItem.setReason("template_repo:springboot-vue3-mysql");
+        plan.add(templateItem);
+        context.setFilePlan(plan);
+
+        step.execute(context);
+
+        assertThat(Files.readString(tempDir.resolve("backend/src/main/java/com/example/TemplateApplication.java"))).isEqualTo("template");
+        verify(modelService, never())
+                .generateFileContent(any(), any(), any(), eq("backend/src/main/java/com/example/TemplateApplication.java"), any(), any(), any());
+    }
+
     private AgentExecutionContext buildContext() {
+        AgentExecutionContext context = buildContextMinimal();
+
+        List<FilePlanItem> plan = new ArrayList<>();
+        plan.add(makeItem("backend/src/main/java/App.java", "backend", 10));
+        plan.add(makeItem("frontend/src/App.vue", "frontend", 10));
+        context.setFilePlan(plan);
+
+        return context;
+    }
+
+    private AgentExecutionContext buildContextMinimal() {
         AgentExecutionContext context = new AgentExecutionContext();
         TaskEntity task = new TaskEntity();
         task.setId("task-cb");
@@ -111,12 +143,6 @@ class CodegenBackendStepTest {
         ProjectSpecEntity spec = new ProjectSpecEntity();
         spec.setRequirementJson("{\"prd\":\"test app\",\"stack\":{\"backend\":\"springboot\",\"frontend\":\"vue3\",\"db\":\"mysql\"}}");
         context.setSpec(spec);
-
-        List<FilePlanItem> plan = new ArrayList<>();
-        plan.add(makeItem("backend/src/main/java/App.java", "backend", 10));
-        plan.add(makeItem("frontend/src/App.vue", "frontend", 10));
-        context.setFilePlan(plan);
-
         return context;
     }
 

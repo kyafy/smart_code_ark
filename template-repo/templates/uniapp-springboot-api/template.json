@@ -1,0 +1,12 @@
+{
+  "key": "uniapp-springboot-api",
+  "name": "UniApp + Spring Boot API",
+  "stack": {
+    "frontend": "UniApp Vue 3 + Vite",
+    "backend": "Spring Boot 3 REST API"
+  },
+  "run": {
+    "backend": "cd backend && mvn spring-boot:run",
+    "frontend": "cd frontend-mobile && npm install && npm run dev:h5"
+  }
+}

@@ -88,6 +88,35 @@ class SqlGenerateStepTest {
         assertThat(Files.readString(tempDir.resolve("docs/deploy.md"))).isEqualTo("# Deploy Guide");
     }
 
+    @Test
+    void execute_skipsTemplateManagedInfraAndDocsWhenAlreadyPresent() throws Exception {
+        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper());
+        AgentExecutionContext context = buildContextMinimal();
+
+        Files.createDirectories(tempDir.resolve("docs"));
+        Files.createDirectories(tempDir.resolve("scripts"));
+        Files.writeString(tempDir.resolve("docs/deploy.md"), "template-doc");
+        Files.writeString(tempDir.resolve("scripts/start.sh"), "template-script");
+
+        List<FilePlanItem> plan = new ArrayList<>();
+        FilePlanItem docsItem = makeItem("docs/deploy.md", "docs", 10);
+        docsItem.setReason("template_repo:springboot-vue3-mysql");
+        FilePlanItem scriptItem = makeItem("scripts/start.sh", "infra", 20);
+        scriptItem.setReason("template_repo:springboot-vue3-mysql");
+        plan.add(docsItem);
+        plan.add(scriptItem);
+        context.setFilePlan(plan);
+
+        step.execute(context);
+
+        assertThat(Files.readString(tempDir.resolve("docs/deploy.md"))).isEqualTo("template-doc");
+        assertThat(Files.readString(tempDir.resolve("scripts/start.sh"))).isEqualTo("template-script");
+        verify(modelService, never())
+                .generateFileContent(any(), any(), any(), eq("docs/deploy.md"), any(), any(), any());
+        verify(modelService, never())
+                .generateFileContent(any(), any(), any(), eq("scripts/start.sh"), any(), any(), any());
+    }
+
     private AgentExecutionContext buildContext() {
         AgentExecutionContext context = buildContextMinimal();
 

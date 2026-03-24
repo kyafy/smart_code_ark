@@ -71,6 +71,25 @@ class CodegenFrontendStepTest {
         assertThat(Files.exists(tempDir.resolve("frontend/src/components/Header.tsx"))).isTrue();
     }
 
+    @Test
+    void execute_handlesNextjsAppPaths() throws Exception {
+        CodegenFrontendStep step = new CodegenFrontendStep(modelService, new ObjectMapper());
+        AgentExecutionContext context = buildContext();
+
+        List<FilePlanItem> plan = new ArrayList<>();
+        plan.add(makeItem("app/page.tsx", "frontend", 10));
+        plan.add(makeItem("components/create-todo-form.tsx", "frontend", 20));
+        context.setFilePlan(plan);
+
+        when(modelService.generateFileContent(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn("// nextjs content");
+
+        step.execute(context);
+
+        assertThat(Files.exists(tempDir.resolve("app/page.tsx"))).isTrue();
+        assertThat(Files.exists(tempDir.resolve("components/create-todo-form.tsx"))).isTrue();
+    }
+
     private AgentExecutionContext buildContext() {
         AgentExecutionContext context = new AgentExecutionContext();
         TaskEntity task = new TaskEntity();

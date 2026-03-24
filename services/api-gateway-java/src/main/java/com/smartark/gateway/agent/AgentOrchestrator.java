@@ -256,6 +256,7 @@ public class AgentOrchestrator {
             log(taskId, "error", "Task failed: code=" + errorCode + ", message=" + messageOf(e));
             log(taskId, "error", "task_probe event=failed taskId=" + taskId + ", durationMs=" + totalDurationMs
                     + ", sidecarCallCount=-1, errorCode=" + errorCode);
+            previewDeployService.cleanupReusableRuntime(taskId);
             taskRepository.findById(taskId).ifPresent(t -> {
                 if ("cancelled".equals(t.getStatus()) || ErrorCodes.TASK_CANCELLED == extractBusinessCode(e)) {
                     t.setStatus("cancelled");

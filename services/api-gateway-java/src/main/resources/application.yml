@@ -37,6 +37,17 @@ smartark:
   delivery:
     guard:
       enabled: ${DELIVERY_GUARD_ENABLED:true}
+  build-verify:
+    enabled: ${BUILD_VERIFY_ENABLED:true}
+    command-execution-enabled: ${BUILD_VERIFY_COMMAND_EXECUTION_ENABLED:true}
+    compose-check-enabled: ${BUILD_VERIFY_COMPOSE_CHECK_ENABLED:true}
+    timeout-seconds: ${BUILD_VERIFY_TIMEOUT_SECONDS:600}
+  runtime-smoke:
+    enabled: ${RUNTIME_SMOKE_ENABLED:true}
+    command-execution-enabled: ${RUNTIME_SMOKE_COMMAND_EXECUTION_ENABLED:true}
+    health-check-timeout-seconds: ${RUNTIME_SMOKE_HEALTH_CHECK_TIMEOUT:60}
+    health-check-interval-ms: ${RUNTIME_SMOKE_HEALTH_CHECK_INTERVAL:3000}
+    keep-runtime-for-preview-enabled: ${RUNTIME_SMOKE_KEEP_RUNTIME_FOR_PREVIEW_ENABLED:true}
   memory:
     short-term:
       top-k: ${MEMORY_SHORT_TERM_TOP_K:8}

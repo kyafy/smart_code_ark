@@ -1,0 +1,14 @@
+{
+  "key": "django-vue3-mysql",
+  "name": "Django + Vue 3 + MySQL",
+  "stack": {
+    "backend": "Django 5 + MySQL",
+    "frontend": "Vue 3 + TypeScript + Vite",
+    "database": "MySQL 8"
+  },
+  "run": {
+    "docker": "docker compose up --build",
+    "backend": "cd backend && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt && .venv\\Scripts\\python manage.py migrate && .venv\\Scripts\\python manage.py runserver 0.0.0.0:8000",
+    "frontend": "cd frontend && npm install && npm run dev"
+  }
+}

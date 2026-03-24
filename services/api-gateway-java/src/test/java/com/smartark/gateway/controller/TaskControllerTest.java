@@ -4,6 +4,7 @@ import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.common.exception.GlobalExceptionHandler;
 import com.smartark.gateway.dto.ContractReportResult;
+import com.smartark.gateway.dto.DeliveryReportResult;
 import com.smartark.gateway.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -65,6 +66,40 @@ class TaskControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(ErrorCodes.DELIVERY_REPORT_NOT_FOUND))
                 .andExpect(jsonPath("$.message").value("contract_report.json not found"));
+    }
+
+    @Test
+    void getDeliveryReport_success() throws Exception {
+        DeliveryReportResult result = new DeliveryReportResult(
+                "task-5",
+                "deliverable",
+                "deliverable",
+                "passed",
+                true,
+                List.of(),
+                List.of(),
+                new DeliveryReportResult.ReportRefs("contract_report.json", "build_verify_report.json", "runtime_smoke_test_report.json"),
+                "2026-03-24T12:03:00"
+        );
+        when(taskService.getDeliveryReport("task-5")).thenReturn(result);
+
+        mvc.perform(get("/api/task/task-5/delivery-report"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.deliveryLevelRequested").value("deliverable"))
+                .andExpect(jsonPath("$.data.deliveryLevelActual").value("deliverable"))
+                .andExpect(jsonPath("$.data.status").value("passed"));
+    }
+
+    @Test
+    void getDeliveryReport_notFound() throws Exception {
+        when(taskService.getDeliveryReport("missing"))
+                .thenThrow(new BusinessException(ErrorCodes.DELIVERY_REPORT_NOT_FOUND, "delivery_report.json not found"));
+
+        mvc.perform(get("/api/task/missing/delivery-report"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(ErrorCodes.DELIVERY_REPORT_NOT_FOUND))
+                .andExpect(jsonPath("$.message").value("delivery_report.json not found"));
     }
 
     @Test

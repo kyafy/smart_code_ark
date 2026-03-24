@@ -1,5 +1,6 @@
 package com.smartark.gateway.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.db.entity.TaskLogEntity;
@@ -24,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -71,6 +73,9 @@ class PreviewDeployServiceTest {
         ReflectionTestUtils.setField(previewDeployService, "healthCheckTimeoutSeconds", 60);
         ReflectionTestUtils.setField(previewDeployService, "healthCheckIntervalMs", 3000);
         ReflectionTestUtils.setField(previewDeployService, "previewGatewayEnabled", false);
+        ReflectionTestUtils.setField(previewDeployService, "frontendRuntimePlanService",
+                new FrontendRuntimePlanService(new ObjectMapper(), null));
+        ReflectionTestUtils.setField(previewDeployService, "objectMapper", new ObjectMapper());
 
         savedStatuses.clear();
         savedPhases.clear();
@@ -255,7 +260,7 @@ class PreviewDeployServiceTest {
         // Create workspace with package.json so resolveFrontendPath finds it
         Path workspace = tempDir.resolve("t10");
         Files.createDirectories(workspace);
-        Files.writeString(workspace.resolve("package.json"), "{}");
+        Files.writeString(workspace.resolve("package.json"), "{\"scripts\":{\"dev\":\"vite\"}}");
 
         TaskEntity task = buildTask("t10", "generate", "finished");
         when(taskRepository.findById("t10")).thenReturn(Optional.of(task));
@@ -301,7 +306,7 @@ class PreviewDeployServiceTest {
 
         Path workspace = tempDir.resolve("t10g");
         Files.createDirectories(workspace);
-        Files.writeString(workspace.resolve("package.json"), "{}");
+        Files.writeString(workspace.resolve("package.json"), "{\"scripts\":{\"dev\":\"vite\"}}");
 
         TaskEntity task = buildTask("t10g", "generate", "finished");
         when(taskRepository.findById("t10g")).thenReturn(Optional.of(task));
@@ -333,7 +338,7 @@ class PreviewDeployServiceTest {
 
         Path workspace = tempDir.resolve("t11");
         Files.createDirectories(workspace);
-        Files.writeString(workspace.resolve("package.json"), "{}");
+        Files.writeString(workspace.resolve("package.json"), "{\"scripts\":{\"dev\":\"vite\"}}");
 
         TaskEntity task = buildTask("t11", "generate", "finished");
         when(taskRepository.findById("t11")).thenReturn(Optional.of(task));
@@ -362,7 +367,7 @@ class PreviewDeployServiceTest {
 
         Path workspace = tempDir.resolve("t12");
         Files.createDirectories(workspace);
-        Files.writeString(workspace.resolve("package.json"), "{}");
+        Files.writeString(workspace.resolve("package.json"), "{\"scripts\":{\"dev\":\"vite\"}}");
 
         TaskEntity task = buildTask("t12", "generate", "finished");
         when(taskRepository.findById("t12")).thenReturn(Optional.of(task));
@@ -378,6 +383,111 @@ class PreviewDeployServiceTest {
         previewDeployService.deployPreviewAsync("t12");
 
         assertThat(savedStatuses.get(savedStatuses.size() - 1)).isEqualTo("failed");
+    }
+
+    @Test
+    void deployPreviewAsync_withFrontendMobilePlan_shouldUseResolvedRuntimeScript() throws IOException {
+        ContainerRuntimeService containerRuntime = org.mockito.Mockito.mock(ContainerRuntimeService.class);
+        TemplateRepoService templateRepoService = org.mockito.Mockito.mock(TemplateRepoService.class);
+        ReflectionTestUtils.setField(previewDeployService, "containerRuntimeService", containerRuntime);
+        ReflectionTestUtils.setField(previewDeployService, "frontendRuntimePlanService",
+                new FrontendRuntimePlanService(new ObjectMapper(), templateRepoService));
+        ReflectionTestUtils.setField(previewDeployService, "workspaceRoot", tempDir.toString());
+        ReflectionTestUtils.setField(previewDeployService, "previewLogDir", tempDir.resolve("logs").toString());
+
+        Path workspace = tempDir.resolve("t13");
+        Files.createDirectories(workspace.resolve("frontend-mobile"));
+        Files.writeString(workspace.resolve("frontend-mobile/package.json"), """
+                {
+                  "scripts": {
+                    "dev:h5": "vite",
+                    "build:h5": "vite build"
+                  }
+                }
+                """);
+
+        TaskEntity task = buildTask("t13", "generate", "finished");
+        task.setTemplateId("uniapp-springboot-api");
+        when(taskRepository.findById("t13")).thenReturn(Optional.of(task));
+        when(taskPreviewRepository.findByTaskId("t13")).thenReturn(Optional.empty());
+        when(templateRepoService.resolveTemplateById("uniapp-springboot-api")).thenReturn(Optional.of(
+                new TemplateRepoService.TemplateSelection(
+                        "uniapp-springboot-api",
+                        workspace.resolve("template-root"),
+                        "backend",
+                        "frontend-mobile",
+                        new TemplateRepoService.TemplateMetadata(
+                                "uniapp-springboot-api",
+                                "UniApp + Spring Boot API",
+                                "mobile",
+                                "UniApp mobile app with Spring Boot API",
+                                Map.of("frontend", "frontend-mobile"),
+                                Map.of("frontend", "UniApp Vue 3 + Vite"),
+                                Map.of("frontend", "cd frontend-mobile && npm install && npm run dev:h5")
+                        )
+                )
+        ));
+        when(containerRuntime.findAvailablePort()).thenReturn(30013);
+        when(containerRuntime.createAndStartContainer(any(), eq(30013), eq("t13"))).thenReturn("container-mobile");
+        when(containerRuntime.execInContainer(eq("container-mobile"), any(), any(), any()))
+                .thenReturn(new ContainerRuntimeService.ExecResult(0, "ok"));
+        when(containerRuntime.checkHealth("localhost", 30013, 60, 3000)).thenReturn(true);
+
+        previewDeployService.deployPreviewAsync("t13");
+
+        verify(containerRuntime).createAndStartContainer(
+                eq(workspace.resolve("frontend-mobile").toAbsolutePath().toString()),
+                eq(30013),
+                eq("t13")
+        );
+        verify(containerRuntime).execDetached(
+                eq("container-mobile"),
+                eq("sh"),
+                eq("-c"),
+                org.mockito.ArgumentMatchers.contains("npm run dev:h5 -- --host 0.0.0.0")
+        );
+    }
+
+    @Test
+    void deployPreviewAsync_shouldReuseRuntimeSmokeContainer() throws IOException {
+        ContainerRuntimeService containerRuntime = org.mockito.Mockito.mock(ContainerRuntimeService.class);
+        ReflectionTestUtils.setField(previewDeployService, "containerRuntimeService", containerRuntime);
+        ReflectionTestUtils.setField(previewDeployService, "workspaceRoot", tempDir.toString());
+
+        Path workspace = tempDir.resolve("t14");
+        Files.createDirectories(workspace);
+        Files.writeString(workspace.resolve("runtime_smoke_test_report.json"), """
+                {
+                  "passed": true,
+                  "skipped": false,
+                  "deliveryLevelRequested": "deliverable",
+                  "smokeTarget": "frontend",
+                  "startScript": "dev",
+                  "reusableRuntime": {
+                    "availableForPreview": true,
+                    "runtimeId": "runtime-reuse-1",
+                    "hostPort": 30114,
+                    "projectDir": "frontend",
+                    "bootLogRef": ".smartark/runtime-smoke/boot.log"
+                  },
+                  "commands": [],
+                  "blockingIssues": [],
+                  "warnings": [],
+                  "generatedAt": "2026-03-24T12:00:00"
+                }
+                """);
+
+        TaskEntity task = buildTask("t14", "generate", "finished");
+        when(taskRepository.findById("t14")).thenReturn(Optional.of(task));
+        when(taskPreviewRepository.findByTaskId("t14")).thenReturn(Optional.empty());
+        when(containerRuntime.isContainerRunning("runtime-reuse-1")).thenReturn(true);
+        when(containerRuntime.checkHealth("localhost", 30114, 60, 3000)).thenReturn(true);
+
+        previewDeployService.deployPreviewAsync("t14");
+
+        verify(containerRuntime, never()).createAndStartContainer(any(), eq(30114), eq("t14"));
+        verify(containerRuntime, never()).execInContainer(eq("runtime-reuse-1"), any(), any(), any());
+        assertThat(savedStatuses.get(savedStatuses.size() - 1)).isEqualTo("ready");
     }
 
     // ===== Phase Constants Tests =====

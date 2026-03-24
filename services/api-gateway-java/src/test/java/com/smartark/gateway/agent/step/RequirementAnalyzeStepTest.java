@@ -8,11 +8,15 @@ import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.service.ModelService;
 import com.smartark.gateway.service.StepMemoryService;
+import com.smartark.gateway.service.TemplateRepoService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -29,9 +33,12 @@ class RequirementAnalyzeStepTest {
     @Mock
     private StepMemoryService stepMemoryService;
 
+    @TempDir
+    Path tempDir;
+
     @Test
     void execute_fallbackWhenModelStructureFailed() throws Exception {
-        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService);
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService());
         AgentExecutionContext context = buildContext();
 
         when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
@@ -46,7 +53,7 @@ class RequirementAnalyzeStepTest {
 
     @Test
     void execute_sanitizeUnsafePaths() throws Exception {
-        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService);
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService());
         AgentExecutionContext context = buildContext();
 
         when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
@@ -67,7 +74,7 @@ class RequirementAnalyzeStepTest {
 
     @Test
     void execute_shouldCorrectiveRetryWhenCriticalFilesMissing() throws Exception {
-        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService);
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService());
         AgentExecutionContext context = buildContext();
 
         when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
@@ -95,6 +102,112 @@ class RequirementAnalyzeStepTest {
         assertTrue(context.getFileList().contains("scripts/start.sh"));
     }
 
+    @Test
+    void execute_mergesTemplateFilesAndMaterializesWorkspace() throws Exception {
+        TemplateRepoService templateRepoService = templateRepoService();
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService);
+        AgentExecutionContext context = buildContext();
+        context.setWorkspaceDir(tempDir.resolve("workspace"));
+
+        when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of("backend/src/main/java/com/example/order/OrderController.java"));
+
+        step.execute(context);
+
+        assertTrue(context.getFileList().contains("backend/pom.xml"));
+        assertTrue(context.getFilePlan().stream().anyMatch(item -> "template_repo:springboot-vue3-mysql".equals(item.getReason())));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("backend/pom.xml")));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("frontend/package.json")));
+    }
+
+    @Test
+    void execute_shouldPreferExplicitTemplateId() throws Exception {
+        TemplateRepoService templateRepoService = templateRepoService();
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService);
+        AgentExecutionContext context = buildContext();
+        context.setWorkspaceDir(tempDir.resolve("workspace-explicit-template"));
+        context.getTask().setTemplateId("nextjs-mysql");
+
+        when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of("app/page.tsx"));
+
+        step.execute(context);
+
+        assertTrue(context.getFilePlan().stream().anyMatch(item -> "template_repo:nextjs-mysql".equals(item.getReason())));
+        assertTrue(context.getFileList().contains("package.json"));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("package.json")));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("next.config.ts")));
+    }
+
+    @Test
+    void execute_shouldPlanFastapiTemplateFiles() throws Exception {
+        TemplateRepoService templateRepoService = templateRepoService();
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService);
+        AgentExecutionContext context = buildContext();
+        context.setWorkspaceDir(tempDir.resolve("workspace-fastapi"));
+
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"title\":\"Python Demo\",\"prd\":\"test\",\"stack\":{\"backend\":\"fastapi\",\"frontend\":\"vue3\",\"db\":\"mysql\"}}");
+        context.setSpec(spec);
+
+        when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of("backend/app/main.py", "frontend/src/App.vue"));
+
+        step.execute(context);
+
+        assertTrue(context.getFileList().contains("backend/requirements.txt"));
+        assertTrue(context.getFileList().contains("backend/app/main.py"));
+        assertTrue(context.getFilePlan().stream().anyMatch(item -> "template_repo:fastapi-vue3-mysql".equals(item.getReason())));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("backend/app/main.py")));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("frontend/package.json")));
+    }
+
+    @Test
+    void execute_shouldPlanFastapiNextjsTemplateFiles() throws Exception {
+        TemplateRepoService templateRepoService = templateRepoService();
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService);
+        AgentExecutionContext context = buildContext();
+        context.setWorkspaceDir(tempDir.resolve("workspace-fastapi-next"));
+
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"title\":\"Portal Demo\",\"prd\":\"test\",\"stack\":{\"backend\":\"fastapi\",\"frontend\":\"nextjs\",\"db\":\"mysql\"}}");
+        context.setSpec(spec);
+
+        when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of("backend/app/main.py", "frontend/app/page.tsx"));
+
+        step.execute(context);
+
+        assertTrue(context.getFileList().contains("backend/requirements.txt"));
+        assertTrue(context.getFileList().contains("frontend/package.json"));
+        assertTrue(context.getFileList().contains("frontend/app/page.tsx"));
+        assertTrue(context.getFilePlan().stream().anyMatch(item -> "template_repo:fastapi-nextjs-mysql".equals(item.getReason())));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("frontend/next.config.ts")));
+    }
+
+    @Test
+    void execute_shouldPlanDjangoTemplateFiles() throws Exception {
+        TemplateRepoService templateRepoService = templateRepoService();
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService);
+        AgentExecutionContext context = buildContext();
+        context.setWorkspaceDir(tempDir.resolve("workspace-django"));
+
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"title\":\"Cms Demo\",\"prd\":\"test\",\"stack\":{\"backend\":\"django\",\"frontend\":\"vue3\",\"db\":\"mysql\"}}");
+        context.setSpec(spec);
+
+        when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of("backend/manage.py", "frontend/src/App.vue"));
+
+        step.execute(context);
+
+        assertTrue(context.getFileList().contains("backend/manage.py"));
+        assertTrue(context.getFileList().contains("backend/config/settings.py"));
+        assertTrue(context.getFilePlan().stream().anyMatch(item -> "template_repo:django-vue3-mysql".equals(item.getReason())));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("backend/manage.py")));
+        assertTrue(Files.exists(context.getWorkspaceDir().resolve("frontend/package.json")));
+    }
+
     private AgentExecutionContext buildContext() {
         AgentExecutionContext context = new AgentExecutionContext();
         TaskEntity task = new TaskEntity();
@@ -103,9 +216,172 @@ class RequirementAnalyzeStepTest {
         context.setTask(task);
 
         ProjectSpecEntity spec = new ProjectSpecEntity();
-        spec.setRequirementJson("{\"prd\":\"test\",\"stack\":{\"backend\":\"springboot\",\"frontend\":\"vue3\",\"db\":\"mysql\"}}");
+        spec.setRequirementJson("{\"title\":\"Demo Project\",\"prd\":\"test\",\"stack\":{\"backend\":\"springboot\",\"frontend\":\"vue3\",\"db\":\"mysql\"}}");
         context.setSpec(spec);
         context.setInstructions("{}");
+        context.setWorkspaceDir(tempDir.resolve("default-workspace"));
         return context;
+    }
+
+    private TemplateRepoService templateRepoService() throws Exception {
+        Path repoRoot = tempDir.resolve("template-repo");
+        Files.createDirectories(repoRoot.resolve("templates/springboot-vue3-mysql/backend"));
+        Files.createDirectories(repoRoot.resolve("templates/springboot-vue3-mysql/frontend"));
+        Files.createDirectories(repoRoot.resolve("templates/fastapi-vue3-mysql/backend/app"));
+        Files.createDirectories(repoRoot.resolve("templates/fastapi-vue3-mysql/frontend"));
+        Files.createDirectories(repoRoot.resolve("templates/fastapi-nextjs-mysql/backend/app"));
+        Files.createDirectories(repoRoot.resolve("templates/fastapi-nextjs-mysql/frontend/app"));
+        Files.createDirectories(repoRoot.resolve("templates/django-vue3-mysql/backend/config"));
+        Files.createDirectories(repoRoot.resolve("templates/django-vue3-mysql/frontend"));
+        Files.createDirectories(repoRoot.resolve("templates/nextjs-mysql/app"));
+        Files.writeString(
+                repoRoot.resolve("catalog.json"),
+                """
+                {
+                  "version": "1.0.0",
+                  "templates": [
+                    {
+                      "key": "springboot-vue3-mysql",
+                      "name": "Spring Boot + Vue 3 + MySQL",
+                      "paths": {
+                        "backend": "backend",
+                        "frontend": "frontend"
+                      }
+                    },
+                    {
+                      "key": "nextjs-mysql",
+                      "name": "Next.js + MySQL",
+                      "paths": {
+                        "app": "."
+                      }
+                    },
+                    {
+                      "key": "fastapi-vue3-mysql",
+                      "name": "FastAPI + Vue 3 + MySQL",
+                      "paths": {
+                        "backend": "backend",
+                        "frontend": "frontend"
+                      }
+                    },
+                    {
+                      "key": "fastapi-nextjs-mysql",
+                      "name": "FastAPI + Next.js + MySQL",
+                      "paths": {
+                        "backend": "backend",
+                        "frontend": "frontend"
+                      }
+                    },
+                    {
+                      "key": "django-vue3-mysql",
+                      "name": "Django + Vue 3 + MySQL",
+                      "paths": {
+                        "backend": "backend",
+                        "frontend": "frontend"
+                      }
+                    }
+                  ]
+                }
+                """
+        );
+        Files.writeString(repoRoot.resolve("templates/springboot-vue3-mysql/backend/pom.xml"), "<project>__PROJECT_NAME__</project>");
+        Files.writeString(repoRoot.resolve("templates/springboot-vue3-mysql/frontend/package.json"), "{\"name\":\"__PROJECT_NAME__\"}");
+        Files.writeString(
+                repoRoot.resolve("templates/springboot-vue3-mysql/template.json"),
+                """
+                {
+                  "key": "springboot-vue3-mysql",
+                  "name": "Spring Boot + Vue 3 + MySQL",
+                  "stack": {
+                    "backend": "Spring Boot 3",
+                    "frontend": "Vue 3 + Vite",
+                    "database": "MySQL 8"
+                  },
+                  "run": {
+                    "docker": "docker compose up --build"
+                  }
+                }
+                """
+        );
+        Files.writeString(repoRoot.resolve("templates/nextjs-mysql/package.json"), "{\"name\":\"__PROJECT_NAME__\"}");
+        Files.writeString(repoRoot.resolve("templates/nextjs-mysql/next.config.ts"), "export default {}");
+        Files.writeString(
+                repoRoot.resolve("templates/nextjs-mysql/template.json"),
+                """
+                {
+                  "key": "nextjs-mysql",
+                  "name": "Next.js + MySQL",
+                  "stack": {
+                    "app": "Next.js 15 + React",
+                    "database": "MySQL 8"
+                  },
+                  "run": {
+                    "development": "npm run dev"
+                  }
+                }
+                """
+        );
+        Files.writeString(repoRoot.resolve("templates/fastapi-vue3-mysql/backend/requirements.txt"), "fastapi==0.116.0");
+        Files.writeString(repoRoot.resolve("templates/fastapi-vue3-mysql/backend/app/main.py"), "app = 'fastapi'");
+        Files.writeString(repoRoot.resolve("templates/fastapi-vue3-mysql/frontend/package.json"), "{\"name\":\"__PROJECT_NAME__\"}");
+        Files.writeString(
+                repoRoot.resolve("templates/fastapi-vue3-mysql/template.json"),
+                """
+                {
+                  "key": "fastapi-vue3-mysql",
+                  "name": "FastAPI + Vue 3 + MySQL",
+                  "stack": {
+                    "backend": "FastAPI + SQLAlchemy + MySQL",
+                    "frontend": "Vue 3 + Vite",
+                    "database": "MySQL 8"
+                  },
+                  "run": {
+                    "development": "uvicorn app.main:app --reload"
+                  }
+                }
+                """
+        );
+        Files.writeString(repoRoot.resolve("templates/fastapi-nextjs-mysql/backend/requirements.txt"), "fastapi==0.116.0");
+        Files.writeString(repoRoot.resolve("templates/fastapi-nextjs-mysql/backend/app/main.py"), "app = 'fastapi'");
+        Files.writeString(repoRoot.resolve("templates/fastapi-nextjs-mysql/frontend/package.json"), "{\"name\":\"__PROJECT_NAME__-web\"}");
+        Files.writeString(repoRoot.resolve("templates/fastapi-nextjs-mysql/frontend/next.config.ts"), "export default {}");
+        Files.writeString(repoRoot.resolve("templates/fastapi-nextjs-mysql/frontend/app/page.tsx"), "export default function Page() { return null; }");
+        Files.writeString(
+                repoRoot.resolve("templates/fastapi-nextjs-mysql/template.json"),
+                """
+                {
+                  "key": "fastapi-nextjs-mysql",
+                  "name": "FastAPI + Next.js + MySQL",
+                  "stack": {
+                    "backend": "FastAPI + SQLAlchemy + MySQL",
+                    "frontend": "Next.js 15 + React 19",
+                    "database": "MySQL 8"
+                  },
+                  "run": {
+                    "development": "cd frontend && npm run dev"
+                  }
+                }
+                """
+        );
+        Files.writeString(repoRoot.resolve("templates/django-vue3-mysql/backend/manage.py"), "print('manage')");
+        Files.writeString(repoRoot.resolve("templates/django-vue3-mysql/backend/config/settings.py"), "APP_NAME='__PROJECT_NAME__'");
+        Files.writeString(repoRoot.resolve("templates/django-vue3-mysql/frontend/package.json"), "{\"name\":\"__PROJECT_NAME__-frontend\"}");
+        Files.writeString(
+                repoRoot.resolve("templates/django-vue3-mysql/template.json"),
+                """
+                {
+                  "key": "django-vue3-mysql",
+                  "name": "Django + Vue 3 + MySQL",
+                  "stack": {
+                    "backend": "Django 5 + MySQL",
+                    "frontend": "Vue 3 + Vite",
+                    "database": "MySQL 8"
+                  },
+                  "run": {
+                    "development": "cd backend && python manage.py runserver"
+                  }
+                }
+                """
+        );
+        return new TemplateRepoService(new ObjectMapper(), repoRoot.toString());
     }
 }

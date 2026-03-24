@@ -81,22 +81,42 @@ public class ArtifactContractValidateStep implements AgentStep {
             checkFileExists(context, workspace, backendDir + "/Dockerfile", violations);
             boolean isJava = Files.exists(backendPath.resolve("pom.xml"))
                     || Files.exists(backendPath.resolve("build.gradle"));
+            boolean isDjango = Files.exists(backendPath.resolve("manage.py"))
+                    || Files.exists(backendPath.resolve("config/settings.py"));
+            boolean isPython = Files.exists(backendPath.resolve("requirements.txt"))
+                    || Files.exists(backendPath.resolve("pyproject.toml"))
+                    || Files.exists(backendPath.resolve("app/main.py"))
+                    || isDjango;
             if (isJava) {
                 checkFileExists(context, workspace, backendDir + "/pom.xml", violations);
                 checkFileExists(context, workspace, backendDir + "/mvnw", violations);
                 checkFileExists(context, workspace, backendDir + "/mvnw.cmd", violations);
+            } else if (isDjango) {
+                checkFileExists(context, workspace, backendDir + "/requirements.txt", violations);
+                checkFileExists(context, workspace, backendDir + "/manage.py", violations);
+                checkFileExists(context, workspace, backendDir + "/config/settings.py", violations);
+            } else if (isPython) {
+                checkFileExists(context, workspace, backendDir + "/requirements.txt", violations);
+                checkFileExists(context, workspace, backendDir + "/app/main.py", violations);
             }
         }
 
         String frontendDir = detectDir(workspace,
-                List.of("frontend", "frontend-web", "web", "client", "app"),
+                List.of("frontend", "frontend-web", "frontend-mobile", "web", "client", "app"),
                 "frontend");
         Path frontendPath = workspace.resolve(frontendDir);
         if (Files.exists(frontendPath)) {
-            checkFileExists(context, workspace, frontendDir + "/package.json", violations);
-            checkFileExists(context, workspace, frontendDir + "/index.html", violations);
-            checkFileExists(context, workspace, frontendDir + "/vite.config.ts", violations);
-            checkFileExists(context, workspace, frontendDir + "/Dockerfile", violations);
+            checkFileExists(context, workspace, resolveRelative(frontendDir, "package.json"), violations);
+            boolean isNextjs = Files.exists(frontendPath.resolve("next.config.ts"))
+                    || (".".equals(frontendDir) && Files.isDirectory(workspace.resolve("app")));
+            if (isNextjs) {
+                checkFileExists(context, workspace, resolveRelative(frontendDir, "next.config.ts"), violations);
+                checkFileExists(context, workspace, resolveRelative(frontendDir, "app/layout.tsx"), violations);
+            } else {
+                checkFileExists(context, workspace, resolveRelative(frontendDir, "index.html"), violations);
+                checkFileExists(context, workspace, resolveRelative(frontendDir, "vite.config.ts"), violations);
+            }
+            checkFileExists(context, workspace, resolveRelative(frontendDir, "Dockerfile"), violations);
         }
     }
 
@@ -111,7 +131,19 @@ public class ArtifactContractValidateStep implements AgentStep {
         }
     }
 
+    private String resolveRelative(String root, String relativePath) {
+        if (root == null || root.isBlank() || ".".equals(root)) {
+            return relativePath;
+        }
+        return root + "/" + relativePath;
+    }
+
     private String detectDir(Path workspace, List<String> candidates, String fallback) {
+        if ("frontend".equals(fallback)
+                && Files.exists(workspace.resolve("package.json"))
+                && (Files.exists(workspace.resolve("app")) || Files.exists(workspace.resolve("next.config.ts")))) {
+            return ".";
+        }
         for (String candidate : candidates) {
             if (Files.isDirectory(workspace.resolve(candidate))) {
                 return candidate;

@@ -1,0 +1,13 @@
+{
+  "key": "springboot-vue3-mysql",
+  "name": "Spring Boot + Vue 3 + MySQL",
+  "stack": {
+    "backend": "Spring Boot 3.4 + JPA + Flyway + MySQL",
+    "frontend": "Vue 3 + TypeScript + Vite"
+  },
+  "run": {
+    "docker": "docker compose up --build",
+    "backend": "cd backend && mvn spring-boot:run",
+    "frontend": "cd frontend && npm install && npm run dev"
+  }
+}

@@ -2,6 +2,7 @@ package com.smartark.gateway.controller;
 
 import com.smartark.gateway.common.response.ApiResponse;
 import com.smartark.gateway.dto.ContractReportResult;
+import com.smartark.gateway.dto.DeliveryReportResult;
 import com.smartark.gateway.dto.DeliveryValidateRequest;
 import com.smartark.gateway.dto.GenerateRequest;
 import com.smartark.gateway.dto.GenerateResult;
@@ -48,6 +49,11 @@ public class TaskController {
     @GetMapping("/task/{taskId}/contract-report")
     public ApiResponse<ContractReportResult> getContractReport(@PathVariable("taskId") String taskId) {
         return ApiResponse.success(taskService.getContractReport(taskId));
+    }
+
+    @GetMapping("/task/{taskId}/delivery-report")
+    public ApiResponse<DeliveryReportResult> getDeliveryReport(@PathVariable("taskId") String taskId) {
+        return ApiResponse.success(taskService.getDeliveryReport(taskId));
     }
 
     @PostMapping("/task/{taskId}/delivery/validate")

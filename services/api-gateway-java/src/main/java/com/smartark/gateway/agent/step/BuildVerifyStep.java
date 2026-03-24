@@ -1,0 +1,51 @@
+package com.smartark.gateway.agent.step;
+
+import com.smartark.gateway.agent.AgentExecutionContext;
+import com.smartark.gateway.agent.AgentStep;
+import com.smartark.gateway.common.exception.BusinessException;
+import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.db.entity.TaskEntity;
+import com.smartark.gateway.db.repo.TaskRepository;
+import com.smartark.gateway.dto.GenerateOptions;
+import com.smartark.gateway.service.BuildVerifyService;
+import org.springframework.stereotype.Component;
+
+@Component
+public class BuildVerifyStep implements AgentStep {
+    private final BuildVerifyService buildVerifyService;
+    private final TaskRepository taskRepository;
+
+    public BuildVerifyStep(BuildVerifyService buildVerifyService, TaskRepository taskRepository) {
+        this.buildVerifyService = buildVerifyService;
+        this.taskRepository = taskRepository;
+    }
+
+    @Override
+    public String getStepCode() {
+        return "build_verify";
+    }
+
+    @Override
+    public void execute(AgentExecutionContext context) throws Exception {
+        TaskEntity task = context.getTask();
+        BuildVerifyService.BuildVerifyBundle bundle = buildVerifyService.verify(task, context.getWorkspaceDir());
+        task.setDeliveryLevelActual(bundle.deliveryReport().deliveryLevelActual());
+        task.setDeliveryStatus(bundle.deliveryReport().status());
+        taskRepository.save(task);
+
+        context.logInfo("Build verify result: requested=" + bundle.deliveryReport().deliveryLevelRequested()
+                + ", actual=" + bundle.deliveryReport().deliveryLevelActual()
+                + ", status=" + bundle.deliveryReport().status()
+                + ", passed=" + bundle.deliveryReport().passed());
+
+        String requested = GenerateOptions.normalizeDeliveryLevel(task.getDeliveryLevelRequested());
+        if (!"draft".equals(requested) && !bundle.buildReport().passed()) {
+            throw new BusinessException(
+                    ErrorCodes.BUILD_VERIFY_FAILED,
+                    "build verify failed: requested=" + requested
+                            + ", actual=" + bundle.deliveryReport().deliveryLevelActual()
+                            + ", status=" + bundle.deliveryReport().status()
+            );
+        }
+    }
+}

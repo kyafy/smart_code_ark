@@ -121,18 +121,30 @@ public class PackageStep implements AgentStep {
         for (String candidate : candidates) {
             Path candidatePath = workspaceDir.resolve(candidate);
             if (Files.exists(candidatePath.resolve("pom.xml")) || Files.exists(candidatePath.resolve("build.gradle"))
-                    || Files.exists(candidatePath.resolve("package.json"))) {
+                    || Files.exists(candidatePath.resolve("package.json"))
+                    || Files.exists(candidatePath.resolve("requirements.txt"))
+                    || Files.exists(candidatePath.resolve("pyproject.toml"))
+                    || Files.exists(candidatePath.resolve("app/main.py"))
+                    || Files.exists(candidatePath.resolve("manage.py"))) {
                 return normalizeRelative(candidate);
             }
         }
-        if (backendStack != null && backendStack.toLowerCase(Locale.ROOT).contains("node")) {
-            return "backend";
+        if (backendStack != null) {
+            String normalized = backendStack.toLowerCase(Locale.ROOT);
+            if (normalized.contains("node") || normalized.contains("fastapi")
+                    || normalized.contains("python") || normalized.contains("django")) {
+                return "backend";
+            }
         }
         return "backend";
     }
 
     private String detectFrontendDir(Path workspaceDir, String frontendStack) {
-        List<String> candidates = List.of("frontend", "frontend-web", "web", "client", "app");
+        if (Files.exists(workspaceDir.resolve("package.json"))
+                && (Files.exists(workspaceDir.resolve("app")) || Files.exists(workspaceDir.resolve("next.config.ts")))) {
+            return ".";
+        }
+        List<String> candidates = List.of("frontend", "frontend-web", "frontend-mobile", "web", "client");
         for (String candidate : candidates) {
             Path candidatePath = workspaceDir.resolve(candidate);
             if (Files.exists(candidatePath.resolve("package.json"))
@@ -141,8 +153,11 @@ public class PackageStep implements AgentStep {
                 return normalizeRelative(candidate);
             }
         }
-        if (frontendStack != null && frontendStack.toLowerCase(Locale.ROOT).contains("uni-app")) {
-            return "frontend";
+        if (frontendStack != null) {
+            String normalized = frontendStack.toLowerCase(Locale.ROOT);
+            if (normalized.contains("uni-app") || normalized.contains("uniapp")) {
+                return Files.isDirectory(workspaceDir.resolve("frontend-mobile")) ? "frontend-mobile" : "frontend";
+            }
         }
         return "frontend";
     }
@@ -191,6 +206,9 @@ public class PackageStep implements AgentStep {
 
     private void ensureBackendDeliveryFiles(Path workspaceDir, String backendDir, String backendStack, List<String> fixedActions) throws IOException {
         String backend = backendStack == null ? "" : backendStack.toLowerCase(Locale.ROOT);
+        if (backend.contains("next")) {
+            return;
+        }
         Path backendPath = workspaceDir.resolve(backendDir);
         Files.createDirectories(backendPath);
         if (backend.contains("spring") || backend.contains("java")) {
@@ -238,6 +256,159 @@ public class PackageStep implements AgentStep {
             )) {
                 addUnique(fixedActions, "generated_backend_dockerfile");
             }
+        } else if (backend.contains("django")) {
+            if (writeIfMissing(
+                    backendPath.resolve("requirements.txt"),
+                    "django==5.1.7\n" +
+                            "pymysql==1.1.1\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_requirements_txt");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("manage.py"),
+                    "#!/usr/bin/env python\n" +
+                            "import os\n" +
+                            "import sys\n\n" +
+                            "def main() -> None:\n" +
+                            "    os.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"config.settings\")\n" +
+                            "    from django.core.management import execute_from_command_line\n" +
+                            "    execute_from_command_line(sys.argv)\n\n" +
+                            "if __name__ == \"__main__\":\n" +
+                            "    main()\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_manage_py");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("config/__init__.py"),
+                    "import pymysql\n\n" +
+                            "pymysql.install_as_MySQLdb()\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_django_config_init");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("config/settings.py"),
+                    "from pathlib import Path\n" +
+                            "import os\n\n" +
+                            "BASE_DIR = Path(__file__).resolve().parent.parent\n" +
+                            "SECRET_KEY = os.getenv(\"DJANGO_SECRET_KEY\", \"smartark-template-secret\")\n" +
+                            "DEBUG = True\n" +
+                            "ALLOWED_HOSTS = [\"*\"]\n" +
+                            "ROOT_URLCONF = \"config.urls\"\n" +
+                            "WSGI_APPLICATION = \"config.wsgi.application\"\n" +
+                            "INSTALLED_APPS = [\n" +
+                            "    \"django.contrib.contenttypes\",\n" +
+                            "    \"django.contrib.staticfiles\",\n" +
+                            "    \"users\",\n" +
+                            "]\n" +
+                            "MIDDLEWARE = [\n" +
+                            "    \"django.middleware.common.CommonMiddleware\",\n" +
+                            "]\n" +
+                            "DATABASES = {\n" +
+                            "    \"default\": {\n" +
+                            "        \"ENGINE\": \"django.db.backends.mysql\",\n" +
+                            "        \"NAME\": os.getenv(\"DB_NAME\", \"app_db\"),\n" +
+                            "        \"USER\": os.getenv(\"DB_USER\", \"app\"),\n" +
+                            "        \"PASSWORD\": os.getenv(\"DB_PASSWORD\", \"app123456\"),\n" +
+                            "        \"HOST\": os.getenv(\"DB_HOST\", \"localhost\"),\n" +
+                            "        \"PORT\": os.getenv(\"DB_PORT\", \"3306\"),\n" +
+                            "    }\n" +
+                            "}\n" +
+                            "DEFAULT_AUTO_FIELD = \"django.db.models.BigAutoField\"\n" +
+                            "STATIC_URL = \"/static/\"\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_django_settings");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("config/urls.py"),
+                    "from django.urls import include, path\n\n" +
+                            "urlpatterns = [\n" +
+                            "    path(\"api/\", include(\"users.urls\")),\n" +
+                            "]\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_django_urls");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("config/wsgi.py"),
+                    "import os\n" +
+                            "from django.core.wsgi import get_wsgi_application\n\n" +
+                            "os.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"config.settings\")\n" +
+                            "application = get_wsgi_application()\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_django_wsgi");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("users/__init__.py"),
+                    ""
+            )) {
+                addUnique(fixedActions, "generated_backend_users_init");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("users/urls.py"),
+                    "from django.urls import path\n\n" +
+                            "from .views import health_view\n\n" +
+                            "urlpatterns = [\n" +
+                            "    path(\"health\", health_view),\n" +
+                            "]\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_users_urls");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("users/views.py"),
+                    "from django.http import JsonResponse\n\n" +
+                            "def health_view(request):\n" +
+                            "    return JsonResponse({\"status\": \"UP\", \"service\": \"SmartArk Django API\"})\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_users_views");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("Dockerfile"),
+                    "FROM python:3.12-slim\n" +
+                            "WORKDIR /app\n" +
+                            "ENV PYTHONDONTWRITEBYTECODE=1\n" +
+                            "ENV PYTHONUNBUFFERED=1\n" +
+                            "COPY requirements.txt ./\n" +
+                            "RUN pip install --no-cache-dir -r requirements.txt\n" +
+                            "COPY . .\n" +
+                            "EXPOSE 8000\n" +
+                            "CMD [\"sh\", \"-c\", \"python manage.py migrate && python manage.py runserver 0.0.0.0:8000\"]\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_dockerfile");
+            }
+        } else if (backend.contains("fastapi") || backend.contains("python")) {
+            if (writeIfMissing(
+                    backendPath.resolve("requirements.txt"),
+                    "fastapi==0.116.0\n" +
+                            "uvicorn[standard]==0.35.0\n" +
+                            "sqlalchemy==2.0.43\n" +
+                            "pymysql==1.1.1\n" +
+                            "email-validator==2.2.0\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_requirements_txt");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("app/main.py"),
+                    "from fastapi import FastAPI\n\n" +
+                            "app = FastAPI(title=\"SmartArk API\")\n\n" +
+                            "@app.get(\"/api/health\")\n" +
+                            "def health() -> dict[str, str]:\n" +
+                            "    return {\"status\": \"ok\"}\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_app_main_py");
+            }
+            if (writeIfMissing(
+                    backendPath.resolve("Dockerfile"),
+                    "FROM python:3.12-slim\n" +
+                            "WORKDIR /app\n" +
+                            "ENV PYTHONDONTWRITEBYTECODE=1\n" +
+                            "ENV PYTHONUNBUFFERED=1\n" +
+                            "COPY requirements.txt ./\n" +
+                            "RUN pip install --no-cache-dir -r requirements.txt\n" +
+                            "COPY app ./app\n" +
+                            "EXPOSE 8000\n" +
+                            "CMD [\"uvicorn\", \"app.main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
+            )) {
+                addUnique(fixedActions, "generated_backend_dockerfile");
+            }
         } else {
             if (writeIfMissing(
                     backendPath.resolve("Dockerfile"),
@@ -257,10 +428,27 @@ public class PackageStep implements AgentStep {
     private void ensureFrontendDeliveryFiles(Path workspaceDir, String frontendDir, String frontendStack, List<String> fixedActions) throws IOException {
         Path frontendPath = workspaceDir.resolve(frontendDir);
         Files.createDirectories(frontendPath);
+        boolean isNextStack = frontendStack != null && frontendStack.toLowerCase(Locale.ROOT).contains("next");
         if (!Files.exists(frontendPath.resolve("package.json"))) {
             boolean isReact = frontendStack != null && frontendStack.toLowerCase(Locale.ROOT).contains("react");
-            String appName = frontendDir.replace("/", "-");
-            String packageJson = isReact
+            String appName = ".".equals(frontendDir) ? "app" : frontendDir.replace("/", "-");
+            String packageJson = isNextStack
+                    ? "{\n" +
+                    "  \"name\": \"" + appName + "\",\n" +
+                    "  \"private\": true,\n" +
+                    "  \"version\": \"0.0.1\",\n" +
+                    "  \"scripts\": {\n" +
+                    "    \"dev\": \"next dev\",\n" +
+                    "    \"build\": \"next build\",\n" +
+                    "    \"start\": \"next start\"\n" +
+                    "  },\n" +
+                    "  \"dependencies\": {\n" +
+                    "    \"next\": \"^15.2.4\",\n" +
+                    "    \"react\": \"^19.0.0\",\n" +
+                    "    \"react-dom\": \"^19.0.0\"\n" +
+                    "  }\n" +
+                    "}\n"
+                    : isReact
                     ? "{\n" +
                     "  \"name\": \"" + appName + "\",\n" +
                     "  \"private\": true,\n" +
@@ -306,38 +494,84 @@ public class PackageStep implements AgentStep {
         }
 
         boolean isReactStack = frontendStack != null && frontendStack.toLowerCase(Locale.ROOT).contains("react");
-        String mainEntry = isReactStack ? "/src/main.tsx" : "/src/main.ts";
-        if (writeIfMissing(
-                frontendPath.resolve("index.html"),
-                "<!DOCTYPE html>\n" +
-                        "<html lang=\"zh-CN\">\n" +
-                        "<head>\n" +
-                        "  <meta charset=\"UTF-8\" />\n" +
-                        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n" +
-                        "  <title>App</title>\n" +
-                        "</head>\n" +
-                        "<body>\n" +
-                        "  <div id=\"app\"></div>\n" +
-                        "  <script type=\"module\" src=\"" + mainEntry + "\"></script>\n" +
-                        "</body>\n" +
-                        "</html>\n"
-        )) {
-            addUnique(fixedActions, "generated_frontend_index_html");
+        if (isNextStack) {
+            if (writeIfMissing(
+                    frontendPath.resolve("next.config.ts"),
+                    "import type { NextConfig } from 'next'\n\n" +
+                            "const nextConfig: NextConfig = {}\n\n" +
+                            "export default nextConfig\n"
+            )) {
+                addUnique(fixedActions, "generated_frontend_next_config");
+            }
+            if (writeIfMissing(
+                    frontendPath.resolve("app/layout.tsx"),
+                    "import type { Metadata } from 'next'\n\n" +
+                            "export const metadata: Metadata = {\n" +
+                            "  title: 'SmartArk App',\n" +
+                            "  description: 'Generated Next.js app'\n" +
+                            "}\n\n" +
+                            "export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {\n" +
+                            "  return (\n" +
+                            "    <html lang=\"zh-CN\">\n" +
+                            "      <body>{children}</body>\n" +
+                            "    </html>\n" +
+                            "  )\n" +
+                            "}\n"
+            )) {
+                addUnique(fixedActions, "generated_frontend_next_layout");
+            }
+            if (writeIfMissing(
+                    frontendPath.resolve("app/page.tsx"),
+                    "export default function HomePage() {\n" +
+                            "  return <main>Generated Next.js app</main>\n" +
+                            "}\n"
+            )) {
+                addUnique(fixedActions, "generated_frontend_next_page");
+            }
         }
+        String mainEntry = isReactStack ? "/src/main.tsx" : "/src/main.ts";
+        if (!isNextStack) {
+            if (writeIfMissing(
+                    frontendPath.resolve("index.html"),
+                    "<!DOCTYPE html>\n" +
+                            "<html lang=\"zh-CN\">\n" +
+                            "<head>\n" +
+                            "  <meta charset=\"UTF-8\" />\n" +
+                            "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n" +
+                            "  <title>App</title>\n" +
+                            "</head>\n" +
+                            "<body>\n" +
+                            "  <div id=\"app\"></div>\n" +
+                            "  <script type=\"module\" src=\"" + mainEntry + "\"></script>\n" +
+                            "</body>\n" +
+                            "</html>\n"
+            )) {
+                addUnique(fixedActions, "generated_frontend_index_html");
+            }
 
-        String vitePlugin = isReactStack
-                ? "import react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: { host: '0.0.0.0', port: 5173 }\n})\n"
-                : "import vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({\n  plugins: [vue()],\n  server: { host: '0.0.0.0', port: 5173 }\n})\n";
-        if (writeIfMissing(
-                frontendPath.resolve("vite.config.ts"),
-                "import { defineConfig } from 'vite'\n" + vitePlugin
-        )) {
-            addUnique(fixedActions, "generated_frontend_vite_config");
+            String vitePlugin = isReactStack
+                    ? "import react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: { host: '0.0.0.0', port: 5173 }\n})\n"
+                    : "import vue from '@vitejs/plugin-vue'\n\nexport default defineConfig({\n  plugins: [vue()],\n  server: { host: '0.0.0.0', port: 5173 }\n})\n";
+            if (writeIfMissing(
+                    frontendPath.resolve("vite.config.ts"),
+                    "import { defineConfig } from 'vite'\n" + vitePlugin
+            )) {
+                addUnique(fixedActions, "generated_frontend_vite_config");
+            }
         }
 
         if (writeIfMissing(
                 frontendPath.resolve("Dockerfile"),
-                "FROM node:20-alpine AS build\n" +
+                isNextStack
+                        ? "FROM node:20-alpine\n" +
+                        "WORKDIR /app\n" +
+                        "COPY package*.json ./\n" +
+                        "RUN npm install\n" +
+                        "COPY . .\n" +
+                        "RUN npm run build\n" +
+                        "EXPOSE 3000\n" +
+                        "CMD [\"npm\", \"run\", \"start\"]\n"
+                        : "FROM node:20-alpine AS build\n" +
                         "WORKDIR /app\n" +
                         "COPY package*.json ./\n" +
                         "RUN npm install\n" +
@@ -446,6 +680,20 @@ public class PackageStep implements AgentStep {
             if (!Files.exists(backendPath.resolve("pom.xml"))
                     || !Files.exists(backendPath.resolve("mvnw"))
                     || !Files.exists(backendPath.resolve("mvnw.cmd"))) {
+                return true;
+            }
+        } else if (backend.contains("django")) {
+            Path backendPath = workspaceDir.resolve(backendDir);
+            if (!Files.exists(backendPath.resolve("requirements.txt"))
+                    || !Files.exists(backendPath.resolve("manage.py"))
+                    || !Files.exists(backendPath.resolve("Dockerfile"))) {
+                return true;
+            }
+        } else if (backend.contains("fastapi") || backend.contains("python")) {
+            Path backendPath = workspaceDir.resolve(backendDir);
+            if (!Files.exists(backendPath.resolve("requirements.txt"))
+                    || !Files.exists(backendPath.resolve("app/main.py"))
+                    || !Files.exists(backendPath.resolve("Dockerfile"))) {
                 return true;
             }
         }

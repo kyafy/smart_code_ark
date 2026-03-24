@@ -1,0 +1,12 @@
+{
+  "key": "nextjs-mysql",
+  "name": "Next.js + MySQL",
+  "stack": {
+    "app": "Next.js 15 + React 19 + Prisma",
+    "database": "MySQL 8"
+  },
+  "run": {
+    "database": "docker compose up -d",
+    "development": "npm install && npm run prisma:generate && npm run db:push && npm run dev"
+  }
+}

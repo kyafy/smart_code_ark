@@ -25,6 +25,8 @@ import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
 import com.smartark.gateway.db.repo.ArtifactRepository;
 import com.smartark.gateway.dto.ContractReportResult;
+import com.smartark.gateway.dto.DeliveryReportResult;
+import com.smartark.gateway.dto.GenerateOptions;
 import com.smartark.gateway.dto.GenerateRequest;
 import com.smartark.gateway.dto.GenerateResult;
 import com.smartark.gateway.dto.PaperOutlineGenerateRequest;
@@ -81,6 +83,8 @@ public class TaskService {
 
     @Autowired(required = false)
     private ContainerRuntimeService containerRuntimeService;
+    @Autowired(required = false)
+    private TemplateRepoService templateRepoService;
 
     private final TaskRepository taskRepository;
     private final TaskStepRepository taskStepRepository;
@@ -147,7 +151,7 @@ public class TaskService {
             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此项目");
         }
 
-        return createAndStartTask(project.getId(), userId, "generate", request.instructions());
+        return createAndStartTask(project.getId(), userId, "generate", request.instructions(), request.options());
     }
 
     public GenerateResult modify(String taskId, TaskModifyRequest request) {
@@ -159,7 +163,14 @@ public class TaskService {
             throw new BusinessException(ErrorCodes.FORBIDDEN, "无权操作此任务");
         }
 
-        return createAndStartTask(parentTask.getProjectId(), userId, "modify", request.changeInstructions());
+        GenerateOptions options = new GenerateOptions(
+                parentTask.getDeliveryLevelRequested(),
+                parentTask.getTemplateId(),
+                Boolean.FALSE,
+                Boolean.TRUE,
+                Boolean.TRUE
+        );
+        return createAndStartTask(parentTask.getProjectId(), userId, "modify", request.changeInstructions(), options);
     }
 
     public PaperOutlineGenerateResult generatePaperOutline(PaperOutlineGenerateRequest request) {
@@ -244,9 +255,26 @@ public class TaskService {
         return new GenerateResult(taskId, "running");
     }
 
-    private GenerateResult createAndStartTask(String projectId, Long userId, String taskType, String instructions) {
+    private GenerateResult createAndStartTask(String projectId, Long userId, String taskType, String instructions, GenerateOptions options) {
         String taskId = UUID.randomUUID().toString().replace("-", "");
         LocalDateTime now = LocalDateTime.now();
+        GenerateOptions normalizedOptions = options == null ? GenerateOptions.defaultOptions() : options;
+        if (normalizedOptions.requiresTemplate()
+                && (normalizedOptions.templateId() == null || normalizedOptions.templateId().isBlank())) {
+            throw new BusinessException(
+                    ErrorCodes.TEMPLATE_REQUIRED_FOR_DELIVERABLE,
+                    "templateId is required for validated or deliverable tasks"
+            );
+        }
+        if (normalizedOptions.templateId() != null
+                && !normalizedOptions.templateId().isBlank()
+                && templateRepoService != null
+                && !templateRepoService.templateExists(normalizedOptions.templateId())) {
+            throw new BusinessException(
+                    ErrorCodes.TEMPLATE_NOT_FOUND,
+                    "template not found: " + normalizedOptions.templateId()
+            );
+        }
 
         // 计费校验与扣除：每个生成/修改任务消耗 10 额度
         billingService.deductQuota(projectId, taskId, 10, taskType);
@@ -259,6 +287,10 @@ public class TaskService {
         task.setInstructions(instructions);
         task.setStatus("queued");
         task.setProgress(0);
+        task.setDeliveryLevelRequested(normalizedOptions.deliveryLevel());
+        task.setDeliveryLevelActual("draft");
+        task.setDeliveryStatus("pending");
+        task.setTemplateId(normalizedOptions.templateId());
         task.setCreatedAt(now);
         task.setUpdatedAt(now);
         taskRepository.save(task);
@@ -268,7 +300,9 @@ public class TaskService {
         createStep(taskId, "codegen_frontend", "生成前端", 3);
         createStep(taskId, "sql_generate", "生成 SQL", 4);
         createStep(taskId, "artifact_contract_validate", "交付物校验", 5);
-        createStep(taskId, "package", "打包交付物", 6);
+        createStep(taskId, "build_verify", "构建验证", 6);
+        createStep(taskId, "runtime_smoke_test", "Runtime smoke test", 7);
+        createStep(taskId, "package", "打包交付物", 8);
 
         taskExecutorService.executeTask(taskId);
 
@@ -370,6 +404,27 @@ public class TaskService {
             return objectMapper.readValue(json, ContractReportResult.class);
         } catch (IOException e) {
             throw new BusinessException(ErrorCodes.INTERNAL_ERROR, "failed to parse contract_report.json");
+        }
+    }
+
+    public DeliveryReportResult getDeliveryReport(String taskId) {
+        Long userId = requireUserId();
+        TaskEntity task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.NOT_FOUND, "task not found"));
+
+        if (!task.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "forbidden");
+        }
+
+        Path reportPath = resolveTaskWorkspacePath(taskId).resolve("delivery_report.json");
+        if (!Files.exists(reportPath)) {
+            throw new BusinessException(ErrorCodes.DELIVERY_REPORT_NOT_FOUND, "delivery_report.json not found");
+        }
+        try {
+            String json = Files.readString(reportPath, StandardCharsets.UTF_8);
+            return objectMapper.readValue(json, DeliveryReportResult.class);
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCodes.INTERNAL_ERROR, "failed to parse delivery_report.json");
         }
     }
 

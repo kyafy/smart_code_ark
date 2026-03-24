@@ -87,4 +87,129 @@ class PackageStepTest {
             assertThat(names).contains("backend/mvnw");
         }
     }
+
+    @Test
+    void execute_shouldHandleNextjsRootWorkspace() throws Exception {
+        ArtifactRepository artifactRepository = mock(ArtifactRepository.class);
+        when(artifactRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        PackageStep step = new PackageStep(artifactRepository, new ObjectMapper());
+
+        Path workspace = tempDir.resolve("task-next");
+        Files.createDirectories(workspace.resolve("app"));
+        Files.writeString(workspace.resolve("package.json"), "{\"name\":\"next-app\"}", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve("next.config.ts"), "export default {}", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve("docker-compose.yml"), "services:\n  mysql:\n    image: mysql:8.4\n", StandardCharsets.UTF_8);
+
+        AgentExecutionContext context = new AgentExecutionContext();
+        TaskEntity task = new TaskEntity();
+        task.setId("task-next");
+        task.setProjectId("p-next");
+        context.setTask(task);
+        context.setWorkspaceDir(workspace);
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"stack\":{\"backend\":\"nextjs\",\"frontend\":\"nextjs\"}}");
+        context.setSpec(spec);
+
+        step.execute(context);
+
+        assertThat(Files.exists(workspace.resolve("Dockerfile"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("app/layout.tsx"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("scripts/start.sh"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("index.html"))).isFalse();
+        assertThat(Files.exists(workspace.resolve("vite.config.ts"))).isFalse();
+    }
+
+    @Test
+    void execute_shouldFillFastapiBackendDeliveryFiles() throws Exception {
+        ArtifactRepository artifactRepository = mock(ArtifactRepository.class);
+        when(artifactRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        PackageStep step = new PackageStep(artifactRepository, new ObjectMapper());
+
+        Path workspace = tempDir.resolve("task-fastapi");
+        Files.createDirectories(workspace.resolve("backend"));
+        Files.createDirectories(workspace.resolve("frontend/src"));
+        Files.writeString(workspace.resolve("frontend/package.json"), "{\"name\":\"frontend\"}", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve("docker-compose.yml"), "services:\n  mysql:\n    image: mysql:8.4\n", StandardCharsets.UTF_8);
+
+        AgentExecutionContext context = new AgentExecutionContext();
+        TaskEntity task = new TaskEntity();
+        task.setId("task-fastapi");
+        task.setProjectId("p-fastapi");
+        context.setTask(task);
+        context.setWorkspaceDir(workspace);
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"stack\":{\"backend\":\"fastapi\",\"frontend\":\"vue3\"}}");
+        context.setSpec(spec);
+
+        step.execute(context);
+
+        assertThat(Files.exists(workspace.resolve("backend/requirements.txt"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("backend/app/main.py"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("backend/Dockerfile"))).isTrue();
+        assertThat(Files.readString(workspace.resolve("backend/Dockerfile"), StandardCharsets.UTF_8))
+                .contains("python:3.12-slim")
+                .contains("uvicorn");
+    }
+
+    @Test
+    void execute_shouldHandleNextjsFrontendSubdirectory() throws Exception {
+        ArtifactRepository artifactRepository = mock(ArtifactRepository.class);
+        when(artifactRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        PackageStep step = new PackageStep(artifactRepository, new ObjectMapper());
+
+        Path workspace = tempDir.resolve("task-fastapi-next");
+        Files.createDirectories(workspace.resolve("backend"));
+        Files.createDirectories(workspace.resolve("frontend"));
+        Files.writeString(workspace.resolve("docker-compose.yml"), "services:\n  mysql:\n    image: mysql:8.4\n", StandardCharsets.UTF_8);
+
+        AgentExecutionContext context = new AgentExecutionContext();
+        TaskEntity task = new TaskEntity();
+        task.setId("task-fastapi-next");
+        task.setProjectId("p-fastapi-next");
+        context.setTask(task);
+        context.setWorkspaceDir(workspace);
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"stack\":{\"backend\":\"fastapi\",\"frontend\":\"nextjs\"}}");
+        context.setSpec(spec);
+
+        step.execute(context);
+
+        assertThat(Files.exists(workspace.resolve("frontend/package.json"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("frontend/next.config.ts"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("frontend/app/layout.tsx"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("next.config.ts"))).isFalse();
+        assertThat(Files.exists(workspace.resolve("app/layout.tsx"))).isFalse();
+    }
+
+    @Test
+    void execute_shouldFillDjangoBackendDeliveryFiles() throws Exception {
+        ArtifactRepository artifactRepository = mock(ArtifactRepository.class);
+        when(artifactRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        PackageStep step = new PackageStep(artifactRepository, new ObjectMapper());
+
+        Path workspace = tempDir.resolve("task-django");
+        Files.createDirectories(workspace.resolve("backend"));
+        Files.createDirectories(workspace.resolve("frontend/src"));
+        Files.writeString(workspace.resolve("frontend/package.json"), "{\"name\":\"frontend\"}", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve("docker-compose.yml"), "services:\n  mysql:\n    image: mysql:8.4\n", StandardCharsets.UTF_8);
+
+        AgentExecutionContext context = new AgentExecutionContext();
+        TaskEntity task = new TaskEntity();
+        task.setId("task-django");
+        task.setProjectId("p-django");
+        context.setTask(task);
+        context.setWorkspaceDir(workspace);
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"stack\":{\"backend\":\"django\",\"frontend\":\"vue3\"}}");
+        context.setSpec(spec);
+
+        step.execute(context);
+
+        assertThat(Files.exists(workspace.resolve("backend/requirements.txt"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("backend/manage.py"))).isTrue();
+        assertThat(Files.exists(workspace.resolve("backend/config/settings.py"))).isTrue();
+        assertThat(Files.readString(workspace.resolve("backend/Dockerfile"), StandardCharsets.UTF_8))
+                .contains("python manage.py migrate")
+                .contains("runserver 0.0.0.0:8000");
+    }
 }

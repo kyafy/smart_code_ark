@@ -27,6 +27,11 @@ public final class ErrorCodes {
     public static final int PREVIEW_CONCURRENCY_LIMIT = 3106;
     public static final int DELIVERY_REPORT_NOT_FOUND = 3201;
     public static final int DELIVERY_VALIDATE_STATE_INVALID = 3202;
+    public static final int TEMPLATE_NOT_FOUND = 3203;
+    public static final int TEMPLATE_REQUIRED_FOR_DELIVERABLE = 3204;
+    public static final int BUILD_VERIFY_FAILED = 3205;
+    public static final int DELIVERY_LEVEL_DOWNGRADED = 3206;
+    public static final int RUNTIME_SMOKE_TEST_FAILED = 3207;
 
     // RAG 错误码 (4xxx)
     public static final int RAG_EMBEDDING_FAILED = 4001;

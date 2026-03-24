@@ -1,0 +1,155 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", "PingFang SC", sans-serif;
+  background:
+    linear-gradient(135deg, rgba(18, 181, 203, 0.18), transparent 30%),
+    radial-gradient(circle at right top, rgba(255, 120, 76, 0.18), transparent 28%),
+    #f5f8fc;
+  color: #16202f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+a {
+  color: inherit;
+}
+
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 48px 20px 80px;
+}
+
+.hero {
+  margin-bottom: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: #ff6a3d;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(34px, 6vw, 64px);
+}
+
+.hero p {
+  max-width: 720px;
+  color: #506176;
+  font-size: 18px;
+}
+
+.grid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 1.1fr 0.9fr;
+}
+
+.panel {
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(22, 32, 47, 0.08);
+  border-radius: 28px;
+  padding: 24px;
+  box-shadow: 0 20px 50px rgba(22, 32, 47, 0.08);
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+.metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: #eef9f8;
+  color: #0a8663;
+  font-weight: 700;
+}
+
+.todo-list {
+  list-style: none;
+  padding: 0;
+  margin: 18px 0 0;
+  display: grid;
+  gap: 12px;
+}
+
+.todo-item {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: #f8fbff;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.todo-item strong {
+  display: block;
+}
+
+.muted {
+  color: #617186;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #fff4e8;
+  color: #b55a00;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  border: 1px solid #d5dfec;
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: #fff;
+  font: inherit;
+}
+
+.textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.button {
+  border: 0;
+  border-radius: 16px;
+  padding: 12px 18px;
+  font: inherit;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #ff6a3d, #ff9f47);
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

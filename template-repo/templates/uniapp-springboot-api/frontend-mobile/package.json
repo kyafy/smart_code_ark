@@ -1,0 +1,22 @@
+{
+  "name": "__PROJECT_NAME__-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:h5": "vite --port 5174",
+    "build:h5": "vite build",
+    "type-check": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-5000420260318001",
+    "vue": "3.4.21"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "3.4.28",
+    "@dcloudio/vite-plugin-uni": "3.0.0-5000420260318001",
+    "typescript": "^5.8.3",
+    "vite": "5.2.8",
+    "vue-tsc": "^2.2.4"
+  }
+}

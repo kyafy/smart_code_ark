@@ -44,6 +44,18 @@ public class TaskEntity {
     @Column(name = "instructions", columnDefinition = "TEXT")
     private String instructions;
 
+    @Column(name = "delivery_level_requested", length = 32)
+    private String deliveryLevelRequested;
+
+    @Column(name = "delivery_level_actual", length = 32)
+    private String deliveryLevelActual;
+
+    @Column(name = "delivery_status", length = 32)
+    private String deliveryStatus;
+
+    @Column(name = "template_id", length = 128)
+    private String templateId;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -152,6 +164,38 @@ public class TaskEntity {
 
     public void setInstructions(String instructions) {
         this.instructions = instructions;
+    }
+
+    public String getDeliveryLevelRequested() {
+        return deliveryLevelRequested;
+    }
+
+    public void setDeliveryLevelRequested(String deliveryLevelRequested) {
+        this.deliveryLevelRequested = truncate(deliveryLevelRequested, 32);
+    }
+
+    public String getDeliveryLevelActual() {
+        return deliveryLevelActual;
+    }
+
+    public void setDeliveryLevelActual(String deliveryLevelActual) {
+        this.deliveryLevelActual = truncate(deliveryLevelActual, 32);
+    }
+
+    public String getDeliveryStatus() {
+        return deliveryStatus;
+    }
+
+    public void setDeliveryStatus(String deliveryStatus) {
+        this.deliveryStatus = truncate(deliveryStatus, 32);
+    }
+
+    public String getTemplateId() {
+        return templateId;
+    }
+
+    public void setTemplateId(String templateId) {
+        this.templateId = truncate(templateId, 128);
     }
 
     private static String truncate(String value, int maxLen) {
