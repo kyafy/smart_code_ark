@@ -5,21 +5,29 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
+import com.smartark.gateway.common.exception.BusinessException;
+import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.db.entity.PaperOutlineVersionEntity;
 import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.service.ModelService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 @Component
 public class QualityRewriteStep implements AgentStep {
+    private static final Logger logger = LoggerFactory.getLogger(QualityRewriteStep.class);
     private final ModelService modelService;
     private final PaperTopicSessionRepository paperTopicSessionRepository;
     private final PaperOutlineVersionRepository paperOutlineVersionRepository;
@@ -56,6 +64,10 @@ public class QualityRewriteStep implements AgentStep {
         JsonNode qualityRoot = parseObject(version.getQualityReportJson());
         int score = readScore(qualityRoot);
         List<String> issues = readIssues(qualityRoot.path("issues"));
+        ObjectNode stableManuscript = parseObject(version.getManuscriptJson());
+        StructureExpectation structureExpectation = buildStructureExpectation(parseObject(version.getOutlineJson()));
+        validateStructureExpectation(structureExpectation, context.getTask().getId());
+        StructureCoverage beforeCoverage = evaluateStructureCoverage(stableManuscript.path("chapters"), structureExpectation);
 
         int rewriteRound = version.getRewriteRound() == null ? 0 : version.getRewriteRound();
         boolean shouldRewrite = score > 0 && score < scoreThreshold && rewriteRound < maxRewriteRounds;
@@ -67,11 +79,26 @@ public class QualityRewriteStep implements AgentStep {
                     session.getTopicRefined(),
                     version.getCitationStyle(),
                     qualityRoot,
-                    parseObject(version.getManuscriptJson())
+                    stableManuscript
             );
             JsonNode manuscript = rewritten.path("manuscript");
             if (!manuscript.isMissingNode() && !manuscript.isNull()) {
-                version.setManuscriptJson(objectMapper.writeValueAsString(manuscript));
+                StructureCoverage afterCoverage = evaluateStructureCoverage(manuscript.path("chapters"), structureExpectation);
+                boolean structureRegression = isStructureRegression(beforeCoverage, afterCoverage);
+                boolean allowWrite = isPreCommitPass(afterCoverage, structureExpectation) && !structureRegression;
+                if (allowWrite) {
+                    version.setManuscriptJson(objectMapper.writeValueAsString(manuscript));
+                    logGuardProbe(context, "precommit", beforeCoverage, afterCoverage, "allow_write", "none", null, null);
+                } else {
+                    String errorCode = structureRegression
+                            ? "PAPER_PRECOMMIT_REWRITE_REGRESSION"
+                            : "PAPER_PRECOMMIT_COVERAGE_FAILED";
+                    String errorMessage = structureRegression
+                            ? "quality_rewrite 写回前复检未通过: rewrite 结构回退"
+                            : "quality_rewrite 写回前复检未通过: coverage 不达标";
+                    logGuardProbe(context, "precommit", beforeCoverage, afterCoverage, "block_write",
+                            "keep_previous_stable", errorCode, errorMessage);
+                }
             }
             JsonNode appliedIssues = rewritten.path("appliedIssues");
             if (appliedIssues.isArray()) {
@@ -141,5 +168,141 @@ public class QualityRewriteStep implements AgentStep {
             }
         });
         return issues;
+    }
+
+    private StructureExpectation buildStructureExpectation(ObjectNode outlineRoot) {
+        JsonNode chapters = outlineRoot.path("chapters");
+        if (!chapters.isArray()) {
+            return new StructureExpectation(0, new LinkedHashMap<>(), 0);
+        }
+        Map<Integer, Integer> expectedSections = new LinkedHashMap<>();
+        int chapterIndex = 0;
+        int totalSections = 0;
+        for (JsonNode chapter : chapters) {
+            int chapterSections = 0;
+            JsonNode sections = chapter.path("sections");
+            if (sections.isArray()) {
+                for (JsonNode section : sections) {
+                    JsonNode subsections = section.path("subsections");
+                    if (subsections.isArray() && !subsections.isEmpty()) {
+                        chapterSections += subsections.size();
+                    } else {
+                        chapterSections += 1;
+                    }
+                }
+            }
+            expectedSections.put(chapterIndex, chapterSections);
+            totalSections += chapterSections;
+            chapterIndex++;
+        }
+        return new StructureExpectation(chapters.size(), expectedSections, totalSections);
+    }
+
+    private void validateStructureExpectation(StructureExpectation expectation, String taskId) {
+        boolean invalid = expectation.expectedChapterCount() <= 0
+                || expectation.expectedSectionCountTotal() <= 0
+                || expectation.expectedSectionCountPerChapter().size() != expectation.expectedChapterCount()
+                || expectation.expectedSectionCountPerChapter().values().stream().anyMatch(count -> count == null || count <= 0);
+        if (!invalid) {
+            return;
+        }
+        String message = "quality_rewrite 生成前约束输入无效";
+        logger.warn("paper_guard taskId={}, stepCode=quality_rewrite, guardStage=precheck, decision=block_write, fallbackAction=task_failed, errorCode=PAPER_PRECHECK_INVALID_INPUT, message={}",
+                taskId, message);
+        throw new BusinessException(ErrorCodes.TASK_VALIDATION_ERROR, message);
+    }
+
+    private StructureCoverage evaluateStructureCoverage(JsonNode manuscriptChapters, StructureExpectation expectation) {
+        int generatedChapterCount = manuscriptChapters != null && manuscriptChapters.isArray() ? manuscriptChapters.size() : 0;
+        int generatedSectionCount = 0;
+        int matchedSectionCount = 0;
+        if (manuscriptChapters != null && manuscriptChapters.isArray()) {
+            int chapterIndex = 0;
+            for (JsonNode chapter : manuscriptChapters) {
+                JsonNode sections = chapter.path("sections");
+                int actualSections = sections.isArray() ? sections.size() : 0;
+                generatedSectionCount += actualSections;
+                Integer expectedSections = expectation.expectedSectionCountPerChapter().get(chapterIndex);
+                if (expectedSections != null && expectedSections > 0) {
+                    matchedSectionCount += Math.min(actualSections, expectedSections);
+                }
+                chapterIndex++;
+            }
+        }
+        double chapterCoverage = expectation.expectedChapterCount() <= 0
+                ? 0D
+                : (double) generatedChapterCount / (double) expectation.expectedChapterCount();
+        double sectionCoverage = expectation.expectedSectionCountTotal() <= 0
+                ? 0D
+                : (double) matchedSectionCount / (double) expectation.expectedSectionCountTotal();
+        return new StructureCoverage(generatedChapterCount, generatedSectionCount, matchedSectionCount, chapterCoverage, sectionCoverage);
+    }
+
+    private boolean isPreCommitPass(StructureCoverage coverage, StructureExpectation expectation) {
+        return coverage.generatedChapterCount() == expectation.expectedChapterCount()
+                && coverage.matchedSectionCount() == expectation.expectedSectionCountTotal()
+                && coverage.chapterCoverage() >= 1.0D
+                && coverage.sectionCoverage() >= 1.0D;
+    }
+
+    private boolean isStructureRegression(StructureCoverage before, StructureCoverage after) {
+        final double epsilon = 1e-9;
+        if (after.generatedChapterCount() < before.generatedChapterCount()) {
+            return true;
+        }
+        if (after.generatedSectionCount() < before.generatedSectionCount()) {
+            return true;
+        }
+        if (after.chapterCoverage() + epsilon < before.chapterCoverage()) {
+            return true;
+        }
+        return after.sectionCoverage() + epsilon < before.sectionCoverage();
+    }
+
+    private void logGuardProbe(AgentExecutionContext context,
+                               String guardStage,
+                               StructureCoverage beforeCoverage,
+                               StructureCoverage afterCoverage,
+                               String decision,
+                               String fallbackAction,
+                               String errorCode,
+                               String errorMessage) {
+        logger.info("paper_guard taskId={}, stepCode=quality_rewrite, guardStage={}, chapterCoverageBefore={}, sectionCoverageBefore={}, chapterCoverageAfter={}, sectionCoverageAfter={}, decision={}, fallbackAction={}, errorCode={}, errorMessage={}",
+                context.getTask().getId(),
+                guardStage,
+                formatCoverage(beforeCoverage.chapterCoverage()),
+                formatCoverage(beforeCoverage.sectionCoverage()),
+                formatCoverage(afterCoverage.chapterCoverage()),
+                formatCoverage(afterCoverage.sectionCoverage()),
+                decision,
+                fallbackAction,
+                errorCode == null ? "none" : errorCode,
+                errorMessage == null ? "" : errorMessage);
+        context.logInfo("paper_guard taskId=" + context.getTask().getId()
+                + ", stepCode=quality_rewrite"
+                + ", guardStage=" + guardStage
+                + ", chapterCoverageBefore=" + formatCoverage(beforeCoverage.chapterCoverage())
+                + ", sectionCoverageBefore=" + formatCoverage(beforeCoverage.sectionCoverage())
+                + ", chapterCoverageAfter=" + formatCoverage(afterCoverage.chapterCoverage())
+                + ", sectionCoverageAfter=" + formatCoverage(afterCoverage.sectionCoverage())
+                + ", decision=" + decision
+                + ", fallbackAction=" + fallbackAction
+                + ", errorCode=" + (errorCode == null ? "none" : errorCode));
+    }
+
+    private String formatCoverage(double value) {
+        return String.format(Locale.ROOT, "%.4f", value);
+    }
+
+    private record StructureExpectation(int expectedChapterCount,
+                                        Map<Integer, Integer> expectedSectionCountPerChapter,
+                                        int expectedSectionCountTotal) {
+    }
+
+    private record StructureCoverage(int generatedChapterCount,
+                                     int generatedSectionCount,
+                                     int matchedSectionCount,
+                                     double chapterCoverage,
+                                     double sectionCoverage) {
     }
 }
