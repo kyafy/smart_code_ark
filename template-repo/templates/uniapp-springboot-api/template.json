@@ -13,6 +13,10 @@
     "backendController": "backend/src/main/java/com/smartark/template/mobile/news/NewsController.java",
     "backendEntity": "backend/src/main/java/com/smartark/template/mobile/news/NewsItem.java",
     "backendControllerTest": "backend/src/test/java/com/smartark/template/mobile/news/NewsControllerTest.java",
+    "backendAiClient": "backend/src/main/java/com/smartark/template/mobile/ai/AiClient.java",
+    "backendEmbeddingClient": "backend/src/main/java/com/smartark/template/mobile/ai/EmbeddingClient.java",
+    "backendPromptBuilder": "backend/src/main/java/com/smartark/template/mobile/ai/PromptBuilder.java",
+    "backendAiConfig": "backend/src/main/java/com/smartark/template/mobile/ai/AiConfig.java",
     "frontendPage": "frontend-mobile/src/pages/home/index.vue",
     "frontendApi": "frontend-mobile/src/utils/api.ts"
   }

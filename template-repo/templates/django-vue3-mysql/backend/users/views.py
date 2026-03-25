@@ -20,6 +20,8 @@ def health_view(_: HttpRequest) -> JsonResponse:
 @csrf_exempt
 def users_view(request: HttpRequest) -> JsonResponse:
     if request.method == "GET":
+        # Serialize records explicitly instead of relying on magic helpers so
+        # the response shape stays obvious to generated follow-up code.
         payload = [
             {
                 "id": user.id,
@@ -32,6 +34,8 @@ def users_view(request: HttpRequest) -> JsonResponse:
         return JsonResponse(payload, safe=False)
 
     if request.method == "POST":
+        # Keep parsing and validation close to the write path so new business
+        # rules are easy to add in one readable block.
         body = json.loads(request.body.decode("utf-8") or "{}")
         name = str(body.get("name", "")).strip()
         email = str(body.get("email", "")).strip()
@@ -40,6 +44,7 @@ def users_view(request: HttpRequest) -> JsonResponse:
         try:
             user = UserRecord.objects.create(name=name, email=email)
         except IntegrityError:
+            # Turn DB uniqueness failures into an API-level business message.
             return JsonResponse({"detail": "Email already exists"}, status=400)
         return JsonResponse(
             {

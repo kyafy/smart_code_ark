@@ -34,6 +34,12 @@ public class TemplateRepoService {
             ".vue", ".html", ".yml", ".yaml", ".properties", ".sql", ".java", ".xml", ".env",
             ".example", ".sh", ".ps1", ".gitignore", ".prisma", ".py", ".cfg", ".toml"
     );
+    private static final List<String> BACKEND_AI_EXAMPLE_KEYS = List.of(
+            "backendAiClient",
+            "backendEmbeddingClient",
+            "backendPromptBuilder",
+            "backendAiConfig"
+    );
 
     private final ObjectMapper objectMapper;
     private final String configuredRoot;
@@ -324,6 +330,20 @@ public class TemplateRepoService {
                 String content = readTemplateFileContent(selection, path);
                 if (content != null) {
                     related.append("// --- ").append(key).append(" ---\n").append(content).append("\n\n");
+                }
+            }
+        }
+        if (primaryKey.startsWith("backend")) {
+            for (String key : BACKEND_AI_EXAMPLE_KEYS) {
+                if (primaryKey.equals(key)) {
+                    continue;
+                }
+                String path = examples.get(key);
+                if (path != null) {
+                    String content = readTemplateFileContent(selection, path);
+                    if (content != null) {
+                        related.append("// --- ").append(key).append(" ---\n").append(content).append("\n\n");
+                    }
                 }
             }
         }

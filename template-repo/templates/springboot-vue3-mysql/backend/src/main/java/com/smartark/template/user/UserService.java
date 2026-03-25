@@ -20,10 +20,14 @@ public class UserService {
 
     @Transactional
     public UserEntity create(CreateUserRequest request) {
+        // Keep business uniqueness rules in the service layer so generated
+        // services have a clear place to enforce domain constraints.
         userRepository.findByEmail(request.email()).ifPresent(user -> {
             throw new IllegalArgumentException("Email already exists");
         });
 
+        // Map the validated request into an entity in one compact block.
+        // This keeps field assignment readable when future fields are added.
         UserEntity entity = new UserEntity();
         entity.setName(request.name());
         entity.setEmail(request.email());

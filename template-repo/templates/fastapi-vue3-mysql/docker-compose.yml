@@ -27,6 +27,13 @@ services:
       DB_NAME: ${MYSQL_DATABASE:-app_db}
       DB_USER: ${MYSQL_USER:-app}
       DB_PASSWORD: ${MYSQL_PASSWORD:-app123456}
+      AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-qwen-plus}
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-text-embedding-v3}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-60}
+      AI_MAX_TOKENS: ${AI_MAX_TOKENS:-4096}
+      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.7}
     depends_on:
       mysql:
         condition: service_healthy

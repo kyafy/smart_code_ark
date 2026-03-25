@@ -12,9 +12,21 @@ public class NewsController {
 
     @GetMapping
     public List<NewsItem> listNews() {
+        // Keep the first mobile example endpoint static and easy to read so the
+        // generated project has a working API before real storage is added.
         return List.of(
-                new NewsItem(1L, "欢迎使用模板仓库", "这是一个适合作为 UniApp 首屏骨架的接口示例。", "查看详情"),
-                new NewsItem(2L, "下一步建议", "接入登录、配置环境变量，并替换为你的真实业务接口。", "开始改造")
+                new NewsItem(
+                        1L,
+                        "Welcome To The Starter Template",
+                        "This endpoint gives the mobile homepage a simple API example to render immediately.",
+                        "View Details"
+                ),
+                new NewsItem(
+                        2L,
+                        "Suggested Next Step",
+                        "Replace this mock feed with your own business API after login, environment, and routing are ready.",
+                        "Start Customizing"
+                )
         );
     }
 }

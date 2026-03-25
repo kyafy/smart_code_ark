@@ -2,6 +2,8 @@ import { prisma } from '@/lib/prisma'
 import { NextResponse } from 'next/server'
 
 export async function GET() {
+  // Keep list handlers compact in the template so generated route code has a
+  // clean example of query-then-return flow.
   const todos = await prisma.todo.findMany({
     orderBy: {
       createdAt: 'desc'
@@ -17,6 +19,8 @@ export async function POST(request: Request) {
     description?: string
   }
 
+  // Validate the key business rule before the database write so route behavior
+  // stays obvious as more fields are added later.
   if (!payload.title?.trim()) {
     return NextResponse.json({ message: 'title is required' }, { status: 400 })
   }

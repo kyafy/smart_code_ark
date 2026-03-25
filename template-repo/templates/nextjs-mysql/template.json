@@ -11,6 +11,10 @@
   },
   "exampleFiles": {
     "backendController": "app/api/todos/route.ts",
+    "backendAiClient": "lib/ai/AiClient.ts",
+    "backendEmbeddingClient": "lib/ai/EmbeddingClient.ts",
+    "backendPromptBuilder": "lib/ai/PromptBuilder.ts",
+    "backendAiConfig": "lib/ai/AiConfig.ts",
     "frontendPage": "app/page.tsx",
     "frontendComponent": "components/create-todo-form.tsx",
     "frontendApi": "lib/prisma.ts",

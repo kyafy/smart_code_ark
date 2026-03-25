@@ -1,2 +1,11 @@
 server:
   port: ${SERVER_PORT:8081}
+
+ai:
+  base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+  api-key: ${AI_API_KEY:}
+  model: ${AI_MODEL:qwen-plus}
+  embedding-model: ${AI_EMBEDDING_MODEL:text-embedding-v3}
+  timeout-seconds: ${AI_TIMEOUT_SECONDS:60}
+  max-tokens: ${AI_MAX_TOKENS:4096}
+  temperature: ${AI_TEMPERATURE:0.7}

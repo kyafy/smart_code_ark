@@ -410,8 +410,29 @@ public class ModelService {
             String defaultUserPrompt = "PRD内容：\n{{prd}}\n\n额外指令：\n{{instructions}}";
 
             PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey).orElse(null);
-            String systemPrompt = defaultSystemPrompt;
-            String userPrompt = defaultUserPrompt;
+            String systemPrompt =
+                    "你是经验丰富的全栈工程师。请根据 PRD、技术栈和目标文件路径生成完整文件内容。\n" +
+                    "文件路径：{{filePath}}\n" +
+                    "技术栈：{{techStack}}\n" +
+                    "要求：\n" +
+                    "1. 输出完整可运行实现，不要只写骨架、TODO、占位符或伪代码。\n" +
+                    "2. 把 PRD 中的业务对象、字段、流程和约束真正落实到代码里。\n" +
+                    "3. 代码要优先保证可读性：命名清晰、层次分明、控制流程直观。\n" +
+                    "4. 只在复杂逻辑、边界条件、关键业务规则前添加必要注释，避免逐行废话式注释。\n" +
+                    "5. 如果是接口层，要体现参数校验、错误处理和返回结构；如果是数据层，要体现字段、约束和必要关系。\n" +
+                    "6. 直接输出文件内容，不要输出 Markdown 代码块，除非目标文件本身就是 Markdown。\n" +
+                    "项目文件结构（{{currentGroup}}组）：\n{{projectStructure}}\n" +
+                    "如果目标文件是代码文件，请确保结果可以直接编译或运行。";
+            String userPrompt =
+                    "PRD 内容：\n{{prd}}\n\n" +
+                    "额外指令：\n{{instructions}}\n\n" +
+                    "输出要求：\n" +
+                    "1. 至少体现 2 个明确的业务字段、业务规则或业务状态。\n" +
+                    "2. 对不直观的实现补充简洁注释，帮助后续维护者快速理解意图。\n" +
+                    "3. 对简单赋值、简单 getter/setter、显而易见的框架样板不要滥加注释。\n" +
+                    "4. 如果是接口层，补齐参数校验、错误分支和合理返回。\n" +
+                    "5. 如果是数据层，补齐实体字段、约束、关系或迁移语义。\n" +
+                    "6. 不要输出空文件或只有脚手架意味的模板代码。";
             if (resolvedPrompt != null) {
                 versionNo = resolvedPrompt.version().getVersionNo();
                 if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
@@ -522,8 +543,30 @@ public class ModelService {
             String defaultUserPrompt = "PRD内容：\n{{prd}}\n\n额外指令：\n{{instructions}}\n\n输出要求：\n1) 必须体现至少2个业务字段或业务规则；\n2) 如果是接口层需包含参数校验与错误处理；\n3) 如果是数据层需体现实体字段与约束；\n4) 不能只输出项目脚手架样例。";
 
             PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey).orElse(null);
-            String systemPrompt = defaultSystemPrompt;
-            String userPrompt = defaultUserPrompt;
+            String systemPrompt =
+                    "你是经验丰富的全栈工程师。请基于下面的模板示例代码生成目标文件，并保持项目内风格一致。\n" +
+                    "你需要继承示例中的：目录组织、命名风格、依赖使用方式、异常处理模式、DTO/Schema 设计以及 API 调用习惯。\n" +
+                    "同时请确保生成结果更易读：\n" +
+                    "1. 结构清晰，先给出核心入口，再展开细节实现。\n" +
+                    "2. 复杂分支、关键业务规则和非直观实现前补充简洁注释。\n" +
+                    "3. 不要为了凑注释而解释显而易见的代码。\n\n" +
+                    "=== 模板示例代码（主文件）===\n{{exampleCode}}\n\n" +
+                    "=== 模板相关文件 ===\n{{relatedExamples}}\n\n" +
+                    "文件路径：{{filePath}}\n" +
+                    "技术栈：{{techStack}}\n" +
+                    "项目文件结构（{{currentGroup}}组）：\n{{projectStructure}}\n\n" +
+                    "直接输出文件内容，不要输出 Markdown 代码块，除非目标文件本身就是 Markdown。\n" +
+                    "确保最终代码可以直接编译或运行，并与示例的 import、组织方式和工程风格保持一致。";
+            String userPrompt =
+                    "PRD 内容：\n{{prd}}\n\n" +
+                    "额外指令：\n{{instructions}}\n\n" +
+                    "输出要求：\n" +
+                    "1. 至少体现 2 个明确的业务字段、业务规则或业务状态。\n" +
+                    "2. 如果是接口层，补齐参数校验、错误处理和返回结构。\n" +
+                    "3. 如果是数据层，补齐字段、约束、关系或迁移语义。\n" +
+                    "4. 严格参考模板示例的代码风格和组织结构，但不要机械复制无关业务。\n" +
+                    "5. 对关键规则和不直观实现补充必要注释，帮助维护者快速阅读。\n" +
+                    "6. 不要输出空实现、脚手架占位代码或只有函数签名的文件。";
             if (resolvedPrompt != null) {
                 versionNo = resolvedPrompt.version().getVersionNo();
                 if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
