@@ -30,6 +30,7 @@ public class ModelRouterService {
     private final ModelCredentialCryptoService credentialCryptoService;
     private final String defaultChatModel;
     private final String defaultCodeModel;
+    private final String defaultPaperModel;
     private final String defaultEmbeddingModel;
 
     public record ModelConnection(String baseUrl, String apiKey) {
@@ -41,12 +42,14 @@ public class ModelRouterService {
             ModelCredentialCryptoService credentialCryptoService,
             @Value("${smartark.model.chat-model:Qwen3.5-Plus}") String defaultChatModel,
             @Value("${smartark.model.code-model:qwen-plus}") String defaultCodeModel,
+            @Value("${smartark.model.paper-model:Qwen3.5-Plus}") String defaultPaperModel,
             @Value("${smartark.rag.embedding-model:text-embedding-v4}") String defaultEmbeddingModel) {
         this.registryRepository = registryRepository;
         this.usageDailyRepository = usageDailyRepository;
         this.credentialCryptoService = credentialCryptoService;
         this.defaultChatModel = defaultChatModel;
         this.defaultCodeModel = defaultCodeModel;
+        this.defaultPaperModel = defaultPaperModel;
         this.defaultEmbeddingModel = defaultEmbeddingModel;
     }
 
@@ -54,7 +57,7 @@ public class ModelRouterService {
      * Resolve the best available model for the given role.
      * Falls back to application.yml default if no registry entries exist.
      *
-     * @param role "chat" or "code"
+     * @param role "chat", "code", "paper" or "embedding"
      * @return model name to use
      */
     public String resolve(String role) {
@@ -100,6 +103,8 @@ public class ModelRouterService {
         String fallback;
         if ("chat".equals(role)) {
             fallback = defaultChatModel;
+        } else if ("paper".equals(role)) {
+            fallback = defaultPaperModel;
         } else if ("embedding".equals(role)) {
             fallback = defaultEmbeddingModel;
         } else {

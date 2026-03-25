@@ -10,18 +10,15 @@ import com.smartark.gateway.db.entity.PromptHistoryEntity;
 import com.smartark.gateway.db.repo.PromptHistoryRepository;
 import com.smartark.gateway.prompt.PromptRenderer;
 import com.smartark.gateway.prompt.PromptResolver;
+import com.smartark.gateway.service.modelgateway.ModelGatewayEndpoint;
+import com.smartark.gateway.service.modelgateway.ModelGatewayInvocation;
+import com.smartark.gateway.service.modelgateway.ModelGatewayResult;
+import com.smartark.gateway.service.modelgateway.OpenAiCompatibleModelGatewayService;
+import com.smartark.gateway.service.modelgateway.ChatCompletionsCommand;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.ResourceAccessException;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientResponseException;
-
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -60,12 +57,12 @@ public class ModelService {
     }
 
     private final ObjectMapper objectMapper;
-    private final RestClient restClient;
     private final String baseUrl;
     private final String apiKey;
     private final boolean mockEnabled;
     private final String chatModel;
     private final String codeModel;
+    private final String paperModel;
     private final PromptResolver promptResolver;
     private final PromptRenderer promptRenderer;
     private final PromptHistoryRepository promptHistoryRepository;
@@ -73,6 +70,7 @@ public class ModelService {
     private final boolean schemaValidationEnabled;
     private final int correctiveRetryMax;
     private final ModelRouterService modelRouterService;
+    private final OpenAiCompatibleModelGatewayService modelGatewayService;
 
     public ModelService(
             ObjectMapper objectMapper,
@@ -81,11 +79,13 @@ public class ModelService {
             PromptHistoryRepository promptHistoryRepository,
             OutputSchemaValidator outputSchemaValidator,
             ModelRouterService modelRouterService,
+            OpenAiCompatibleModelGatewayService modelGatewayService,
             @Value("${smartark.model.base-url:}") String baseUrl,
             @Value("${smartark.model.api-key:}") String apiKey,
             @Value("${smartark.model.mock-enabled:false}") boolean mockEnabled,
             @Value("${smartark.model.chat-model:Qwen3.5-Plus}") String chatModel,
             @Value("${smartark.model.code-model:qwen-plus}") String codeModel,
+            @Value("${smartark.model.paper-model:Qwen3.5-Plus}") String paperModel,
             @Value("${smartark.model.schema-validation-enabled:true}") boolean schemaValidationEnabled,
             @Value("${smartark.model.corrective-retry-max:2}") int correctiveRetryMax
     ) {
@@ -95,6 +95,7 @@ public class ModelService {
         this.mockEnabled = mockEnabled;
         this.chatModel = chatModel;
         this.codeModel = codeModel;
+        this.paperModel = paperModel;
         this.promptResolver = promptResolver;
         this.promptRenderer = promptRenderer;
         this.promptHistoryRepository = promptHistoryRepository;
@@ -102,7 +103,7 @@ public class ModelService {
         this.schemaValidationEnabled = schemaValidationEnabled;
         this.correctiveRetryMax = Math.max(0, correctiveRetryMax);
         this.modelRouterService = modelRouterService;
-        this.restClient = RestClient.builder().build();
+        this.modelGatewayService = modelGatewayService;
     }
 
     /**
@@ -131,6 +132,27 @@ public class ModelService {
             logger.warn("Preferred code model {} has no registry connection config, fallback to router/env", normalized);
         }
         return resolveCodeModel();
+    }
+
+    /**
+     * Resolve paper model via router (falls back to config default).
+     */
+    private String resolvePaperModel() {
+        return modelRouterService.resolve("paper");
+    }
+
+    private String resolvePaperModel(String preferredModel) {
+        if (preferredModel != null && !preferredModel.isBlank()) {
+            String normalized = preferredModel.trim();
+            if (modelRouterService.resolveConnection(normalized).isPresent()) {
+                return normalized;
+            }
+            if (normalized.equals(paperModel)) {
+                return normalized;
+            }
+            logger.warn("Preferred paper model {} has no registry connection config, fallback to router/env", normalized);
+        }
+        return resolvePaperModel();
     }
 
     /**
@@ -187,93 +209,40 @@ public class ModelService {
         try {
             logger.info("Starting stream chat with model: {}, connectionSource={}", resolvedChat, connection.source());
             List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "system", "content", 
-                "你是智能助手，请帮助用户梳理软件系统需求。在回复用户时，请先以友好的语气进行对话，帮助澄清和完善需求细节。\n" +
-                "当需求逐渐清晰时，请在回复的**最末尾**，严格按照以下 JSON 格式总结当前提取到的所有需求，并使用 ```json 和 ``` 包裹：\n" +
-                "{\n" +
-                "  \"pages\": [\"PC端-登录页\", \"PC端-管理员首页\"],\n" +
-                "  \"title\": \"项目名称\",\n" +
-                "  \"features\": [\"功能点1\", \"功能点2\"],\n" +
-                "  \"coreFlows\": [\"核心流程1\"],\n" +
-                "  \"userRoles\": [\"管理员\", \"用户\"],\n" +
-                "  \"constraints\": [\"约束1\"],\n" +
-                "  \"description\": \"项目概述\",\n" +
-                "  \"technicalRequirements\": [\"技术要求1\"],\n" +
-                "  \"externalApiRequirements\": \"外部API要求\"\n" +
-                "}\n" +
-                "如果还在早期探讨阶段，可以不输出 JSON。"
+            messages.add(Map.of("role", "system", "content",
+                    "You are an assistant helping users clarify software requirements. " +
+                            "When requirements are clear, append a final ```json``` block with keys: " +
+                            "pages, title, features, coreFlows, userRoles, constraints, description, technicalRequirements, externalApiRequirements."
             ));
             if (history != null) {
                 messages.addAll(history);
             }
             messages.add(Map.of("role", "user", "content", userMessage));
 
-            Map<String, Object> payload = Map.of(
-                    "model", resolvedChat,
-                    "messages", messages,
-                    "stream", true
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("model", resolvedChat);
+            payload.put("messages", messages);
+            payload.put("stream", true);
+            ModelGatewayResult result = modelGatewayService.invokeStreaming(
+                    new ModelGatewayInvocation(
+                            ModelGatewayEndpoint.CHAT_COMPLETIONS,
+                            "dashscope",
+                            resolvedChat,
+                            connection.baseUrl(),
+                            connection.apiKey(),
+                            payload,
+                            "chat_stream",
+                            null
+                    ),
+                    onContent);
+            modelRouterService.recordUsage(
+                    resolvedChat,
+                    result.tokenInput() == null ? 0 : Math.max(0, result.tokenInput()),
+                    result.tokenOutput() == null ? 0 : Math.max(0, result.tokenOutput())
             );
-            String url = buildChatCompletionsUrl(connection.baseUrl());
-            logger.debug("Requesting model API: {}", url);
-
-            restClient.post()
-                    .uri(url)
-                    .headers(h -> {
-                        if (!connection.apiKey().isEmpty()) {
-                            h.set("Authorization", "Bearer " + connection.apiKey());
-                        }
-                    })
-                    .body(payload)
-                    .exchange((request, response) -> {
-                        var status = response.getStatusCode();
-                        logger.info("Model API response status: {}", status);
-                        try (InputStream is = response.getBody()) {
-                            if (!status.is2xxSuccessful()) {
-                                String errBody;
-                                try {
-                                    errBody = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-                                } catch (Exception ex) {
-                                    errBody = null;
-                                }
-                                String msg = "模型服务调用失败: " + status;
-                                if (errBody != null && !errBody.isBlank()) {
-                                    msg = msg + " body=" + truncate(errBody.replace("\n", " ").replace("\r", " "), 500);
-                                }
-                                onError.accept(new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, msg));
-                                return null;
-                            }
-                            BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                if (line.startsWith("data: ")) {
-                                    String data = line.substring(6).trim();
-                                    if ("[DONE]".equals(data)) {
-                                        break;
-                                    }
-                                    try {
-                                        JsonNode root = objectMapper.readTree(data);
-                                        String content = root.at("/choices/0/delta/content").asText("");
-                                        if (!content.isEmpty()) {
-                                            onContent.accept(content);
-                                        }
-                                    } catch (Exception e) {
-                                        logger.warn("Failed to parse stream data: {}", data, e);
-                                    }
-                                }
-                            }
-                            onDone.run();
-                        } catch (Exception e) {
-                            logger.error("Error reading stream response", e);
-                            onError.accept(e);
-                        }
-                        return null;
-                    });
+            onDone.run();
         } catch (Exception e) {
             logger.error("Failed to initiate stream request", e);
-            if (e instanceof ResourceAccessException) {
-                onError.accept(new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用超时"));
-                return;
-            }
             onError.accept(e);
         }
     }
@@ -846,7 +815,7 @@ public class ModelService {
                                       String discipline,
                                       String degreeLevel,
                                       String methodPreference) {
-        String modelName = resolveCodeModel();
+        String modelName = resolvePaperModel();
         if (resolveConnectionForModel(modelName) == null) {
             return objectMapper.valueToTree(Map.of(
                     "topicRefined", topic,
@@ -891,7 +860,7 @@ public class ModelService {
                                          String researchQuestionsJson,
                                          JsonNode sources,
                                          JsonNode ragEvidence) {
-        String modelName = resolveCodeModel();
+        String modelName = resolvePaperModel();
         if (resolveConnectionForModel(modelName) == null) {
             return objectMapper.valueToTree(Map.of(
                     "researchQuestions", List.of("研究问题1", "研究问题2"),
@@ -939,7 +908,7 @@ public class ModelService {
                                              JsonNode outlineJson,
                                              JsonNode ragEvidence,
                                              String chapterEvidenceMapJson) {
-        String modelName = resolveCodeModel();
+        String modelName = resolvePaperModel();
         if (resolveConnectionForModel(modelName) == null) {
             return normalizeQualityReport(objectMapper.valueToTree(Map.of(
                     "logicClosedLoop", true,
@@ -1008,7 +977,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_expand";
         int versionNo = ragEvidence != null ? 3 : 1;
-        String modelName = resolveCodeModel();
+        String modelName = resolvePaperModel();
         if (resolveConnectionForModel(modelName) == null) {
             return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);
         }
@@ -1051,7 +1020,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_expand_batch";
         int versionNo = 1;
-        String modelName = resolveCodeModel();
+        String modelName = resolvePaperModel();
         if (resolveConnectionForModel(modelName) == null) {
             return objectMapper.valueToTree(Map.of(
                     "chapters", batchOutlineJson == null ? List.of() : batchOutlineJson.path("chapters"),
@@ -1093,7 +1062,7 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_quality_rewrite";
         int versionNo = 1;
-        String modelName = resolveCodeModel();
+        String modelName = resolvePaperModel();
         if (resolveConnectionForModel(modelName) == null) {
             return fallbackRewriteResult(manuscriptJson, qualityReportJson);
         }
@@ -1134,7 +1103,7 @@ public class ModelService {
         if (resolvedPrompt != null) {
             versionNo = resolvedPrompt.version().getVersionNo();
             if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
-                modelName = resolveCodeModel(resolvedPrompt.version().getModel());
+                modelName = resolvePaperModel(resolvedPrompt.version().getModel());
             }
             if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
                 systemPrompt = resolvedPrompt.version().getSystemPrompt();
@@ -1270,23 +1239,24 @@ public class ModelService {
     }
 
     private String callModelApi(Map<String, Object> payload, String effectiveBaseUrl, String effectiveApiKey) {
-        String url = buildChatCompletionsUrl(effectiveBaseUrl);
+        Integer timeoutMs = null;
+        Map<String, Object> sanitizedPayload = new LinkedHashMap<>(payload);
         try {
-            return restClient.post()
-                    .uri(url)
-                    .headers(h -> {
-                        if (effectiveApiKey != null && !effectiveApiKey.isBlank()) {
-                            h.set("Authorization", "Bearer " + effectiveApiKey.trim());
-                        }
-                    })
-                    .body(payload)
-                    .retrieve()
-                    .body(String.class);
-        } catch (ResourceAccessException e) {
-            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败(ResourceAccessException): " + detailMessage(e));
-        } catch (RestClientResponseException e) {
-            String body = truncate(e.getResponseBodyAsString(), 300);
-            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败(HTTP " + e.getStatusCode().value() + "): " + body);
+            Object timeoutValue = sanitizedPayload.remove("timeout_ms");
+            if (timeoutValue instanceof Number n) {
+                timeoutMs = n.intValue();
+            }
+            ChatCompletionsCommand command = ChatCompletionsCommand.fromLegacyPayload(sanitizedPayload);
+            ModelGatewayResult result = modelGatewayService.invoke(new ModelGatewayInvocation(
+                    ModelGatewayEndpoint.CHAT_COMPLETIONS,
+                    "dashscope",
+                    command.model(),
+                    effectiveBaseUrl,
+                    effectiveApiKey,
+                    command.toPayload(),
+                    "model_service_sync",
+                    timeoutMs));
+            return result.body();
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -1294,16 +1264,6 @@ public class ModelService {
         }
     }
 
-    private String buildChatCompletionsUrl(String rawBaseUrl) {
-        if (rawBaseUrl == null || rawBaseUrl.isBlank()) {
-            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败: baseUrl 为空");
-        }
-        String normalized = rawBaseUrl.trim();
-        if (normalized.endsWith("/v1/") || normalized.endsWith("/v1")) {
-            return normalized.endsWith("/") ? normalized + "chat/completions" : normalized + "/chat/completions";
-        }
-        return normalized.endsWith("/") ? normalized + "v1/chat/completions" : normalized + "/v1/chat/completions";
-    }
 
     private Integer extractHttpStatus(String message) {
         if (message == null || message.isBlank()) {

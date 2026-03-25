@@ -19,6 +19,14 @@ public final class ErrorCodes {
     public static final int TASK_IO_ERROR = 3005;
     public static final int TASK_VALIDATION_ERROR = 3006;
     public static final int TASK_CANCELLED = 3007;
+    public static final int MODEL_CONFIG_MISSING = 3008;
+    public static final int MODEL_BAD_REQUEST = 3009;
+    public static final int MODEL_AUTH_FAILED = 3010;
+    public static final int MODEL_RATE_LIMITED = 3011;
+    public static final int MODEL_UPSTREAM_UNAVAILABLE = 3012;
+    public static final int MODEL_UPSTREAM_TIMEOUT = 3013;
+    public static final int MODEL_OUTPUT_EMPTY = 3014;
+    public static final int MODEL_UNSUPPORTED_OPERATION = 3015;
     public static final int PREVIEW_BUILD_FAILED = 3101;
     public static final int PREVIEW_START_FAILED = 3102;
     public static final int PREVIEW_PROXY_FAILED = 3103;
@@ -39,8 +47,8 @@ public final class ErrorCodes {
     public static final int RAG_QDRANT_UNAVAILABLE = 4003;
     public static final int RAG_INDEX_FAILED = 4004;
     public static final int RAG_RETRIEVE_FAILED = 4005;
-    public static final int TASK_RAG_ERROR = 3008;
-    public static final int MODEL_OUTPUT_SCHEMA_VIOLATION = 3009;
+    public static final int TASK_RAG_ERROR = 3016;
+    public static final int MODEL_OUTPUT_SCHEMA_VIOLATION = 3017;
 
     public static final int INTERNAL_ERROR = 9000;
 

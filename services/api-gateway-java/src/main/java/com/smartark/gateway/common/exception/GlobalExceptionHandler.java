@@ -26,6 +26,14 @@ public class GlobalExceptionHandler {
             case ErrorCodes.TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case ErrorCodes.QUOTA_INSUFFICIENT -> HttpStatus.PAYMENT_REQUIRED;
             case ErrorCodes.MODEL_SERVICE_ERROR -> HttpStatus.BAD_GATEWAY;
+            case ErrorCodes.MODEL_CONFIG_MISSING -> HttpStatus.INTERNAL_SERVER_ERROR;
+            case ErrorCodes.MODEL_BAD_REQUEST -> HttpStatus.BAD_REQUEST;
+            case ErrorCodes.MODEL_AUTH_FAILED -> HttpStatus.BAD_GATEWAY;
+            case ErrorCodes.MODEL_RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
+            case ErrorCodes.MODEL_UPSTREAM_UNAVAILABLE -> HttpStatus.BAD_GATEWAY;
+            case ErrorCodes.MODEL_UPSTREAM_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            case ErrorCodes.MODEL_OUTPUT_EMPTY -> HttpStatus.BAD_GATEWAY;
+            case ErrorCodes.MODEL_UNSUPPORTED_OPERATION -> HttpStatus.BAD_REQUEST;
             case ErrorCodes.TASK_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
             case ErrorCodes.PREVIEW_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
             case ErrorCodes.PREVIEW_REBUILD_STATE_INVALID -> HttpStatus.CONFLICT;

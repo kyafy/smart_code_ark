@@ -4,30 +4,33 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.service.modelgateway.ModelGatewayEndpoint;
+import com.smartark.gateway.service.modelgateway.ModelGatewayInvocation;
+import com.smartark.gateway.service.modelgateway.ModelGatewayResult;
+import com.smartark.gateway.service.modelgateway.OpenAiCompatibleModelGatewayService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 @Service
 public class EmbeddingService {
     private static final Logger logger = LoggerFactory.getLogger(EmbeddingService.class);
-    private static final int DEFAULT_BATCH_SIZE = 16;
-    private static final int DASHSCOPE_NATIVE_BATCH_SIZE = 10;
+    private static final int DEFAULT_BATCH_SIZE = 10;
 
     private final ObjectMapper objectMapper;
-    private final RestClient restClient;
     private final String baseUrl;
     private final String embeddingBaseUrl;
     private final String apiKey;
     private final String embeddingModel;
     private final int embeddingDimension;
     private final ModelRouterService modelRouterService;
+    private final OpenAiCompatibleModelGatewayService modelGatewayService;
 
     private record EmbeddingConnection(String modelName, String baseUrl, String apiKey, String source) {
     }
@@ -35,6 +38,7 @@ public class EmbeddingService {
     public EmbeddingService(
             ObjectMapper objectMapper,
             ModelRouterService modelRouterService,
+            OpenAiCompatibleModelGatewayService modelGatewayService,
             @Value("${smartark.model.base-url:}") String baseUrl,
             @Value("${smartark.rag.embedding-base-url:}") String embeddingBaseUrl,
             @Value("${smartark.model.api-key:}") String apiKey,
@@ -43,12 +47,12 @@ public class EmbeddingService {
     ) {
         this.objectMapper = objectMapper;
         this.modelRouterService = modelRouterService;
+        this.modelGatewayService = modelGatewayService;
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         this.embeddingBaseUrl = embeddingBaseUrl == null ? "" : embeddingBaseUrl.trim();
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.embeddingModel = embeddingModel;
         this.embeddingDimension = embeddingDimension;
-        this.restClient = RestClient.builder().build();
     }
 
     public List<float[]> embed(List<String> texts) {
@@ -64,7 +68,7 @@ public class EmbeddingService {
                     .toList();
         }
 
-        int batchSize = resolveBatchSize(connection.baseUrl());
+        int batchSize = resolveBatchSize();
         List<float[]> allVectors = new ArrayList<>();
         for (int i = 0; i < texts.size(); i += batchSize) {
             List<String> batch = texts.subList(i, Math.min(i + batchSize, texts.size()));
@@ -76,21 +80,28 @@ public class EmbeddingService {
 
     private List<float[]> embedBatch(List<String> texts, EmbeddingConnection connection) {
         try {
-            String embeddingUri = buildEmbeddingUri(connection.baseUrl());
-            Map<String, Object> requestBody = buildRequestBody(connection.baseUrl(), connection.modelName(), texts);
-            String responseJson = restClient.post()
-                    .uri(embeddingUri)
-                    .header("Authorization", "Bearer " + connection.apiKey())
-                    .header("Content-Type", "application/json")
-                    .body(objectMapper.writeValueAsString(requestBody))
-                    .retrieve()
-                    .body(String.class);
-            return parseVectors(responseJson);
+            Map<String, Object> requestBody = new LinkedHashMap<>();
+            requestBody.put("model", connection.modelName());
+            requestBody.put("input", texts.size() == 1 ? texts.get(0) : texts);
+            requestBody.put("encoding_format", "float");
+            if (embeddingDimension > 0) {
+                requestBody.put("dimensions", embeddingDimension);
+            }
+            ModelGatewayResult result = modelGatewayService.invoke(new ModelGatewayInvocation(
+                    ModelGatewayEndpoint.EMBEDDINGS,
+                    "dashscope",
+                    connection.modelName(),
+                    toCompatibleBaseUrl(connection.baseUrl()),
+                    connection.apiKey(),
+                    requestBody,
+                    "rag_embedding",
+                    null));
+            return parseVectors(result.body());
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
             logger.error("Embedding API call failed", e);
-            throw new BusinessException(ErrorCodes.RAG_EMBEDDING_FAILED, "Embedding失败: " + e.getMessage());
+            throw new BusinessException(ErrorCodes.RAG_EMBEDDING_FAILED, "Embedding澶辫触: " + e.getMessage());
         }
     }
 
@@ -111,34 +122,6 @@ public class EmbeddingService {
         return null;
     }
 
-    private String buildEmbeddingUri(String effectiveBaseUrl) {
-        if (isDashScopeNative(effectiveBaseUrl)) {
-            if (effectiveBaseUrl.endsWith("/api/v1/services/embeddings/text-embedding/text-embedding")) {
-                return effectiveBaseUrl;
-            }
-            return trimTrailingSlash(effectiveBaseUrl) + "/api/v1/services/embeddings/text-embedding/text-embedding";
-        }
-        if (effectiveBaseUrl.endsWith("/v1")) {
-            return effectiveBaseUrl + "/embeddings";
-        }
-        return trimTrailingSlash(effectiveBaseUrl) + "/v1/embeddings";
-    }
-
-    private Map<String, Object> buildRequestBody(String effectiveBaseUrl, String modelName, List<String> texts) {
-        if (isDashScopeNative(effectiveBaseUrl)) {
-            return Map.of(
-                    "model", modelName,
-                    "input", Map.of("texts", texts),
-                    "parameters", Map.of("dimension", embeddingDimension)
-            );
-        }
-        return Map.of(
-                "model", modelName,
-                "input", texts,
-                "dimensions", embeddingDimension
-        );
-    }
-
     private List<float[]> parseVectors(String responseJson) throws Exception {
         JsonNode root = objectMapper.readTree(responseJson);
         JsonNode dataArray = root.path("data");
@@ -146,7 +129,7 @@ public class EmbeddingService {
             dataArray = root.path("output").path("embeddings");
         }
         if (!dataArray.isArray() || dataArray.isEmpty()) {
-            throw new BusinessException(ErrorCodes.RAG_EMBEDDING_FAILED, "Embedding返回结果为空");
+            throw new BusinessException(ErrorCodes.RAG_EMBEDDING_FAILED, "Embedding杩斿洖缁撴灉涓虹┖");
         }
         List<float[]> vectors = new ArrayList<>();
         for (JsonNode item : dataArray) {
@@ -164,21 +147,24 @@ public class EmbeddingService {
         return vectors;
     }
 
-    private boolean isDashScopeNative(String effectiveBaseUrl) {
-        return effectiveBaseUrl.contains("dashscope.aliyuncs.com") && !effectiveBaseUrl.contains("compatible-mode");
-    }
-
-    private String trimTrailingSlash(String input) {
-        if (input.endsWith("/")) {
-            return input.substring(0, input.length() - 1);
-        }
-        return input;
-    }
-
-    private int resolveBatchSize(String effectiveBaseUrl) {
-        if (isDashScopeNative(effectiveBaseUrl)) {
-            return DASHSCOPE_NATIVE_BATCH_SIZE;
-        }
+    private int resolveBatchSize() {
         return DEFAULT_BATCH_SIZE;
+    }
+
+    private String toCompatibleBaseUrl(String effectiveBaseUrl) {
+        String trimmed = effectiveBaseUrl == null ? "" : effectiveBaseUrl.trim();
+        if (trimmed.isEmpty()) {
+            return trimmed;
+        }
+        if (trimmed.contains("/compatible-mode")) {
+            return trimmed;
+        }
+        if (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        if (trimmed.contains("dashscope.aliyuncs.com")) {
+            return trimmed + "/compatible-mode";
+        }
+        return trimmed;
     }
 }
