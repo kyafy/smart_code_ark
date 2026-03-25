@@ -42,6 +42,8 @@ smartark:
     command-execution-enabled: ${BUILD_VERIFY_COMMAND_EXECUTION_ENABLED:true}
     compose-check-enabled: ${BUILD_VERIFY_COMPOSE_CHECK_ENABLED:true}
     timeout-seconds: ${BUILD_VERIFY_TIMEOUT_SECONDS:600}
+    auto-fix-enabled: ${BUILD_VERIFY_AUTO_FIX_ENABLED:true}
+    auto-fix-max-retries: ${BUILD_VERIFY_AUTO_FIX_MAX_RETRIES:2}
   runtime-smoke:
     enabled: ${RUNTIME_SMOKE_ENABLED:true}
     command-execution-enabled: ${RUNTIME_SMOKE_COMMAND_EXECUTION_ENABLED:true}

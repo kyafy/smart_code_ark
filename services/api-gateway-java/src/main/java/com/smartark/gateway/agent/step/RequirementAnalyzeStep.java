@@ -65,10 +65,13 @@ public class RequirementAnalyzeStep implements AgentStep {
         List<String> templateFiles = templateSelection.map(templateRepoService::listTemplateFiles).orElse(List.of());
         String backendRoot = templateSelection.map(TemplateRepoService.TemplateSelection::backendRoot).orElse("backend");
         String frontendRoot = templateSelection.map(TemplateRepoService.TemplateSelection::frontendRoot).orElse("frontend");
-        templateSelection.ifPresent(selection ->
+        templateSelection.ifPresent(selection -> {
+                context.setTemplateKey(selection.templateKey());
+                context.setTemplateSelection(selection);
                 context.logInfo("Template selected: key=" + selection.templateKey()
                         + ", explicit=" + (explicitTemplateId != null && !explicitTemplateId.isBlank())
-                        + ", fileCount=" + templateFiles.size()));
+                        + ", fileCount=" + templateFiles.size());
+        });
 
         String effectiveInstructions = context.getNormalizedInstructions() != null
                 ? context.getNormalizedInstructions()
@@ -145,10 +148,13 @@ public class RequirementAnalyzeStep implements AgentStep {
             templateRepoService.materializeTemplate(context);
         }
 
-        // Persist filePlan to step memory for recovery on retry
+        // Persist filePlan and templateKey to step memory for recovery on retry
         String taskId = context.getTask().getId();
         stepMemoryService.save(taskId, "requirement_analyze", "filePlan", filePlan);
         stepMemoryService.save(taskId, "requirement_analyze", "fileList", context.getFileList());
+        if (context.getTemplateKey() != null) {
+            stepMemoryService.save(taskId, "requirement_analyze", "templateKey", context.getTemplateKey());
+        }
     }
 
     private List<String> sanitizeFileList(List<String> fileList,

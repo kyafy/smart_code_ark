@@ -8,5 +8,13 @@
   "run": {
     "database": "docker compose up -d",
     "development": "npm install && npm run prisma:generate && npm run db:push && npm run dev"
+  },
+  "exampleFiles": {
+    "backendController": "app/api/todos/route.ts",
+    "frontendPage": "app/page.tsx",
+    "frontendComponent": "components/create-todo-form.tsx",
+    "frontendApi": "lib/prisma.ts",
+    "frontendPageTest": "__tests__/page.test.tsx",
+    "dbMigration": "prisma/schema.prisma"
   }
 }

@@ -25,6 +25,7 @@ import com.smartark.gateway.service.PreviewDeployService;
 import com.smartark.gateway.service.QualityGateService;
 import com.smartark.gateway.service.StepMemoryService;
 import com.smartark.gateway.service.TaskMemoryService;
+import com.smartark.gateway.service.TemplateRepoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,6 +62,7 @@ public class AgentOrchestrator {
     private final ContextAssembler contextAssembler;
     private final QualityGateService qualityGateService;
     private final StepMemoryService stepMemoryService;
+    private final TemplateRepoService templateRepoService;
     private final Map<String, AgentStep> stepMap;
     private final ObjectMapper objectMapper;
 
@@ -96,6 +98,7 @@ public class AgentOrchestrator {
                              ContextAssembler contextAssembler,
                              QualityGateService qualityGateService,
                              StepMemoryService stepMemoryService,
+                             TemplateRepoService templateRepoService,
                              ObjectMapper objectMapper,
                              List<AgentStep> agentSteps) {
         this.taskRepository = taskRepository;
@@ -109,6 +112,7 @@ public class AgentOrchestrator {
         this.contextAssembler = contextAssembler;
         this.qualityGateService = qualityGateService;
         this.stepMemoryService = stepMemoryService;
+        this.templateRepoService = templateRepoService;
         this.objectMapper = objectMapper;
         this.stepMap = agentSteps.stream().collect(Collectors.toMap(AgentStep::getStepCode, step -> step));
     }
@@ -709,6 +713,20 @@ public class AgentOrchestrator {
                             context.setFileList(list);
                         } catch (Exception e) {
                             logger.warn("Failed to deserialize fileList from step memory", e);
+                        }
+                    });
+                }
+                if (context.getTemplateKey() == null) {
+                    stepMemoryService.loadRaw(taskId, stepCode, "templateKey").ifPresent(json -> {
+                        try {
+                            String templateKey = objectMapper.readValue(json, String.class);
+                            context.setTemplateKey(templateKey);
+                            templateRepoService.resolveTemplateById(templateKey).ifPresent(selection -> {
+                                context.setTemplateSelection(selection);
+                                log(taskId, "info", "Hydrated templateSelection from step memory: key=" + templateKey);
+                            });
+                        } catch (Exception e) {
+                            logger.warn("Failed to restore templateKey from step memory", e);
                         }
                     });
                 }

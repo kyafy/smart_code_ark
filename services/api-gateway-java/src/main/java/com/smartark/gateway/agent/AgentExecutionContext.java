@@ -6,6 +6,7 @@ import com.smartark.gateway.agent.model.RagEvidenceItem;
 import com.smartark.gateway.db.entity.ProjectEntity;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
+import com.smartark.gateway.service.TemplateRepoService;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.BiConsumer;
@@ -37,6 +38,8 @@ public class AgentExecutionContext {
     private List<String> shortTermMemories;
     private List<String> longTermMemories;
     private String assembledContextPack;
+    private String templateKey;
+    private TemplateRepoService.TemplateSelection templateSelection;
     private int sidecarCallCount;
     private BiConsumer<String, String> taskLogger;
 
@@ -222,6 +225,22 @@ public class AgentExecutionContext {
 
     public void setContractViolations(List<String> contractViolations) {
         this.contractViolations = contractViolations;
+    }
+
+    public String getTemplateKey() {
+        return templateKey;
+    }
+
+    public void setTemplateKey(String templateKey) {
+        this.templateKey = templateKey;
+    }
+
+    public TemplateRepoService.TemplateSelection getTemplateSelection() {
+        return templateSelection;
+    }
+
+    public void setTemplateSelection(TemplateRepoService.TemplateSelection templateSelection) {
+        this.templateSelection = templateSelection;
     }
 
     public int getSidecarCallCount() {

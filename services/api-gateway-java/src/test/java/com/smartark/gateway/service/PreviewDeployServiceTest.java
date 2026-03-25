@@ -423,7 +423,8 @@ class PreviewDeployServiceTest {
                                 "UniApp mobile app with Spring Boot API",
                                 Map.of("frontend", "frontend-mobile"),
                                 Map.of("frontend", "UniApp Vue 3 + Vite"),
-                                Map.of("frontend", "cd frontend-mobile && npm install && npm run dev:h5")
+                                Map.of("frontend", "cd frontend-mobile && npm install && npm run dev:h5"),
+                                Map.of()
                         )
                 )
         ));

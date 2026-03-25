@@ -6,6 +6,7 @@ import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.service.ModelService;
+import com.smartark.gateway.service.TemplateRepoService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,12 +31,15 @@ class SqlGenerateStepTest {
     @Mock
     private ModelService modelService;
 
+    @Mock
+    private TemplateRepoService templateRepoService;
+
     @TempDir
     Path tempDir;
 
     @Test
     void execute_processesAllThreeGroups() throws Exception {
-        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper());
+        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContext();
 
         when(modelService.generateFileContent(any(), any(), any(), any(), any(), any(), any()))
@@ -53,7 +57,7 @@ class SqlGenerateStepTest {
 
     @Test
     void execute_dockerComposeClassifiedAsInfra() throws Exception {
-        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper());
+        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContextMinimal();
 
         List<FilePlanItem> plan = new ArrayList<>();
@@ -72,7 +76,7 @@ class SqlGenerateStepTest {
 
     @Test
     void execute_readmeMdClassifiedAsDocs() throws Exception {
-        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper());
+        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContextMinimal();
 
         List<FilePlanItem> plan = new ArrayList<>();
@@ -90,7 +94,7 @@ class SqlGenerateStepTest {
 
     @Test
     void execute_skipsTemplateManagedInfraAndDocsWhenAlreadyPresent() throws Exception {
-        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper());
+        SqlGenerateStep step = new SqlGenerateStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContextMinimal();
 
         Files.createDirectories(tempDir.resolve("docs"));

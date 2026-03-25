@@ -569,6 +569,195 @@ public class ModelService {
         }
     }
 
+    /**
+     * Generate file content with template example code injected into the prompt.
+     * The LLM is instructed to follow the template's coding patterns.
+     */
+    public String generateFileContentWithTemplate(String taskId,
+                                                   String projectId,
+                                                   String prd,
+                                                   String filePath,
+                                                   String techStack,
+                                                   String instructions,
+                                                   String projectStructure,
+                                                   String exampleCode,
+                                                   String relatedExamples) {
+        if (baseUrl.isEmpty()) {
+            return "// Mock content for " + filePath;
+        }
+        long start = System.currentTimeMillis();
+        String templateKey = "file_content_generate_with_template";
+        int versionNo = 1;
+        String modelName = resolveCodeModel();
+        String requestJson = null;
+        String requestHash = null;
+        try {
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("prd", prd);
+            vars.put("filePath", filePath);
+            vars.put("techStack", techStack);
+            vars.put("instructions", instructions == null ? "" : instructions);
+            vars.put("projectStructure", projectStructure == null ? "" : projectStructure);
+            vars.put("currentGroup", detectGroupByPath(filePath));
+            vars.put("exampleCode", exampleCode == null ? "" : exampleCode);
+            vars.put("relatedExamples", relatedExamples == null ? "" : relatedExamples);
+
+            String defaultSystemPrompt =
+                    "你是一个全栈工程师。请基于以下项目模板的示例代码，生成指定文件的完整业务代码。\n" +
+                    "你必须严格遵循示例代码中的：\n" +
+                    "1. 包结构和 import 路径风格\n" +
+                    "2. 注解使用方式（@RestController, @Service, @Entity 等）\n" +
+                    "3. 异常处理模式（@ExceptionHandler 风格）\n" +
+                    "4. 请求/响应 DTO 模式（record + validation 注解）\n" +
+                    "5. Repository 接口继承方式\n" +
+                    "6. 前端组件结构、API 调用模式、TypeScript 类型定义\n\n" +
+                    "=== 模板示例代码（主文件）===\n{{exampleCode}}\n\n" +
+                    "=== 模板相关文件 ===\n{{relatedExamples}}\n\n" +
+                    "文件路径：{{filePath}}\n" +
+                    "技术栈：{{techStack}}\n" +
+                    "项目文件结构（{{currentGroup}}组）：\n{{projectStructure}}\n\n" +
+                    "请直接输出文件内容，不要包含Markdown标记（如 ```java ... ```），除非文件本身是Markdown格式。\n" +
+                    "确保代码可以直接编译运行，import 路径与示例代码保持一致的风格。";
+
+            String defaultUserPrompt =
+                    "PRD内容：\n{{prd}}\n\n" +
+                    "额外指令：\n{{instructions}}\n\n" +
+                    "输出要求：\n" +
+                    "1) 必须体现至少2个业务字段或业务规则；\n" +
+                    "2) 如果是接口层需包含参数校验与错误处理；\n" +
+                    "3) 如果是数据层需体现实体字段与约束；\n" +
+                    "4) 严格参考模板示例的代码风格和结构模式，保持一致性；\n" +
+                    "5) 不能只输出项目脚手架样例。";
+
+            PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey).orElse(null);
+            String systemPrompt = defaultSystemPrompt;
+            String userPrompt = defaultUserPrompt;
+            if (resolvedPrompt != null) {
+                versionNo = resolvedPrompt.version().getVersionNo();
+                if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
+                    modelName = resolvedPrompt.version().getModel();
+                }
+                if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
+                    systemPrompt = resolvedPrompt.version().getSystemPrompt();
+                }
+                if (resolvedPrompt.version().getUserPrompt() != null && !resolvedPrompt.version().getUserPrompt().isBlank()) {
+                    userPrompt = resolvedPrompt.version().getUserPrompt();
+                }
+            }
+
+            String globalRules = resolveGlobalRulesPrefix();
+            List<Map<String, String>> messages = new ArrayList<>();
+            messages.add(Map.of("role", "system", "content", globalRules + promptRenderer.render(systemPrompt, vars)));
+            messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
+
+            Map<String, Object> payload = Map.of(
+                    "model", modelName,
+                    "messages", messages
+            );
+            requestJson = objectMapper.writeValueAsString(payload);
+            requestHash = hash(requestJson);
+            String response = callModelApi(payload);
+            JsonNode root = objectMapper.readTree(response);
+            String content = root.at("/choices/0/message/content").asText("");
+
+            if (content.startsWith("```") && content.endsWith("```")) {
+                int firstLineBreak = content.indexOf("\n");
+                if (firstLineBreak != -1) {
+                    content = content.substring(firstLineBreak + 1, content.lastIndexOf("```"));
+                }
+            }
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
+            return content;
+        } catch (Exception e) {
+            logger.error("Failed to generate file content (template-aware) for " + filePath, e);
+            String detail = detailMessage(e);
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), detail);
+            return "// Failed to generate content: " + detail;
+        }
+    }
+
+    /**
+     * Fix a compilation error by sending the file content and error output to LLM.
+     * Returns the corrected file content, or null if fix fails.
+     */
+    public String fixCompilationError(String taskId,
+                                       String projectId,
+                                       String filePath,
+                                       String currentContent,
+                                       String compilationError,
+                                       String techStack) {
+        if (baseUrl.isEmpty()) {
+            return null;
+        }
+        long start = System.currentTimeMillis();
+        String templateKey = "compilation_error_fix";
+        int versionNo = 1;
+        String modelName = resolveCodeModel();
+        String requestJson = null;
+        String requestHash = null;
+        try {
+            Map<String, String> vars = new LinkedHashMap<>();
+            vars.put("filePath", filePath);
+            vars.put("currentContent", currentContent);
+            vars.put("compilationError", compilationError);
+            vars.put("techStack", techStack);
+
+            String systemPrompt =
+                    "你是一个全栈工程师。以下文件编译/构建失败，请修复并返回完整的修正代码。\n\n" +
+                    "文件路径：{{filePath}}\n" +
+                    "技术栈：{{techStack}}\n\n" +
+                    "修复规则：\n" +
+                    "1. 只修复编译错误，不要改变业务逻辑\n" +
+                    "2. 确保 import 路径正确\n" +
+                    "3. 确保类型匹配和方法签名正确\n" +
+                    "4. 直接输出修正后的完整文件内容，不要包含 Markdown 标记";
+
+            String userPrompt =
+                    "编译错误信息：\n{{compilationError}}\n\n" +
+                    "当前文件内容：\n{{currentContent}}\n\n" +
+                    "请输出修正后的完整文件内容。";
+
+            PromptResolver.ResolvedPrompt resolvedPrompt = promptResolver.resolve(templateKey).orElse(null);
+            if (resolvedPrompt != null) {
+                versionNo = resolvedPrompt.version().getVersionNo();
+                if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
+                    modelName = resolvedPrompt.version().getModel();
+                }
+                if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
+                    systemPrompt = resolvedPrompt.version().getSystemPrompt();
+                }
+                if (resolvedPrompt.version().getUserPrompt() != null && !resolvedPrompt.version().getUserPrompt().isBlank()) {
+                    userPrompt = resolvedPrompt.version().getUserPrompt();
+                }
+            }
+
+            List<Map<String, String>> messages = new ArrayList<>();
+            messages.add(Map.of("role", "system", "content", promptRenderer.render(systemPrompt, vars)));
+            messages.add(Map.of("role", "user", "content", promptRenderer.render(userPrompt, vars)));
+
+            Map<String, Object> payload = Map.of("model", modelName, "messages", messages);
+            requestJson = objectMapper.writeValueAsString(payload);
+            requestHash = hash(requestJson);
+            String response = callModelApi(payload);
+            JsonNode root = objectMapper.readTree(response);
+            String content = root.at("/choices/0/message/content").asText("");
+
+            if (content.startsWith("```") && content.endsWith("```")) {
+                int firstLineBreak = content.indexOf("\n");
+                if (firstLineBreak != -1) {
+                    content = content.substring(firstLineBreak + 1, content.lastIndexOf("```"));
+                }
+            }
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, response, estimateTokens(requestJson), estimateTokens(response), (int) (System.currentTimeMillis() - start), "success", null, null);
+            return content;
+        } catch (Exception e) {
+            logger.error("Failed to fix compilation error for " + filePath, e);
+            String detail = detailMessage(e);
+            savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), detail);
+            return null;
+        }
+    }
+
     private String detectGroupByPath(String filePath) {
         String p = filePath == null ? "" : filePath.toLowerCase();
         if (p.contains("backend/")) return "backend";

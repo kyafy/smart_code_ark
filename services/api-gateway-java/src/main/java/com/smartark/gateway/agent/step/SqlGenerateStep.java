@@ -3,6 +3,7 @@ package com.smartark.gateway.agent.step;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.service.ModelService;
+import com.smartark.gateway.service.TemplateRepoService;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
@@ -10,8 +11,8 @@ import java.util.Set;
 @Component
 public class SqlGenerateStep extends AbstractCodegenStep {
 
-    public SqlGenerateStep(ModelService modelService, ObjectMapper objectMapper) {
-        super(modelService, objectMapper);
+    public SqlGenerateStep(ModelService modelService, ObjectMapper objectMapper, TemplateRepoService templateRepoService) {
+        super(modelService, objectMapper, templateRepoService);
     }
 
     @Override

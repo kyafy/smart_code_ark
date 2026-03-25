@@ -6,6 +6,7 @@ import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.service.ModelService;
+import com.smartark.gateway.service.TemplateRepoService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,12 +31,15 @@ class CodegenBackendStepTest {
     @Mock
     private ModelService modelService;
 
+    @Mock
+    private TemplateRepoService templateRepoService;
+
     @TempDir
     Path tempDir;
 
     @Test
     void execute_generatesBackendFilesOnly() throws Exception {
-        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper());
+        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContext();
 
         when(modelService.generateFileContent(any(), any(), any(), eq("backend/src/main/java/App.java"), any(), any(), any()))
@@ -53,7 +57,7 @@ class CodegenBackendStepTest {
 
     @Test
     void execute_skipsEmptyFilePlan() throws Exception {
-        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper());
+        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContext();
         context.setFilePlan(List.of());
 
@@ -64,7 +68,7 @@ class CodegenBackendStepTest {
 
     @Test
     void execute_convertLegacyFileList() throws Exception {
-        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper());
+        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContext();
         context.setFilePlan(null);
         context.setFileList(List.of("backend/pom.xml", "frontend/package.json"));
@@ -82,7 +86,7 @@ class CodegenBackendStepTest {
 
     @Test
     void execute_rejectsPathTraversal() throws Exception {
-        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper());
+        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContext();
 
         List<FilePlanItem> plan = new ArrayList<>();
@@ -102,7 +106,7 @@ class CodegenBackendStepTest {
 
     @Test
     void execute_skipsTemplateManagedFilesAlreadyPresent() throws Exception {
-        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper());
+        CodegenBackendStep step = new CodegenBackendStep(modelService, new ObjectMapper(), templateRepoService);
         AgentExecutionContext context = buildContextMinimal();
 
         Files.createDirectories(tempDir.resolve("backend/src/main/java/com/example"));

@@ -6,6 +6,7 @@ import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.service.ModelService;
+import com.smartark.gateway.service.TemplateRepoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,10 +23,12 @@ public abstract class AbstractCodegenStep implements AgentStep {
     protected final Logger logger = LoggerFactory.getLogger(getClass());
     protected final ModelService modelService;
     protected final ObjectMapper objectMapper;
+    protected final TemplateRepoService templateRepoService;
 
-    protected AbstractCodegenStep(ModelService modelService, ObjectMapper objectMapper) {
+    protected AbstractCodegenStep(ModelService modelService, ObjectMapper objectMapper, TemplateRepoService templateRepoService) {
         this.modelService = modelService;
         this.objectMapper = objectMapper;
+        this.templateRepoService = templateRepoService;
     }
 
     protected void generateFilesByGroup(AgentExecutionContext context, Set<String> groups) throws Exception {
@@ -69,17 +72,38 @@ public abstract class AbstractCodegenStep implements AgentStep {
             }
             try {
                 logger.info("Generating file: {} [group={}]", filePath, item.getGroup());
-                String content = modelService.generateFileContent(
-                        context.getTask().getId(),
-                        context.getTask().getProjectId(),
-                        prd,
-                        filePath,
-                        fullStack,
-                        instructions,
-                        groupStructure
-                );
+                String content;
+                TemplateRepoService.TemplateSelection tplSelection = context.getTemplateSelection();
+                if (tplSelection != null) {
+                    TemplateRepoService.ExampleContext exCtx = templateRepoService.resolveExampleContext(tplSelection, filePath);
+                    if (exCtx.hasExample()) {
+                        content = modelService.generateFileContentWithTemplate(
+                                context.getTask().getId(),
+                                context.getTask().getProjectId(),
+                                prd, filePath, fullStack, instructions, groupStructure,
+                                exCtx.primaryExample(), exCtx.relatedExamples()
+                        );
+                    } else {
+                        content = modelService.generateFileContent(
+                                context.getTask().getId(),
+                                context.getTask().getProjectId(),
+                                prd, filePath, fullStack, instructions, groupStructure
+                        );
+                    }
+                } else {
+                    content = modelService.generateFileContent(
+                            context.getTask().getId(),
+                            context.getTask().getProjectId(),
+                            prd, filePath, fullStack, instructions, groupStructure
+                    );
+                }
                 saveFile(context, filePath, content);
                 successCount++;
+
+                // Co-generate unit test if template is available and file is testable
+                if (tplSelection != null) {
+                    tryGenerateTestFile(context, tplSelection, filePath, content, prd, fullStack, instructions, groupStructure);
+                }
             } catch (Exception e) {
                 failCount++;
                 logger.error("Failed to generate file: {} [group={}], error={}", filePath, item.getGroup(), e.getMessage());
@@ -178,5 +202,98 @@ public abstract class AbstractCodegenStep implements AgentStep {
         String stackFrontend = reqJson.at("/stack/frontend").asText("vue3");
         String stackDb = reqJson.at("/stack/db").asText("mysql");
         return "Backend: " + stackBackend + ", Frontend: " + stackFrontend + ", Database: " + stackDb;
+    }
+
+    private void tryGenerateTestFile(AgentExecutionContext context,
+                                     TemplateRepoService.TemplateSelection tplSelection,
+                                     String sourceFilePath, String sourceContent,
+                                     String prd, String fullStack, String instructions, String groupStructure) {
+        String testPath = computeTestPath(sourceFilePath);
+        if (testPath == null) {
+            return;
+        }
+        try {
+            TemplateRepoService.ExampleContext testExCtx = templateRepoService.resolveTestExampleContext(
+                    tplSelection, testPath, sourceContent);
+            if (!testExCtx.hasExample()) {
+                return;
+            }
+            logger.info("Co-generating test file: {} for source: {}", testPath, sourceFilePath);
+            context.logInfo("Codegen co-generating test: " + testPath);
+            String testContent = modelService.generateFileContentWithTemplate(
+                    context.getTask().getId(),
+                    context.getTask().getProjectId(),
+                    prd, testPath, fullStack, instructions, groupStructure,
+                    testExCtx.primaryExample(), testExCtx.relatedExamples()
+            );
+            saveFile(context, testPath, testContent);
+            logger.info("Test file generated: {}", testPath);
+        } catch (Exception e) {
+            logger.warn("Failed to co-generate test for {}: {}", sourceFilePath, e.getMessage());
+            context.logWarn("Test co-generation failed for " + sourceFilePath + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Compute test file path from source file path.
+     * Returns null if the file type should not have a test.
+     */
+    static String computeTestPath(String sourceFilePath) {
+        if (sourceFilePath == null || sourceFilePath.isBlank()) {
+            return null;
+        }
+        String path = sourceFilePath.replace('\\', '/');
+
+        // Backend Java: only Service and Controller get tests
+        if (path.endsWith("Service.java") && !path.endsWith("Repository.java")) {
+            // src/main/java/...Service.java → src/test/java/...ServiceTest.java
+            return path.replace("/src/main/java/", "/src/test/java/")
+                       .replace("Service.java", "ServiceTest.java");
+        }
+        if (path.endsWith("Controller.java")) {
+            return path.replace("/src/main/java/", "/src/test/java/")
+                       .replace("Controller.java", "ControllerTest.java");
+        }
+
+        // Frontend Vue pages get tests
+        if (path.endsWith(".vue") && path.contains("/pages/")) {
+            // frontend/src/pages/UserPage.vue → frontend/src/__tests__/UserPage.test.ts
+            String fileName = path.substring(path.lastIndexOf('/') + 1);
+            String baseName = fileName.replace(".vue", "");
+            String dir = path.substring(0, path.lastIndexOf("/pages/"));
+            return dir + "/src/__tests__/" + baseName + ".test.ts";
+        }
+
+        // Python FastAPI: backend/app/main.py → backend/tests/test_main.py
+        if (path.endsWith(".py") && path.contains("/app/")) {
+            String fileName = path.substring(path.lastIndexOf('/') + 1);
+            // Skip __init__.py, config, database infrastructure files
+            if (fileName.startsWith("__") || fileName.equals("config.py") || fileName.equals("database.py")) {
+                return null;
+            }
+            String baseName = fileName.replace(".py", "");
+            String dir = path.substring(0, path.indexOf("/app/"));
+            return dir + "/tests/test_" + baseName + ".py";
+        }
+
+        // Python Django: backend/users/views.py → backend/users/tests.py
+        // Django convention: one tests.py per app
+        if (path.endsWith("views.py") && !path.contains("/app/")) {
+            String dir = path.substring(0, path.lastIndexOf('/'));
+            return dir + "/tests.py";
+        }
+
+        // Next.js pages: app/page.tsx → __tests__/page.test.tsx
+        if (path.endsWith(".tsx") && path.contains("/app/") && path.contains("page.tsx")) {
+            // Handle both root and nested: app/page.tsx, app/todos/page.tsx
+            String fileName = path.substring(path.lastIndexOf('/') + 1);
+            String baseName = fileName.replace(".tsx", "");
+            // Determine if it's inside frontend/ or at root
+            int appIdx = path.indexOf("/app/");
+            String prefix = appIdx > 0 ? path.substring(0, appIdx) + "/" : "";
+            return prefix + "__tests__/" + baseName + ".test.tsx";
+        }
+
+        return null;
     }
 }

@@ -32,7 +32,7 @@ public class TemplateRepoService {
     private static final Set<String> TEXT_EXTENSIONS = Set.of(
             ".md", ".json", ".ts", ".tsx", ".js", ".jsx", ".css", ".scss", ".sass", ".less",
             ".vue", ".html", ".yml", ".yaml", ".properties", ".sql", ".java", ".xml", ".env",
-            ".example", ".sh", ".ps1", ".gitignore", ".prisma"
+            ".example", ".sh", ".ps1", ".gitignore", ".prisma", ".py", ".cfg", ".toml"
     );
 
     private final ObjectMapper objectMapper;
@@ -145,6 +145,199 @@ public class TemplateRepoService {
         return reason != null && reason.startsWith("template_repo:");
     }
 
+    /**
+     * Read a single template file's content by template selection + relative path.
+     */
+    public String readTemplateFileContent(TemplateSelection selection, String relativePath) {
+        if (selection == null || relativePath == null || relativePath.isBlank()) {
+            return null;
+        }
+        Path filePath = selection.templateRoot().resolve(relativePath).normalize();
+        if (!filePath.startsWith(selection.templateRoot().normalize())) {
+            return null;
+        }
+        if (!Files.isRegularFile(filePath)) {
+            return null;
+        }
+        try {
+            return Files.readString(filePath, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            logger.warn("Failed to read template file: {}", relativePath, e);
+            return null;
+        }
+    }
+
+    /**
+     * Resolve example code context for a target file path based on file type pattern matching.
+     * Uses exampleFiles from template.json metadata when available, falls back to convention-based matching.
+     */
+    public ExampleContext resolveExampleContext(TemplateSelection selection, String targetFilePath) {
+        if (selection == null || targetFilePath == null || targetFilePath.isBlank()) {
+            return ExampleContext.EMPTY;
+        }
+        String lower = targetFilePath.toLowerCase(Locale.ROOT).replace('\\', '/');
+        Map<String, String> examples = selection.metadata().exampleFiles();
+
+        // Backend Java files
+        if (lower.endsWith("controller.java")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendController",
+                    "backendService", "backendEntity", "backendRequest");
+        }
+        if (lower.endsWith("service.java") && !lower.contains("repository")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendService",
+                    "backendRepository", "backendEntity", "backendRequest");
+        }
+        if (lower.endsWith("repository.java")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendRepository",
+                    "backendEntity");
+        }
+        if (lower.endsWith("entity.java")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendEntity");
+        }
+        if (lower.endsWith("request.java") || lower.endsWith("dto.java")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendRequest",
+                    "backendEntity");
+        }
+
+        // Frontend Vue/TS files
+        if (lower.endsWith(".vue")) {
+            return buildExampleFromKeys(selection, examples,
+                    "frontendPage",
+                    "frontendApi");
+        }
+        if (lower.endsWith(".ts") && (lower.contains("api") || lower.contains("service") || lower.contains("client"))) {
+            return buildExampleFromKeys(selection, examples,
+                    "frontendApi");
+        }
+        if (lower.endsWith(".ts") && (lower.contains("store") || lower.contains("pinia"))) {
+            return buildExampleFromKeys(selection, examples,
+                    "frontendApi",
+                    "frontendPage");
+        }
+
+        // Python backend files (FastAPI / Django)
+        if (lower.endsWith("views.py") || lower.endsWith("router.py")
+                || (lower.endsWith("main.py") && lower.contains("app/"))) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendController",
+                    "backendEntity", "backendRequest");
+        }
+        if (lower.endsWith("models.py") && !lower.contains("migration")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendEntity");
+        }
+        if (lower.endsWith("schemas.py") || lower.endsWith("serializers.py")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendRequest",
+                    "backendEntity");
+        }
+        if (lower.endsWith("service.py") || lower.endsWith("services.py") || lower.endsWith("crud.py")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendService",
+                    "backendEntity", "backendRequest");
+        }
+
+        // Next.js / React files
+        if (lower.endsWith(".tsx") && lower.contains("/page")) {
+            return buildExampleFromKeys(selection, examples,
+                    "frontendPage",
+                    "frontendApi", "frontendComponent");
+        }
+        if (lower.endsWith(".tsx") && lower.contains("/component")) {
+            return buildExampleFromKeys(selection, examples,
+                    "frontendComponent",
+                    "frontendApi");
+        }
+        if (lower.endsWith("route.ts") && lower.contains("/api/")) {
+            return buildExampleFromKeys(selection, examples,
+                    "backendController",
+                    "frontendApi");
+        }
+
+        // SQL migration files
+        if (lower.endsWith(".sql")) {
+            return buildExampleFromKeys(selection, examples,
+                    "dbMigration");
+        }
+        // Prisma schema
+        if (lower.endsWith(".prisma")) {
+            return buildExampleFromKeys(selection, examples,
+                    "dbMigration");
+        }
+
+        return ExampleContext.EMPTY;
+    }
+
+    /**
+     * Resolve example context specifically for test file generation.
+     * Returns test example + source file content as related context.
+     */
+    public ExampleContext resolveTestExampleContext(TemplateSelection selection, String targetTestFilePath, String sourceFileContent) {
+        if (selection == null || targetTestFilePath == null || targetTestFilePath.isBlank()) {
+            return ExampleContext.EMPTY;
+        }
+        String lower = targetTestFilePath.toLowerCase(Locale.ROOT).replace('\\', '/');
+        Map<String, String> examples = selection.metadata().exampleFiles();
+
+        String testKey = null;
+        if (lower.endsWith("controllertest.java") || lower.endsWith("controller_test.java")) {
+            testKey = "backendControllerTest";
+        } else if (lower.endsWith("servicetest.java") || lower.endsWith("service_test.java")) {
+            testKey = "backendServiceTest";
+        } else if (lower.endsWith(".test.ts") || lower.endsWith(".spec.ts")
+                || lower.endsWith(".test.tsx") || lower.endsWith(".spec.tsx")) {
+            testKey = "frontendPageTest";
+        } else if (lower.matches(".*test_[a-z_]+\\.py$") || lower.matches(".*tests\\.py$")) {
+            // Python test files: test_main.py, test_views.py, tests.py
+            testKey = "backendServiceTest";
+        }
+
+        if (testKey == null || !examples.containsKey(testKey)) {
+            return ExampleContext.EMPTY;
+        }
+
+        String primary = readTemplateFileContent(selection, examples.get(testKey));
+        String related = sourceFileContent != null
+                ? "// --- 待测试的源文件内容 ---\n" + sourceFileContent
+                : null;
+        return new ExampleContext(primary, related);
+    }
+
+    private ExampleContext buildExampleFromKeys(TemplateSelection selection, Map<String, String> examples,
+                                                String primaryKey, String... relatedKeys) {
+        if (examples == null || examples.isEmpty() || !examples.containsKey(primaryKey)) {
+            return ExampleContext.EMPTY;
+        }
+        String primary = readTemplateFileContent(selection, examples.get(primaryKey));
+        if (primary == null) {
+            return ExampleContext.EMPTY;
+        }
+        StringBuilder related = new StringBuilder();
+        for (String key : relatedKeys) {
+            String path = examples.get(key);
+            if (path != null) {
+                String content = readTemplateFileContent(selection, path);
+                if (content != null) {
+                    related.append("// --- ").append(key).append(" ---\n").append(content).append("\n\n");
+                }
+            }
+        }
+        return new ExampleContext(primary, related.length() > 0 ? related.toString() : null);
+    }
+
+    public record ExampleContext(String primaryExample, String relatedExamples) {
+        public static final ExampleContext EMPTY = new ExampleContext(null, null);
+
+        public boolean hasExample() {
+            return primaryExample != null && !primaryExample.isBlank();
+        }
+    }
+
     private Optional<TemplateSelection> resolveTemplateById(Path repoRoot, String templateId) {
         String normalizedTemplateId = normalizeTemplateId(templateId);
         if (normalizedTemplateId == null) {
@@ -219,6 +412,7 @@ public class TemplateRepoService {
                 : inferPaths(templateRoot);
         Map<String, String> stack = templateManifest == null ? Map.of() : templateManifest.stack();
         Map<String, String> run = templateManifest == null ? Map.of() : templateManifest.run();
+        Map<String, String> exampleFiles = templateManifest == null ? Map.of() : templateManifest.exampleFiles();
 
         return new TemplateMetadata(
                 resolvedKey,
@@ -227,7 +421,8 @@ public class TemplateRepoService {
                 description,
                 Map.copyOf(paths),
                 Map.copyOf(stack),
-                Map.copyOf(run)
+                Map.copyOf(run),
+                exampleFiles == null ? Map.of() : Map.copyOf(exampleFiles)
         );
     }
 
@@ -280,7 +475,8 @@ public class TemplateRepoService {
                     textOrNull(root, "key"),
                     textOrNull(root, "name"),
                     readStringMap(root.path("stack")),
-                    readStringMap(root.path("run"))
+                    readStringMap(root.path("run")),
+                    readStringMap(root.path("exampleFiles"))
             ));
         } catch (Exception e) {
             logger.warn("Failed to parse template manifest at {}", manifestPath, e);
@@ -592,7 +788,8 @@ public class TemplateRepoService {
             String description,
             Map<String, String> paths,
             Map<String, String> stack,
-            Map<String, String> run
+            Map<String, String> run,
+            Map<String, String> exampleFiles
     ) {
     }
 
@@ -609,7 +806,8 @@ public class TemplateRepoService {
             String templateKey,
             String name,
             Map<String, String> stack,
-            Map<String, String> run
+            Map<String, String> run,
+            Map<String, String> exampleFiles
     ) {
     }
 
