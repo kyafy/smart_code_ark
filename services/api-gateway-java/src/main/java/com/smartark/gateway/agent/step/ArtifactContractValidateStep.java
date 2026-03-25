@@ -2,8 +2,12 @@ package com.smartark.gateway.agent.step;
 
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
+import com.smartark.gateway.dto.LangchainGraphRunResult;
+import com.smartark.gateway.service.LangchainRuntimeGraphClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
@@ -15,6 +19,7 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -31,6 +36,23 @@ public class ArtifactContractValidateStep implements AgentStep {
     private static final Logger logger = LoggerFactory.getLogger(ArtifactContractValidateStep.class);
 
     private static final long MAX_FILE_SIZE_BYTES = 1_048_576; // 1 MB
+    private static final int RUNTIME_SNAPSHOT_MAX_ENTRIES = 1200;
+
+    private final LangchainRuntimeGraphClient runtimeGraphClient;
+    private final boolean runtimeCodegenGraphEnabled;
+
+    public ArtifactContractValidateStep() {
+        this(null, false);
+    }
+
+    @Autowired
+    public ArtifactContractValidateStep(
+            LangchainRuntimeGraphClient runtimeGraphClient,
+            @Value("${smartark.langchain.runtime.codegen-graph-enabled:false}") boolean runtimeCodegenGraphEnabled
+    ) {
+        this.runtimeGraphClient = runtimeGraphClient;
+        this.runtimeCodegenGraphEnabled = runtimeCodegenGraphEnabled;
+    }
 
     @Override
     public String getStepCode() {
@@ -49,10 +71,13 @@ public class ArtifactContractValidateStep implements AgentStep {
         List<String> violations = new ArrayList<>();
         context.logInfo("Validation started: checks=[mandatory_files,path_safety,docker_compose,file_size]");
 
-        checkMandatoryFiles(context, workspace, violations);
         scanPathSafety(workspace, violations);
-        validateDockerCompose(context, workspace, violations);
-        checkFileSizes(context, workspace, violations);
+        boolean runtimeValidated = validateByRuntime(context, workspace, violations);
+        if (!runtimeValidated) {
+            checkMandatoryFiles(context, workspace, violations);
+            validateDockerCompose(context, workspace, violations);
+            checkFileSizes(context, workspace, violations);
+        }
 
         context.setContractViolations(violations);
 
@@ -67,6 +92,120 @@ public class ArtifactContractValidateStep implements AgentStep {
             logger.info("Artifact contract validation completed with {} violation(s)", violations.size());
             context.logWarn("Validation result: violations=" + violations.size() + ", next=package auto-fix missing delivery files");
         }
+    }
+
+    private boolean validateByRuntime(AgentExecutionContext context, Path workspace, List<String> violations) {
+        if (!runtimeCodegenGraphEnabled || runtimeGraphClient == null) {
+            return false;
+        }
+        try {
+            Map<String, Object> input = new LinkedHashMap<>();
+            input.put("stage", "artifact_contract_validate");
+            input.put("requiredFiles", List.of("README.md", "docker-compose.yml"));
+            input.put("maxFileSizeBytes", MAX_FILE_SIZE_BYTES);
+            input.put("workspaceFiles", buildWorkspaceSnapshot(workspace));
+            Path composePath = workspace.resolve("docker-compose.yml");
+            if (Files.exists(composePath)) {
+                input.put("dockerComposeContent", Files.readString(composePath, StandardCharsets.UTF_8));
+            } else {
+                input.put("dockerComposeContent", "");
+            }
+
+            LangchainGraphRunResult result = runtimeGraphClient.runCodegenGraph(
+                    context.getTask().getId(),
+                    context.getTask().getProjectId(),
+                    context.getTask().getUserId(),
+                    input
+            );
+            RuntimeValidationResult validationResult = extractRuntimeValidationResult(result);
+            if (!validationResult.valid()) {
+                return false;
+            }
+            if (!validationResult.fatalViolations().isEmpty()) {
+                throw new SecurityException(validationResult.fatalViolations().get(0));
+            }
+            violations.addAll(validationResult.violations());
+            context.logInfo("Validation routed to runtime graph: violations=" + validationResult.violations().size());
+            return true;
+        } catch (SecurityException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.warn("Runtime artifact validation failed, fallback to local checks: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    private List<Map<String, Object>> buildWorkspaceSnapshot(Path workspace) throws IOException {
+        List<Map<String, Object>> files = new ArrayList<>();
+        final int[] count = {0};
+        Files.walkFileTree(workspace, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                if (count[0] >= RUNTIME_SNAPSHOT_MAX_ENTRIES) {
+                    return FileVisitResult.TERMINATE;
+                }
+                if (!dir.equals(workspace)) {
+                    String relative = workspace.relativize(dir).toString().replace('\\', '/');
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("path", relative);
+                    item.put("isDirectory", true);
+                    item.put("size", 0L);
+                    files.add(item);
+                    count[0]++;
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                if (count[0] >= RUNTIME_SNAPSHOT_MAX_ENTRIES) {
+                    return FileVisitResult.TERMINATE;
+                }
+                String relative = workspace.relativize(file).toString().replace('\\', '/');
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("path", relative);
+                item.put("isDirectory", false);
+                item.put("size", attrs.size());
+                files.add(item);
+                count[0]++;
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return files;
+    }
+
+    @SuppressWarnings("unchecked")
+    private RuntimeValidationResult extractRuntimeValidationResult(LangchainGraphRunResult result) {
+        if (result == null || result.result() == null) {
+            return RuntimeValidationResult.invalid();
+        }
+        Map<String, Object> resultMap = result.result();
+        Object violationsObj = resultMap.get("violations");
+        Object fatalObj = resultMap.get("fatal_violations");
+        List<String> violations = new ArrayList<>();
+        List<String> fatalViolations = new ArrayList<>();
+        if (violationsObj instanceof List<?> list) {
+            for (Object item : list) {
+                if (item != null) {
+                    String text = String.valueOf(item).trim();
+                    if (!text.isBlank()) {
+                        violations.add(text);
+                    }
+                }
+            }
+        }
+        if (fatalObj instanceof List<?> list) {
+            for (Object item : list) {
+                if (item != null) {
+                    String text = String.valueOf(item).trim();
+                    if (!text.isBlank()) {
+                        fatalViolations.add(text);
+                    }
+                }
+            }
+        }
+        boolean valid = violationsObj instanceof List<?> || fatalObj instanceof List<?>;
+        return new RuntimeValidationResult(valid, violations, fatalViolations);
     }
 
     private void checkMandatoryFiles(AgentExecutionContext context, Path workspace, List<String> violations) {
@@ -260,5 +399,11 @@ public class ArtifactContractValidateStep implements AgentStep {
             }
         });
         context.logInfo("Validation check file_size completed: oversizedFiles=" + oversizedCount[0] + ", thresholdBytes=" + MAX_FILE_SIZE_BYTES);
+    }
+
+    private record RuntimeValidationResult(boolean valid, List<String> violations, List<String> fatalViolations) {
+        private static RuntimeValidationResult invalid() {
+            return new RuntimeValidationResult(false, List.of(), List.of());
+        }
     }
 }

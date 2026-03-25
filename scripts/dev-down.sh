@@ -19,4 +19,4 @@ stop_pid() {
 stop_pid "$ROOT_DIR/.pids/frontend.pid"
 stop_pid "$ROOT_DIR/.pids/backend.pid"
 
-docker compose stop mysql redis >/dev/null 2>&1 || true
+docker compose stop mysql redis qdrant langchain-runtime >/dev/null 2>&1 || true

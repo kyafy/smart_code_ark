@@ -11,9 +11,12 @@ import com.smartark.gateway.db.entity.PaperOutlineVersionEntity;
 import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
+import com.smartark.gateway.dto.LangchainGraphRunResult;
+import com.smartark.gateway.service.LangchainRuntimeGraphClient;
 import com.smartark.gateway.service.ModelService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -34,6 +37,8 @@ public class QualityRewriteStep implements AgentStep {
     private final ObjectMapper objectMapper;
     private final int scoreThreshold;
     private final int maxRewriteRounds;
+    private final LangchainRuntimeGraphClient runtimeGraphClient;
+    private final boolean runtimePaperGraphEnabled;
 
     public QualityRewriteStep(ModelService modelService,
                               PaperTopicSessionRepository paperTopicSessionRepository,
@@ -41,12 +46,27 @@ public class QualityRewriteStep implements AgentStep {
                               ObjectMapper objectMapper,
                               @Value("${smartark.paper.quality-rewrite.score-threshold:75}") int scoreThreshold,
                               @Value("${smartark.paper.quality-rewrite.max-rounds:1}") int maxRewriteRounds) {
+        this(modelService, paperTopicSessionRepository, paperOutlineVersionRepository, objectMapper,
+                scoreThreshold, maxRewriteRounds, null, false);
+    }
+
+    @Autowired
+    public QualityRewriteStep(ModelService modelService,
+                              PaperTopicSessionRepository paperTopicSessionRepository,
+                              PaperOutlineVersionRepository paperOutlineVersionRepository,
+                              ObjectMapper objectMapper,
+                              @Value("${smartark.paper.quality-rewrite.score-threshold:75}") int scoreThreshold,
+                              @Value("${smartark.paper.quality-rewrite.max-rounds:1}") int maxRewriteRounds,
+                              LangchainRuntimeGraphClient runtimeGraphClient,
+                              @Value("${smartark.langchain.runtime.paper-graph-enabled:false}") boolean runtimePaperGraphEnabled) {
         this.modelService = modelService;
         this.paperTopicSessionRepository = paperTopicSessionRepository;
         this.paperOutlineVersionRepository = paperOutlineVersionRepository;
         this.objectMapper = objectMapper;
         this.scoreThreshold = scoreThreshold;
         this.maxRewriteRounds = maxRewriteRounds;
+        this.runtimeGraphClient = runtimeGraphClient;
+        this.runtimePaperGraphEnabled = runtimePaperGraphEnabled;
     }
 
     @Override
@@ -61,7 +81,7 @@ public class QualityRewriteStep implements AgentStep {
         PaperOutlineVersionEntity version = paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(session.getId())
                 .orElseThrow();
 
-        JsonNode qualityRoot = parseObject(version.getQualityReportJson());
+        ObjectNode qualityRoot = parseObject(version.getQualityReportJson());
         int score = readScore(qualityRoot);
         List<String> issues = readIssues(qualityRoot.path("issues"));
         ObjectNode stableManuscript = parseObject(version.getManuscriptJson());
@@ -72,15 +92,7 @@ public class QualityRewriteStep implements AgentStep {
         int rewriteRound = version.getRewriteRound() == null ? 0 : version.getRewriteRound();
         boolean shouldRewrite = score > 0 && score < scoreThreshold && rewriteRound < maxRewriteRounds;
         if (shouldRewrite) {
-            JsonNode rewritten = modelService.rewriteOutlineByQualityIssues(
-                    context.getTask().getId(),
-                    context.getTask().getProjectId(),
-                    session.getTopic(),
-                    session.getTopicRefined(),
-                    version.getCitationStyle(),
-                    qualityRoot,
-                    stableManuscript
-            );
+            JsonNode rewritten = executeQualityRewrite(context, session, version, qualityRoot, stableManuscript);
             JsonNode manuscript = rewritten.path("manuscript");
             if (!manuscript.isMissingNode() && !manuscript.isNull()) {
                 StructureCoverage afterCoverage = evaluateStructureCoverage(manuscript.path("chapters"), structureExpectation);
@@ -118,6 +130,124 @@ public class QualityRewriteStep implements AgentStep {
         session.setStatus("checked");
         session.setUpdatedAt(LocalDateTime.now());
         paperTopicSessionRepository.save(session);
+    }
+
+    private JsonNode executeQualityRewrite(AgentExecutionContext context,
+                                           PaperTopicSessionEntity session,
+                                           PaperOutlineVersionEntity version,
+                                           ObjectNode qualityRoot,
+                                           ObjectNode stableManuscript) {
+        JsonNode runtimeRewrite = executeRuntimeQualityRewrite(context, session, version, qualityRoot, stableManuscript);
+        if (runtimeRewrite != null) {
+            context.logInfo("Quality rewrite routed to langchain runtime graph successfully.");
+            return runtimeRewrite;
+        }
+        return modelService.rewriteOutlineByQualityIssues(
+                context.getTask().getId(),
+                context.getTask().getProjectId(),
+                session.getTopic(),
+                session.getTopicRefined(),
+                version.getCitationStyle(),
+                qualityRoot,
+                stableManuscript
+        );
+    }
+
+    private JsonNode executeRuntimeQualityRewrite(AgentExecutionContext context,
+                                                  PaperTopicSessionEntity session,
+                                                  PaperOutlineVersionEntity version,
+                                                  ObjectNode qualityRoot,
+                                                  ObjectNode stableManuscript) {
+        if (!runtimePaperGraphEnabled || runtimeGraphClient == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> input = new LinkedHashMap<>();
+            input.put("stage", "quality_rewrite");
+            input.put("topic", defaultString(session.getTopic()));
+            input.put("topicRefined", defaultString(session.getTopicRefined()));
+            input.put("citationStyle", defaultString(version.getCitationStyle()));
+            input.put("qualityReport", objectMapper.convertValue(qualityRoot, Object.class));
+            input.put("stableManuscript", objectMapper.convertValue(stableManuscript, Object.class));
+            input.put("rewriteRound", version.getRewriteRound() == null ? 0 : version.getRewriteRound());
+
+            LangchainGraphRunResult result = runtimeGraphClient.runPaperGraph(
+                    context.getTask().getId(),
+                    context.getTask().getProjectId(),
+                    context.getTask().getUserId(),
+                    input
+            );
+            JsonNode resultNode = objectMapper.valueToTree(result == null ? Map.of() : result.result());
+            JsonNode normalized = normalizeRuntimeRewriteResult(resultNode, qualityRoot, stableManuscript);
+            if (normalized == null || normalized.path("manuscript").isMissingNode()
+                    || normalized.path("manuscript").isNull()
+                    || !normalized.path("manuscript").path("chapters").isArray()) {
+                logger.warn("Runtime graph returned invalid rewrite shape, fallback to model-service: taskId={}, sessionId={}",
+                        context.getTask().getId(), session.getId());
+                return null;
+            }
+            logger.info("Quality rewrite generated by runtime graph: taskId={}, sessionId={}",
+                    context.getTask().getId(), session.getId());
+            return normalized;
+        } catch (Exception e) {
+            logger.warn("Runtime graph quality rewrite failed, fallback to model-service: taskId={}, sessionId={}, error={}",
+                    context.getTask().getId(), session.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    private JsonNode normalizeRuntimeRewriteResult(JsonNode resultNode, ObjectNode qualityRoot, ObjectNode stableManuscript) {
+        if (resultNode == null || resultNode.isNull()) {
+            return null;
+        }
+        JsonNode rewriteJson = resultNode.path("rewrite_json");
+        if (rewriteJson.isObject() && rewriteJson.path("manuscript").isObject()) {
+            return ensureRuntimeRewriteFields((ObjectNode) rewriteJson, qualityRoot, stableManuscript);
+        }
+
+        JsonNode manuscriptJson = resultNode.path("manuscript_json");
+        if (manuscriptJson.isObject()) {
+            ObjectNode wrapper = objectMapper.createObjectNode();
+            wrapper.set("manuscript", manuscriptJson);
+            return ensureRuntimeRewriteFields(wrapper, qualityRoot, stableManuscript);
+        }
+
+        JsonNode manuscript = resultNode.path("manuscript");
+        if (manuscript.isObject()) {
+            ObjectNode wrapper = objectMapper.createObjectNode();
+            wrapper.set("manuscript", manuscript);
+            return ensureRuntimeRewriteFields(wrapper, qualityRoot, stableManuscript);
+        }
+
+        JsonNode chapters = resultNode.path("chapters");
+        if (chapters.isArray()) {
+            ObjectNode manuscriptWrapper = objectMapper.createObjectNode();
+            manuscriptWrapper.set("chapters", chapters);
+            ObjectNode wrapper = objectMapper.createObjectNode();
+            wrapper.set("manuscript", manuscriptWrapper);
+            return ensureRuntimeRewriteFields(wrapper, qualityRoot, stableManuscript);
+        }
+        return null;
+    }
+
+    private ObjectNode ensureRuntimeRewriteFields(ObjectNode rewriteRoot, ObjectNode qualityRoot, ObjectNode stableManuscript) {
+        ObjectNode root = rewriteRoot == null ? objectMapper.createObjectNode() : rewriteRoot.deepCopy();
+        JsonNode manuscriptNode = root.path("manuscript");
+        if (!manuscriptNode.isObject() || !manuscriptNode.path("chapters").isArray()) {
+            root.set("manuscript", stableManuscript);
+        }
+        if (!root.path("appliedIssues").isArray()) {
+            JsonNode issues = qualityRoot == null ? objectMapper.createArrayNode() : qualityRoot.path("issues");
+            root.set("appliedIssues", issues.isArray() ? issues : objectMapper.createArrayNode());
+        }
+        if (!root.path("summary").isTextual()) {
+            root.put("summary", "runtime_quality_rewrite");
+        }
+        return root;
+    }
+
+    private String defaultString(String value) {
+        return value == null ? "" : value;
     }
 
     private ObjectNode parseObject(String json) {

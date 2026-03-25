@@ -28,7 +28,11 @@ import com.smartark.gateway.common.exception.ErrorCodes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -45,6 +49,9 @@ public class OpenAiCompatibleModelGatewayService {
     private final int defaultTimeoutMs;
     private final int maxRetries;
     private final boolean responseValidationEnabled;
+    private final boolean runtimeModelEnabled;
+    private final String runtimeBaseUrl;
+    private final int runtimeTimeoutMs;
     private final ConcurrentHashMap<String, OpenAIClient> clientCache = new ConcurrentHashMap<>();
 
     public OpenAiCompatibleModelGatewayService(
@@ -52,12 +59,18 @@ public class OpenAiCompatibleModelGatewayService {
             ModelGatewayAuditService auditService,
             @Value("${smartark.model.gateway.default-timeout-ms:45000}") int defaultTimeoutMs,
             @Value("${smartark.model.gateway.max-retries:2}") int maxRetries,
-            @Value("${smartark.model.gateway.response-validation-enabled:true}") boolean responseValidationEnabled) {
+            @Value("${smartark.model.gateway.response-validation-enabled:true}") boolean responseValidationEnabled,
+            @Value("${smartark.langchain.runtime.model-enabled:false}") boolean runtimeModelEnabled,
+            @Value("${smartark.langchain.runtime.base-url:http://localhost:18080}") String runtimeBaseUrl,
+            @Value("${smartark.langchain.runtime.timeout-ms:45000}") int runtimeTimeoutMs) {
         this.objectMapper = objectMapper;
         this.auditService = auditService;
         this.defaultTimeoutMs = Math.max(1000, defaultTimeoutMs);
         this.maxRetries = Math.max(0, maxRetries);
         this.responseValidationEnabled = responseValidationEnabled;
+        this.runtimeModelEnabled = runtimeModelEnabled;
+        this.runtimeBaseUrl = runtimeBaseUrl == null ? "" : runtimeBaseUrl.trim();
+        this.runtimeTimeoutMs = Math.max(1000, runtimeTimeoutMs);
     }
 
     public ModelGatewayResult invoke(ModelGatewayInvocation invocation) {
@@ -65,10 +78,15 @@ public class OpenAiCompatibleModelGatewayService {
         String requestBody = serializeQuietly(invocation.payload());
         long start = System.currentTimeMillis();
         try {
-            ModelGatewayResult result = switch (invocation.endpoint()) {
-                case CHAT_COMPLETIONS -> invokeChatCompletion(invocation);
-                case EMBEDDINGS -> invokeEmbeddings(invocation);
-            };
+            ModelGatewayResult result;
+            if (shouldUseRuntime(invocation)) {
+                result = invokeViaRuntime(invocation);
+            } else {
+                result = switch (invocation.endpoint()) {
+                    case CHAT_COMPLETIONS -> invokeChatCompletion(invocation);
+                    case EMBEDDINGS -> invokeEmbeddings(invocation);
+                };
+            }
             auditService.save(invocation, result, System.currentTimeMillis() - start, true, null, null, requestBody);
             return result;
         } catch (BusinessException ex) {
@@ -89,6 +107,9 @@ public class OpenAiCompatibleModelGatewayService {
         }
         if (!invocation.stream()) {
             throw new BusinessException(ErrorCodes.MODEL_BAD_REQUEST, "Streaming invocation requires payload.stream=true");
+        }
+        if (runtimeModelEnabled) {
+            logger.info("runtime-model enabled but streaming is not proxied yet, fallback to direct OpenAI-compatible path");
         }
         String requestBody = serializeQuietly(invocation.payload());
         long start = System.currentTimeMillis();
@@ -124,6 +145,102 @@ public class OpenAiCompatibleModelGatewayService {
             normalized = normalized + "/v1";
         }
         return normalized;
+    }
+
+    private boolean shouldUseRuntime(ModelGatewayInvocation invocation) {
+        if (!runtimeModelEnabled || invocation == null) {
+            return false;
+        }
+        if (invocation.stream()) {
+            return false;
+        }
+        return invocation.endpoint() == ModelGatewayEndpoint.CHAT_COMPLETIONS
+                || invocation.endpoint() == ModelGatewayEndpoint.EMBEDDINGS;
+    }
+
+    private ModelGatewayResult invokeViaRuntime(ModelGatewayInvocation invocation) {
+        String runtimePath = invocation.endpoint() == ModelGatewayEndpoint.CHAT_COMPLETIONS
+                ? "/v1/model/chat"
+                : "/v1/model/embeddings";
+        int effectiveTimeout = invocation.timeoutMs() != null && invocation.timeoutMs() > 0
+                ? invocation.timeoutMs()
+                : runtimeTimeoutMs;
+        RestClient restClient = buildRuntimeRestClient(effectiveTimeout);
+        try {
+            String responseBody = restClient.post()
+                    .uri(buildRuntimeUrl(runtimePath))
+                    .body(invocation.payload())
+                    .retrieve()
+                    .body(String.class);
+            JsonNode body = objectMapper.readTree(responseBody == null ? "{}" : responseBody);
+            return new ModelGatewayResult(
+                    responseBody,
+                    readText(body, "/id"),
+                    200,
+                    readInt(body, "/usage/prompt_tokens"),
+                    invocation.endpoint() == ModelGatewayEndpoint.CHAT_COMPLETIONS
+                            ? readInt(body, "/usage/completion_tokens")
+                            : null,
+                    readInt(body, "/usage/total_tokens")
+            );
+        } catch (RestClientResponseException ex) {
+            throw mapRuntimeHttpException(ex);
+        } catch (ResourceAccessException ex) {
+            throw new BusinessException(
+                    ErrorCodes.MODEL_UPSTREAM_TIMEOUT,
+                    "runtime request timeout: " + detailMessage(ex)
+            );
+        } catch (JsonProcessingException ex) {
+            throw new BusinessException(
+                    ErrorCodes.MODEL_OUTPUT_EMPTY,
+                    "runtime response parse failed: " + detailMessage(ex)
+            );
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(
+                    ErrorCodes.MODEL_SERVICE_ERROR,
+                    "runtime invocation failed: " + detailMessage(ex)
+            );
+        }
+    }
+
+    private RestClient buildRuntimeRestClient(int timeoutMs) {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(timeoutMs);
+        factory.setReadTimeout(timeoutMs);
+        return RestClient.builder().requestFactory(factory).build();
+    }
+
+    private String buildRuntimeUrl(String path) {
+        if (runtimeBaseUrl.isBlank()) {
+            throw new BusinessException(ErrorCodes.MODEL_CONFIG_MISSING, "runtime base-url is empty");
+        }
+        String normalized = runtimeBaseUrl.endsWith("/")
+                ? runtimeBaseUrl.substring(0, runtimeBaseUrl.length() - 1)
+                : runtimeBaseUrl;
+        if (normalized.endsWith("/v1") && path.startsWith("/v1/")) {
+            return normalized + path.substring(3);
+        }
+        return normalized + path;
+    }
+
+    private BusinessException mapRuntimeHttpException(RestClientResponseException ex) {
+        int status = ex.getStatusCode().value();
+        String message = "runtime http status=" + status + ", body=" + trim(ex.getResponseBodyAsString(), 300);
+        if (status == 400 || status == 422) {
+            return new BusinessException(ErrorCodes.MODEL_BAD_REQUEST, message);
+        }
+        if (status == 401 || status == 403) {
+            return new BusinessException(ErrorCodes.MODEL_AUTH_FAILED, message);
+        }
+        if (status == 429) {
+            return new BusinessException(ErrorCodes.MODEL_RATE_LIMITED, message);
+        }
+        if (status >= 500) {
+            return new BusinessException(ErrorCodes.MODEL_UPSTREAM_UNAVAILABLE, message);
+        }
+        return new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, message);
     }
 
     private ModelGatewayResult invokeChatCompletion(ModelGatewayInvocation invocation) {
@@ -387,6 +504,37 @@ public class OpenAiCompatibleModelGatewayService {
             return null;
         }
         return node.asInt();
+    }
+
+    private String readText(JsonNode body, String pointer) {
+        JsonNode node = body == null ? null : body.at(pointer);
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        String value = node.asText(null);
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private String detailMessage(Throwable throwable) {
+        if (throwable == null) {
+            return "unknown";
+        }
+        String message = throwable.getMessage();
+        if (message == null || message.isBlank()) {
+            message = throwable.getClass().getSimpleName();
+        }
+        return trim(message, 400);
+    }
+
+    private String trim(String text, int maxLen) {
+        if (text == null) {
+            return "";
+        }
+        String cleaned = text.replace("\n", " ").replace("\r", " ");
+        if (cleaned.length() <= maxLen) {
+            return cleaned;
+        }
+        return cleaned.substring(0, maxLen);
     }
 
     private String serializeQuietly(Object value) {

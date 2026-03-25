@@ -12,11 +12,12 @@ if [ -f ".env" ]; then
   set +a
 fi
 
-docker compose up -d mysql redis qdrant
+docker compose up -d mysql redis qdrant langchain-runtime
 
 BACKEND_PORT="${BACKEND_PORT:-8080}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 QDRANT_HTTP_PORT="${QDRANT_HTTP_PORT:-6333}"
+LANGCHAIN_PORT="${LANGCHAIN_PORT:-18080}"
 
 export DB_HOST="${DB_HOST:-localhost}"
 export DB_PORT="${DB_PORT:-3306}"
@@ -41,10 +42,27 @@ else
 fi
 export CHAT_MODEL="${CHAT_MODEL:-qwen-plus}"
 export CODE_MODEL="${CODE_MODEL:-qwen-plus}"
+export LANGCHAIN_ENABLED="${LANGCHAIN_ENABLED:-false}"
+export LANGCHAIN_SIDECAR_BASE_URL="${LANGCHAIN_SIDECAR_BASE_URL:-http://localhost:${LANGCHAIN_PORT}}"
+export LANGCHAIN_SIDECAR_TIMEOUT_MS="${LANGCHAIN_SIDECAR_TIMEOUT_MS:-3000}"
+export LANGCHAIN_SIDECAR_API_VERSION="${LANGCHAIN_SIDECAR_API_VERSION:-v1}"
+export LANGCHAIN_RUNTIME_MODEL_ENABLED="${LANGCHAIN_RUNTIME_MODEL_ENABLED:-false}"
+export LANGCHAIN_RUNTIME_BASE_URL="${LANGCHAIN_RUNTIME_BASE_URL:-http://localhost:${LANGCHAIN_PORT}}"
+export LANGCHAIN_RUNTIME_TIMEOUT_MS="${LANGCHAIN_RUNTIME_TIMEOUT_MS:-45000}"
+export LANGCHAIN_RUNTIME_CODEGEN_GRAPH_ENABLED="${LANGCHAIN_RUNTIME_CODEGEN_GRAPH_ENABLED:-false}"
+export LANGCHAIN_RUNTIME_PAPER_GRAPH_ENABLED="${LANGCHAIN_RUNTIME_PAPER_GRAPH_ENABLED:-false}"
 
 echo "waiting for qdrant http://localhost:${QDRANT_HTTP_PORT}/healthz"
 for _ in $(seq 1 60); do
   if curl -fsS "http://localhost:${QDRANT_HTTP_PORT}/healthz" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+echo "waiting for langchain-runtime http://localhost:${LANGCHAIN_PORT}/health"
+for _ in $(seq 1 60); do
+  if curl -fsS "http://localhost:${LANGCHAIN_PORT}/health" >/dev/null 2>&1; then
     break
   fi
   sleep 1

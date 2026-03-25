@@ -151,3 +151,36 @@ npm run dev
 ## 许可证
 
 MIT License
+
+## LangChain Runtime Model Routing (P1)
+
+The backend model gateway now supports routing non-stream model calls to `langchain-runtime`.
+
+Environment variables:
+
+- `LANGCHAIN_RUNTIME_MODEL_ENABLED` (`false` by default)
+- `LANGCHAIN_RUNTIME_BASE_URL` (`http://localhost:18080` by default)
+- `LANGCHAIN_RUNTIME_TIMEOUT_MS` (`45000` by default)
+- `LANGCHAIN_RUNTIME_CODEGEN_GRAPH_ENABLED` (`false` by default, routes codegen graph stages to runtime first)
+- `LANGCHAIN_RUNTIME_PAPER_GRAPH_ENABLED` (`false` by default, routes paper graph stages to runtime first)
+
+Behavior:
+
+- When `LANGCHAIN_RUNTIME_MODEL_ENABLED=true`, synchronous chat/embedding calls go through:
+  - `POST /v1/model/chat`
+  - `POST /v1/model/embeddings`
+- Streaming chat still uses direct OpenAI-compatible upstream path for compatibility in this phase.
+- When `LANGCHAIN_RUNTIME_CODEGEN_GRAPH_ENABLED=true`, the following codegen stages route to runtime graph first and fall back to `ModelService`:
+  - `requirement_analyze`
+  - `codegen_backend`
+  - `codegen_frontend`
+  - `sql_generate`
+  - `artifact_contract_validate`
+  - `build_verify_batch_autofix`
+  - `build_verify_autofix`
+- When `LANGCHAIN_RUNTIME_PAPER_GRAPH_ENABLED=true`, paper stages route to runtime graph first and keep model-service fallback.
+
+Smoke tests:
+
+- Paper graph smoke: `powershell -ExecutionPolicy Bypass -File scripts/paper-runtime-graph-smoke.ps1`
+- Codegen graph smoke: `powershell -ExecutionPolicy Bypass -File scripts/codegen-runtime-graph-smoke.ps1`

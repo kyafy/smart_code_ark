@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.FilePlanItem;
+import com.smartark.gateway.dto.LangchainGraphRunResult;
+import com.smartark.gateway.service.LangchainRuntimeGraphClient;
 import com.smartark.gateway.service.ModelService;
 import com.smartark.gateway.service.TemplateRepoService;
 import org.slf4j.Logger;
@@ -14,8 +16,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -24,11 +30,23 @@ public abstract class AbstractCodegenStep implements AgentStep {
     protected final ModelService modelService;
     protected final ObjectMapper objectMapper;
     protected final TemplateRepoService templateRepoService;
+    protected final LangchainRuntimeGraphClient runtimeGraphClient;
+    protected final boolean runtimeCodegenGraphEnabled;
 
     protected AbstractCodegenStep(ModelService modelService, ObjectMapper objectMapper, TemplateRepoService templateRepoService) {
+        this(modelService, objectMapper, templateRepoService, null, false);
+    }
+
+    protected AbstractCodegenStep(ModelService modelService,
+                                  ObjectMapper objectMapper,
+                                  TemplateRepoService templateRepoService,
+                                  LangchainRuntimeGraphClient runtimeGraphClient,
+                                  boolean runtimeCodegenGraphEnabled) {
         this.modelService = modelService;
         this.objectMapper = objectMapper;
         this.templateRepoService = templateRepoService;
+        this.runtimeGraphClient = runtimeGraphClient;
+        this.runtimeCodegenGraphEnabled = runtimeCodegenGraphEnabled;
     }
 
     protected void generateFilesByGroup(AgentExecutionContext context, Set<String> groups) throws Exception {
@@ -55,6 +73,9 @@ public abstract class AbstractCodegenStep implements AgentStep {
                 .filter(item -> item.getGroup() != null && groups.contains(item.getGroup()))
                 .sorted(Comparator.comparing(item -> item.getPriority() == null ? 50 : item.getPriority()))
                 .toList();
+        Set<String> runtimeGeneratedPaths = generateFilesByRuntimeGraph(
+                context, targetItems, groups, prd, fullStack, instructions, groupStructure
+        );
 
         int successCount = 0;
         int failCount = 0;
@@ -62,6 +83,11 @@ public abstract class AbstractCodegenStep implements AgentStep {
             String filePath = normalizeAndValidatePath(item.getPath());
             if (filePath == null) {
                 logger.warn("Skip unsafe file path: {}", item.getPath());
+                continue;
+            }
+            if (runtimeGeneratedPaths.contains(filePath)) {
+                logger.info("Skip model generation for runtime-generated file: {}", filePath);
+                successCount++;
                 continue;
             }
             if (isTemplateManaged(item) && templateFileAlreadyPresent(context, filePath)) {
@@ -113,6 +139,124 @@ public abstract class AbstractCodegenStep implements AgentStep {
         context.logInfo("Codegen completed: groups=" + groups + ", success=" + successCount + ", failed=" + failCount);
         if (successCount == 0 && !targetItems.isEmpty()) {
             throw new RuntimeException("All file generation failed for groups: " + groups);
+        }
+    }
+
+    private Set<String> generateFilesByRuntimeGraph(AgentExecutionContext context,
+                                                    List<FilePlanItem> targetItems,
+                                                    Set<String> groups,
+                                                    String prd,
+                                                    String fullStack,
+                                                    String instructions,
+                                                    String groupStructure) {
+        if (!runtimeCodegenGraphEnabled || runtimeGraphClient == null || targetItems == null || targetItems.isEmpty()) {
+            return Set.of();
+        }
+        List<String> targetPaths = targetItems.stream()
+                .map(item -> normalizeAndValidatePath(item.getPath()))
+                .filter(path -> path != null && !path.isBlank())
+                .distinct()
+                .toList();
+        if (targetPaths.isEmpty()) {
+            return Set.of();
+        }
+        try {
+            Map<String, Object> input = new LinkedHashMap<>();
+            input.put("stage", getStepCode());
+            input.put("prd", prd == null ? "" : prd);
+            input.put("fullStack", fullStack == null ? "" : fullStack);
+            input.put("instructions", instructions == null ? "" : instructions);
+            input.put("groupStructure", groupStructure == null ? "" : groupStructure);
+            input.put("groups", new ArrayList<>(groups));
+            input.put("targetFiles", targetPaths);
+
+            LangchainGraphRunResult result = runtimeGraphClient.runCodegenGraph(
+                    context.getTask().getId(),
+                    context.getTask().getProjectId(),
+                    context.getTask().getUserId(),
+                    input
+            );
+            JsonNode resultNode = objectMapper.valueToTree(result == null ? Map.of() : result.result());
+            Map<String, String> runtimeFiles = extractRuntimeFileContents(resultNode);
+            if (runtimeFiles.isEmpty()) {
+                logger.warn("Runtime graph returned empty file payload for step={}, fallback to model-service", getStepCode());
+                return Set.of();
+            }
+            Set<String> allowedPaths = new LinkedHashSet<>(targetPaths);
+            Set<String> generatedPaths = new LinkedHashSet<>();
+            for (Map.Entry<String, String> entry : runtimeFiles.entrySet()) {
+                String filePath = normalizeAndValidatePath(entry.getKey());
+                if (filePath == null || !allowedPaths.contains(filePath)) {
+                    continue;
+                }
+                String content = entry.getValue();
+                if (content == null || content.isBlank()) {
+                    continue;
+                }
+                try {
+                    saveFile(context, filePath, content);
+                    generatedPaths.add(filePath);
+                } catch (Exception e) {
+                    logger.warn("Runtime-generated file save failed: path={}, error={}", filePath, e.getMessage());
+                }
+            }
+            if (!generatedPaths.isEmpty()) {
+                logger.info("Codegen step {} generated {} files via runtime graph", getStepCode(), generatedPaths.size());
+                context.logInfo("Codegen routed to langchain runtime graph: step=" + getStepCode()
+                        + ", generated=" + generatedPaths.size());
+            }
+            return generatedPaths;
+        } catch (Exception e) {
+            logger.warn("Runtime codegen graph failed for step={}, fallback to model-service: {}", getStepCode(), e.getMessage());
+            return Set.of();
+        }
+    }
+
+    private Map<String, String> extractRuntimeFileContents(JsonNode resultNode) {
+        Map<String, String> files = new LinkedHashMap<>();
+        if (resultNode == null || resultNode.isNull()) {
+            return files;
+        }
+        collectRuntimeFilesFromArray(files, resultNode.path("codegen_files"));
+        collectRuntimeFilesFromArray(files, resultNode.path("generated_files"));
+        collectRuntimeFilesFromArray(files, resultNode.path("files"));
+        JsonNode fileContents = resultNode.path("file_contents");
+        if (fileContents.isObject()) {
+            fileContents.fields().forEachRemaining(entry -> {
+                String content = entry.getValue().asText("");
+                if (!content.isBlank()) {
+                    files.putIfAbsent(entry.getKey(), content);
+                }
+            });
+        }
+        return files;
+    }
+
+    private void collectRuntimeFilesFromArray(Map<String, String> files, JsonNode node) {
+        if (!node.isArray()) {
+            return;
+        }
+        for (JsonNode item : node) {
+            if (!item.isObject()) {
+                continue;
+            }
+            String path = item.path("path").asText("");
+            if (path.isBlank()) {
+                path = item.path("filePath").asText("");
+            }
+            if (path.isBlank()) {
+                path = item.path("file").asText("");
+            }
+            String content = item.path("content").asText("");
+            if (content.isBlank()) {
+                content = item.path("code").asText("");
+            }
+            if (content.isBlank()) {
+                content = item.path("text").asText("");
+            }
+            if (!path.isBlank() && !content.isBlank()) {
+                files.putIfAbsent(path, content);
+            }
         }
     }
 

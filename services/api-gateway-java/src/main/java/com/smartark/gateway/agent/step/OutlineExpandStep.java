@@ -15,9 +15,12 @@ import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
 import com.smartark.gateway.db.repo.PaperSourceRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
+import com.smartark.gateway.dto.LangchainGraphRunResult;
+import com.smartark.gateway.service.LangchainRuntimeGraphClient;
 import com.smartark.gateway.service.ModelService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -37,6 +40,8 @@ public class OutlineExpandStep implements AgentStep {
     private final PaperOutlineVersionRepository paperOutlineVersionRepository;
     private final PaperSourceRepository paperSourceRepository;
     private final ObjectMapper objectMapper;
+    private final LangchainRuntimeGraphClient runtimeGraphClient;
+    private final boolean runtimePaperGraphEnabled;
     private final boolean batchEnabled;
     private final int batchChapterSize;
     private final int batchMaxRetries;
@@ -47,15 +52,33 @@ public class OutlineExpandStep implements AgentStep {
                              PaperOutlineVersionRepository paperOutlineVersionRepository,
                              PaperSourceRepository paperSourceRepository,
                              ObjectMapper objectMapper,
+                             boolean batchEnabled,
+                             int batchChapterSize,
+                             int batchMaxRetries,
+                             int chapterEvidenceTopK) {
+        this(modelService, paperTopicSessionRepository, paperOutlineVersionRepository, paperSourceRepository, objectMapper,
+                null, batchEnabled, batchChapterSize, batchMaxRetries, chapterEvidenceTopK, false);
+    }
+
+    @Autowired
+    public OutlineExpandStep(ModelService modelService,
+                             PaperTopicSessionRepository paperTopicSessionRepository,
+                             PaperOutlineVersionRepository paperOutlineVersionRepository,
+                             PaperSourceRepository paperSourceRepository,
+                             ObjectMapper objectMapper,
+                             LangchainRuntimeGraphClient runtimeGraphClient,
                              @Value("${smartark.paper.expand.batch-enabled:true}") boolean batchEnabled,
                              @Value("${smartark.paper.expand.batch-chapter-size:2}") int batchChapterSize,
                              @Value("${smartark.paper.expand.batch-max-retries:2}") int batchMaxRetries,
-                             @Value("${smartark.paper.expand.chapter-evidence-topk:8}") int chapterEvidenceTopK) {
+                             @Value("${smartark.paper.expand.chapter-evidence-topk:8}") int chapterEvidenceTopK,
+                             @Value("${smartark.langchain.runtime.paper-graph-enabled:false}") boolean runtimePaperGraphEnabled) {
         this.modelService = modelService;
         this.paperTopicSessionRepository = paperTopicSessionRepository;
         this.paperOutlineVersionRepository = paperOutlineVersionRepository;
         this.paperSourceRepository = paperSourceRepository;
         this.objectMapper = objectMapper;
+        this.runtimeGraphClient = runtimeGraphClient;
+        this.runtimePaperGraphEnabled = runtimePaperGraphEnabled;
         this.batchEnabled = batchEnabled;
         this.batchChapterSize = Math.max(1, batchChapterSize);
         this.batchMaxRetries = Math.max(0, batchMaxRetries);
@@ -100,7 +123,12 @@ public class OutlineExpandStep implements AgentStep {
         logGuardProbe(context, "precheck", structureExpectation, null, "allow_write", "none", null, null);
         context.logInfo("Outline flattened: originalSections=" + countOutlineSections(outlineRoot)
                 + ", flattenedSections=" + totalFlatSections);
-        if (batchEnabled) {
+        ExpandResult runtimeExpandResult = executeRuntimeExpand(context, session, flattenedOutline, ragItems, structureExpectation);
+        if (runtimeExpandResult != null) {
+            normalized = runtimeExpandResult.normalized();
+            fullCitationMap = runtimeExpandResult.citationMapJson();
+            context.logInfo("Outline expand routed to langchain runtime graph successfully.");
+        } else if (batchEnabled) {
             List<BatchPlanItem> plans = planBatches(flattenedOutline.path("chapters"));
             logger.info("Step outline_expand batch plan: taskId={}, sessionId={}, totalChapters={}, batchCount={}",
                     context.getTask().getId(), session.getId(), flattenedOutline.path("chapters").size(), plans.size());
@@ -165,6 +193,55 @@ public class OutlineExpandStep implements AgentStep {
         session.setStatus("expanded");
         session.setUpdatedAt(LocalDateTime.now());
         paperTopicSessionRepository.save(session);
+    }
+
+    private ExpandResult executeRuntimeExpand(AgentExecutionContext context,
+                                              PaperTopicSessionEntity session,
+                                              JsonNode flattenedOutline,
+                                              List<RagEvidenceItem> ragItems,
+                                              StructureExpectation structureExpectation) {
+        if (!runtimePaperGraphEnabled || runtimeGraphClient == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> input = new LinkedHashMap<>();
+            input.put("stage", "outline_expand");
+            input.put("topic", fallback(session.getTopic(), ""));
+            input.put("topicRefined", fallback(session.getTopicRefined(), ""));
+            input.put("discipline", fallback(session.getDiscipline(), ""));
+            input.put("degreeLevel", fallback(session.getDegreeLevel(), ""));
+            input.put("methodPreference", fallback(session.getMethodPreference(), ""));
+            input.put("researchQuestionsJson", fallback(session.getResearchQuestionsJson(), "[]"));
+            input.put("outline", objectMapper.convertValue(flattenedOutline, Object.class));
+            input.put("ragEvidence", objectMapper.convertValue(ragItems == null ? List.of() : ragItems, Object.class));
+            input.put("expectedChapterCount", structureExpectation.expectedChapterCount());
+            input.put("expectedSectionCountPerChapter", structureExpectation.expectedSectionCountPerChapter());
+
+            LangchainGraphRunResult graphResult = runtimeGraphClient.runPaperGraph(
+                    context.getTask().getId(),
+                    context.getTask().getProjectId(),
+                    context.getTask().getUserId(),
+                    input
+            );
+            JsonNode resultNode = objectMapper.valueToTree(graphResult == null ? Map.of() : graphResult.result());
+            JsonNode expanded = adaptRuntimeExpanded(resultNode, flattenedOutline, structureExpectation.expectedSectionCountPerChapter());
+            if (!isExpandedSchemaValid(expanded, structureExpectation.expectedChapterCount(),
+                    structureExpectation.expectedSectionCountPerChapter())) {
+                logger.warn("Runtime graph returned invalid expanded shape, fallback to model-service: taskId={}, sessionId={}",
+                        context.getTask().getId(), session.getId());
+                return null;
+            }
+
+            ObjectNode normalized = normalizeExpanded(expanded, session);
+            ensureManuscriptQualityGate(normalized, context.getTask().getId(), session.getId());
+            logger.info("Outline expand generated by runtime graph: taskId={}, sessionId={}",
+                    context.getTask().getId(), session.getId());
+            return new ExpandResult(normalized, buildFullCitationMap(expanded.path("citationMap"), ragItems));
+        } catch (Exception e) {
+            logger.warn("Runtime graph expand failed, fallback to model-service: taskId={}, sessionId={}, error={}",
+                    context.getTask().getId(), session.getId(), e.getMessage());
+            return null;
+        }
     }
 
     private ExpandResult executeSingleExpand(AgentExecutionContext context,
@@ -413,6 +490,129 @@ public class OutlineExpandStep implements AgentStep {
         } catch (Exception e) {
             return new MergeResult(merged, "");
         }
+    }
+
+    private JsonNode adaptRuntimeExpanded(JsonNode resultNode,
+                                          JsonNode flattenedOutline,
+                                          Map<Integer, Integer> expectedSectionCounts) {
+        if (resultNode == null || resultNode.isNull()) {
+            return null;
+        }
+        JsonNode expandedJson = resultNode.path("expanded_json");
+        if (isRuntimeExpandedNode(expandedJson)) {
+            return ensureCitationMap(expandedJson);
+        }
+        JsonNode manuscriptJson = resultNode.path("manuscript_json");
+        if (isRuntimeExpandedNode(manuscriptJson)) {
+            return ensureCitationMap(manuscriptJson);
+        }
+        JsonNode chaptersNode = resultNode.path("chapters");
+        if (chaptersNode.isArray()) {
+            return wrapRuntimeChapters(chaptersNode, flattenedOutline, expectedSectionCounts, resultNode.path("citationMap"));
+        }
+        return null;
+    }
+
+    private boolean isRuntimeExpandedNode(JsonNode node) {
+        return node != null && node.isObject() && node.path("chapters").isArray();
+    }
+
+    private JsonNode ensureCitationMap(JsonNode expandedNode) {
+        if (expandedNode == null || !expandedNode.isObject()) {
+            return expandedNode;
+        }
+        ObjectNode root = expandedNode.deepCopy();
+        if (!root.path("citationMap").isArray()) {
+            root.set("citationMap", objectMapper.createArrayNode());
+        }
+        return root;
+    }
+
+    private JsonNode wrapRuntimeChapters(JsonNode runtimeChapters,
+                                         JsonNode flattenedOutline,
+                                         Map<Integer, Integer> expectedSectionCounts,
+                                         JsonNode runtimeCitationMap) {
+        ArrayNode normalizedChapters = objectMapper.createArrayNode();
+        JsonNode expectedChapters = flattenedOutline == null ? objectMapper.createArrayNode() : flattenedOutline.path("chapters");
+        int chapterCount = expectedChapters.isArray() ? expectedChapters.size() : runtimeChapters.size();
+        for (int ci = 0; ci < chapterCount; ci++) {
+            JsonNode expectedChapter = expectedChapters.isArray() && ci < expectedChapters.size()
+                    ? expectedChapters.get(ci)
+                    : objectMapper.createObjectNode();
+            JsonNode runtimeChapter = ci < runtimeChapters.size() ? runtimeChapters.get(ci) : objectMapper.createObjectNode();
+            ObjectNode chapter = objectMapper.createObjectNode();
+            chapter.put("index", runtimeChapter.path("index").asInt(ci + 1));
+            chapter.put("title", fallback(runtimeChapter.path("title").asText(""),
+                    fallback(expectedChapter.path("title").asText(""), "Chapter " + (ci + 1))));
+            chapter.put("summary", fallback(runtimeChapter.path("summary").asText(""), expectedChapter.path("summary").asText("")));
+            chapter.put("objective", fallback(runtimeChapter.path("objective").asText(""), ""));
+
+            ArrayNode sections = objectMapper.createArrayNode();
+            JsonNode runtimeSections = runtimeChapter.path("sections");
+            JsonNode expectedSections = expectedChapter.path("sections");
+            int expectedCount = expectedSectionCounts == null ? 0 : expectedSectionCounts.getOrDefault(ci, 0);
+            int runtimeCount = runtimeSections.isArray() ? runtimeSections.size() : 0;
+            int sectionCount = Math.max(Math.max(1, expectedCount), runtimeCount);
+            for (int si = 0; si < sectionCount; si++) {
+                JsonNode runtimeSection = runtimeSections.isArray() && si < runtimeSections.size()
+                        ? runtimeSections.get(si)
+                        : objectMapper.createObjectNode();
+                JsonNode expectedSection = expectedSections.isArray() && si < expectedSections.size()
+                        ? expectedSections.get(si)
+                        : objectMapper.createObjectNode();
+                ObjectNode section = objectMapper.createObjectNode();
+                String sectionTitle = fallback(runtimeSection.path("title").asText(""),
+                        fallback(runtimeSection.path("section").asText(""),
+                                fallback(expectedSection.path("title").asText(""), "Section " + (ci + 1) + "." + (si + 1))));
+                String content = fallback(runtimeSection.path("content").asText(""),
+                        fallback(runtimeSection.path("summary").asText(""),
+                                "This section elaborates on " + sectionTitle + " based on the current evidence."));
+                String coreArgument = fallback(runtimeSection.path("coreArgument").asText(""), content);
+                section.put("title", sectionTitle);
+                section.put("content", content);
+                section.put("coreArgument", coreArgument);
+                section.put("method", fallback(runtimeSection.path("method").asText(""), ""));
+                section.put("dataPlan", fallback(runtimeSection.path("dataPlan").asText(""), ""));
+                section.put("expectedResult", fallback(runtimeSection.path("expectedResult").asText(""), ""));
+                section.set("citations", normalizeCitations(runtimeSection.path("citations")));
+                sections.add(section);
+            }
+
+            chapter.set("sections", sections);
+            normalizedChapters.add(chapter);
+        }
+
+        ObjectNode root = objectMapper.createObjectNode();
+        root.set("chapters", normalizedChapters);
+        if (runtimeCitationMap != null && runtimeCitationMap.isArray()) {
+            root.set("citationMap", runtimeCitationMap);
+        } else {
+            root.set("citationMap", objectMapper.createArrayNode());
+        }
+        return root;
+    }
+
+    private ArrayNode normalizeCitations(JsonNode citationsNode) {
+        ArrayNode citations = objectMapper.createArrayNode();
+        if (citationsNode == null || !citationsNode.isArray()) {
+            return citations;
+        }
+        for (JsonNode item : citationsNode) {
+            if (item.isInt() || item.isLong()) {
+                citations.add(item.asInt());
+                continue;
+            }
+            String value = item.asText("");
+            if (value.isBlank()) {
+                continue;
+            }
+            try {
+                citations.add(Integer.parseInt(value));
+            } catch (Exception ignored) {
+                // ignore non-numeric citation values
+            }
+        }
+        return citations;
     }
 
     private JsonNode readJson(String text) {

@@ -42,6 +42,12 @@ smartark:
       base-url: ${LANGCHAIN_SIDECAR_BASE_URL:http://localhost:18080}
       timeout-ms: ${LANGCHAIN_SIDECAR_TIMEOUT_MS:3000}
       api-version: ${LANGCHAIN_SIDECAR_API_VERSION:v1}
+    runtime:
+      model-enabled: ${LANGCHAIN_RUNTIME_MODEL_ENABLED:false}
+      base-url: ${LANGCHAIN_RUNTIME_BASE_URL:http://localhost:18080}
+      timeout-ms: ${LANGCHAIN_RUNTIME_TIMEOUT_MS:45000}
+      codegen-graph-enabled: ${LANGCHAIN_RUNTIME_CODEGEN_GRAPH_ENABLED:false}
+      paper-graph-enabled: ${LANGCHAIN_RUNTIME_PAPER_GRAPH_ENABLED:false}
   delivery:
     guard:
       enabled: ${DELIVERY_GUARD_ENABLED:true}

@@ -20,6 +20,9 @@ import com.smartark.gateway.service.TaskService;
 import com.smartark.gateway.service.TopicSuggestionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,6 +53,26 @@ public class PaperController {
 
     @PostMapping("/outline")
     @Operation(summary = "Generate paper outline task", description = "Create a new paper-outline generation task.")
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            description = "Paper generation request payload",
+            content = @Content(
+                    mediaType = "application/json",
+                    schema = @Schema(implementation = PaperOutlineGenerateRequest.class),
+                    examples = @ExampleObject(
+                            name = "paper-outline-request",
+                            value = """
+                                    {
+                                      "topic": "基于多智能体协作的软件工程代码生成质量优化研究",
+                                      "discipline": "软件工程",
+                                      "degreeLevel": "硕士",
+                                      "methodPreference": "实验研究"
+                                    }
+                                    """
+                    )
+            )
+    )
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Task created")
     public ApiResponse<PaperOutlineGenerateResult> generateOutline(@Valid @RequestBody PaperOutlineGenerateRequest request) {
         return ApiResponse.success(taskService.generatePaperOutline(request));
     }
@@ -76,6 +99,23 @@ public class PaperController {
 
     @PostMapping("/rag/reindex")
     @Operation(summary = "Reindex RAG session", description = "Rebuilds vector index for a session. If sessionId is empty, no operation is performed.")
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = false,
+            description = "Optional session scope for reindex",
+            content = @Content(
+                    mediaType = "application/json",
+                    schema = @Schema(implementation = RagReindexRequest.class),
+                    examples = @ExampleObject(
+                            name = "rag-reindex-request",
+                            value = """
+                                    {
+                                      "sessionId": 123
+                                    }
+                                    """
+                    )
+            )
+    )
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Reindex accepted")
     public ApiResponse<Void> ragReindex(@RequestBody(required = false) RagReindexRequest request) {
         Long sessionId = request != null ? request.sessionId() : null;
         if (sessionId != null) {
@@ -101,6 +141,26 @@ public class PaperController {
 
     @PostMapping("/topic/suggest")
     @Operation(summary = "Suggest paper topics")
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            description = "Topic suggestion request payload",
+            content = @Content(
+                    mediaType = "application/json",
+                    schema = @Schema(implementation = TopicSuggestRequest.class),
+                    examples = @ExampleObject(
+                            name = "topic-suggest-request",
+                            value = """
+                                    {
+                                      "sessionId": 123,
+                                      "direction": "多智能体系统与代码生成",
+                                      "constraints": "优先可复现研究路线，关注工程落地",
+                                      "round": 1
+                                    }
+                                    """
+                    )
+            )
+    )
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Topic suggestions returned")
     public ApiResponse<TopicSuggestResult> suggestTopics(@Valid @RequestBody TopicSuggestRequest request) {
         String userId = RequestContext.getUserId();
         return ApiResponse.success(topicSuggestionService.suggest(request, userId));
@@ -108,6 +168,29 @@ public class PaperController {
 
     @PostMapping("/topic/adopt")
     @Operation(summary = "Adopt a suggested topic", description = "Adopts selected topic and converts it into outline input payload.")
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            description = "Topic adopt request payload",
+            content = @Content(
+                    mediaType = "application/json",
+                    schema = @Schema(implementation = TopicAdoptRequest.class),
+                    examples = @ExampleObject(
+                            name = "topic-adopt-request",
+                            value = """
+                                    {
+                                      "sessionId": 123,
+                                      "selectedIndex": 0,
+                                      "customTitle": "面向复杂任务的软件工程多智能体协作框架研究",
+                                      "customQuestions": [
+                                        "多智能体协作在复杂代码生成中的关键瓶颈是什么？",
+                                        "如何量化协作策略带来的质量收益？"
+                                      ]
+                                    }
+                                    """
+                    )
+            )
+    )
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Topic adopted")
     public ApiResponse<PaperOutlineGenerateRequest> adoptTopic(@Valid @RequestBody TopicAdoptRequest request) {
         String userId = RequestContext.getUserId();
         PaperTopicSessionEntity session = topicSuggestionService.adopt(request, userId);

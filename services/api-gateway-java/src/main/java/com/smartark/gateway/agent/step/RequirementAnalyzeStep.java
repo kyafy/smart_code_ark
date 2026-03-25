@@ -7,11 +7,15 @@ import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.dto.LangchainGraphRunResult;
+import com.smartark.gateway.service.LangchainRuntimeGraphClient;
 import com.smartark.gateway.service.ModelService;
 import com.smartark.gateway.service.StepMemoryService;
 import com.smartark.gateway.service.TemplateRepoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -30,15 +34,29 @@ public class RequirementAnalyzeStep implements AgentStep {
     private final ObjectMapper objectMapper;
     private final StepMemoryService stepMemoryService;
     private final TemplateRepoService templateRepoService;
+    private final LangchainRuntimeGraphClient runtimeGraphClient;
+    private final boolean runtimeCodegenGraphEnabled;
 
     public RequirementAnalyzeStep(ModelService modelService,
                                   ObjectMapper objectMapper,
                                   StepMemoryService stepMemoryService,
                                   TemplateRepoService templateRepoService) {
+        this(modelService, objectMapper, stepMemoryService, templateRepoService, null, false);
+    }
+
+    @Autowired
+    public RequirementAnalyzeStep(ModelService modelService,
+                                  ObjectMapper objectMapper,
+                                  StepMemoryService stepMemoryService,
+                                  TemplateRepoService templateRepoService,
+                                  LangchainRuntimeGraphClient runtimeGraphClient,
+                                  @Value("${smartark.langchain.runtime.codegen-graph-enabled:false}") boolean runtimeCodegenGraphEnabled) {
         this.modelService = modelService;
         this.objectMapper = objectMapper;
         this.stepMemoryService = stepMemoryService;
         this.templateRepoService = templateRepoService;
+        this.runtimeGraphClient = runtimeGraphClient;
+        this.runtimeCodegenGraphEnabled = runtimeCodegenGraphEnabled;
     }
 
     @Override
@@ -80,10 +98,8 @@ public class RequirementAnalyzeStep implements AgentStep {
                 : context.getInstructions();
         List<String> generatedFiles;
         try {
-            generatedFiles = modelService.generateProjectStructure(
-                    context.getTask().getId(),
-                    context.getTask().getProjectId(),
-                    prd, stackBackend, stackFrontend, stackDb, effectiveInstructions
+            generatedFiles = generateProjectStructureWithRuntimeFallback(
+                    context, prd, projectType, stackBackend, stackFrontend, stackDb, effectiveInstructions
             );
         } catch (Exception e) {
             logger.warn("Project structure generation failed, fallback to builtin structure", e);
@@ -115,10 +131,8 @@ public class RequirementAnalyzeStep implements AgentStep {
             try {
                 logger.warn("Project structure missing critical files, corrective retry: taskId={}, missing={}",
                         context.getTask().getId(), completeness.missingFiles());
-                List<String> retried = modelService.generateProjectStructure(
-                        context.getTask().getId(),
-                        context.getTask().getProjectId(),
-                        prd, stackBackend, stackFrontend, stackDb, retryInstruction
+                List<String> retried = generateProjectStructureWithRuntimeFallback(
+                        context, prd, projectType, stackBackend, stackFrontend, stackDb, retryInstruction
                 );
                 fileList = sanitizeFileList(
                         retried,
@@ -159,6 +173,91 @@ public class RequirementAnalyzeStep implements AgentStep {
         if (context.getTemplateKey() != null) {
             stepMemoryService.save(taskId, "requirement_analyze", "templateKey", context.getTemplateKey());
         }
+    }
+
+    private List<String> generateProjectStructureWithRuntimeFallback(AgentExecutionContext context,
+                                                                     String prd,
+                                                                     String projectType,
+                                                                     String stackBackend,
+                                                                     String stackFrontend,
+                                                                     String stackDb,
+                                                                     String instructions) {
+        List<String> runtimeFiles = generateProjectStructureFromRuntime(
+                context, prd, projectType, stackBackend, stackFrontend, stackDb, instructions
+        );
+        if (!runtimeFiles.isEmpty()) {
+            return runtimeFiles;
+        }
+        return modelService.generateProjectStructure(
+                context.getTask().getId(),
+                context.getTask().getProjectId(),
+                prd, stackBackend, stackFrontend, stackDb, instructions
+        );
+    }
+
+    private List<String> generateProjectStructureFromRuntime(AgentExecutionContext context,
+                                                             String prd,
+                                                             String projectType,
+                                                             String stackBackend,
+                                                             String stackFrontend,
+                                                             String stackDb,
+                                                             String instructions) {
+        if (!runtimeCodegenGraphEnabled || runtimeGraphClient == null) {
+            return List.of();
+        }
+        try {
+            Map<String, Object> input = new LinkedHashMap<>();
+            input.put("stage", "requirement_analyze");
+            input.put("prd", prd == null ? "" : prd);
+            input.put("projectType", projectType == null ? "" : projectType);
+            input.put("stackBackend", stackBackend == null ? "" : stackBackend);
+            input.put("stackFrontend", stackFrontend == null ? "" : stackFrontend);
+            input.put("stackDb", stackDb == null ? "" : stackDb);
+            input.put("instructions", instructions == null ? "" : instructions);
+
+            LangchainGraphRunResult result = runtimeGraphClient.runCodegenGraph(
+                    context.getTask().getId(),
+                    context.getTask().getProjectId(),
+                    context.getTask().getUserId(),
+                    input
+            );
+            JsonNode resultNode = objectMapper.valueToTree(result == null ? Map.of() : result.result());
+            List<String> files = extractRuntimeStructureFiles(resultNode);
+            if (files.isEmpty()) {
+                logger.warn("Runtime codegen graph returned empty structure, fallback to model-service: taskId={}",
+                        context.getTask().getId());
+                return List.of();
+            }
+            logger.info("Project structure generated by runtime codegen graph: taskId={}, fileCount={}",
+                    context.getTask().getId(), files.size());
+            context.logInfo("Requirement analyze routed to langchain runtime codegen graph successfully. fileCount=" + files.size());
+            return files;
+        } catch (Exception e) {
+            logger.warn("Runtime codegen graph requirement analyze failed, fallback to model-service: taskId={}, error={}",
+                    context.getTask().getId(), e.getMessage());
+            return List.of();
+        }
+    }
+
+    private List<String> extractRuntimeStructureFiles(JsonNode resultNode) {
+        JsonNode filesNode = resultNode.path("structure_json").path("files");
+        if (!filesNode.isArray()) {
+            filesNode = resultNode.path("files");
+        }
+        if (!filesNode.isArray()) {
+            filesNode = resultNode.path("file_list");
+        }
+        if (!filesNode.isArray()) {
+            return List.of();
+        }
+        List<String> files = new ArrayList<>();
+        for (JsonNode fileNode : filesNode) {
+            String path = fileNode.asText("");
+            if (!path.isBlank()) {
+                files.add(path);
+            }
+        }
+        return files;
     }
 
     private List<String> sanitizeFileList(List<String> fileList,

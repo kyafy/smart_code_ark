@@ -18,7 +18,10 @@ class OpenAiCompatibleModelGatewayServiceTest {
             mock(ModelGatewayAuditService.class),
             45_000,
             2,
-            true);
+            true,
+            false,
+            "http://localhost:18080",
+            45_000);
 
     @Test
     void normalizeBaseUrl_appendsV1ForCompatibleModeBase() {
