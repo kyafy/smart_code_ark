@@ -39,7 +39,7 @@ class ModelRouterServiceTest {
     @BeforeEach
     void setUp() {
         service = new ModelRouterService(registryRepository, usageDailyRepository, credentialCryptoService,
-                "Qwen3.5-Plus", "qwen-plus", "text-embedding-v4");
+                "Qwen3.5-Plus", "qwen-plus", "qwen3.5-plus", "text-embedding-v4");
     }
 
     @Test
@@ -63,6 +63,16 @@ class ModelRouterServiceTest {
     }
 
     @Test
+    void resolve_fallsBackToPaperModelConfig() {
+        when(registryRepository.findByModelRoleAndEnabledTrueOrderByPriorityAsc("paper"))
+                .thenReturn(List.of());
+
+        String result = service.resolve("paper");
+
+        assertThat(result).isEqualTo("qwen3.5-plus");
+    }
+
+    @Test
     void resolve_returnsHighestPriorityModelWithinLimit() {
         ModelRegistryEntity model1 = buildModel("qwen-max", "code", 1_000_000L, 10);
         ModelRegistryEntity model2 = buildModel("qwen-plus", "code", 2_000_000L, 20);
@@ -75,6 +85,23 @@ class ModelRouterServiceTest {
         String result = service.resolve("code");
 
         assertThat(result).isEqualTo("qwen-max");
+    }
+
+    @Test
+    void resolve_paperRoleRespectsPriorityAndQuota() {
+        ModelRegistryEntity model1 = buildModel("qwen3-max", "paper", 100L, 10);
+        ModelRegistryEntity model2 = buildModel("qwen3.5-plus", "paper", 1_000_000L, 20);
+
+        when(registryRepository.findByModelRoleAndEnabledTrueOrderByPriorityAsc("paper"))
+                .thenReturn(List.of(model1, model2));
+        when(usageDailyRepository.findByModelNameAndUsageDate(eq("qwen3-max"), any()))
+                .thenReturn(Optional.of(buildUsage("qwen3-max", 200L)));
+        when(usageDailyRepository.findByModelNameAndUsageDate(eq("qwen3.5-plus"), any()))
+                .thenReturn(Optional.of(buildUsage("qwen3.5-plus", 20L)));
+
+        String result = service.resolve("paper");
+
+        assertThat(result).isEqualTo("qwen3.5-plus");
     }
 
     @Test

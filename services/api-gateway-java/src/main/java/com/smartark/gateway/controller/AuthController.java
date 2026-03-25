@@ -10,6 +10,8 @@ import com.smartark.gateway.dto.SmsSendRequest;
 import com.smartark.gateway.dto.SmsSendResult;
 import com.smartark.gateway.service.SmsCodeService;
 import com.smartark.gateway.service.UserAuthService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping({"/api/auth", "/api/v1/auth"})
+@Tag(name = "Auth", description = "Registration, password login, and SMS login APIs")
 public class AuthController {
     private final UserAuthService userAuthService;
     private final SmsCodeService smsCodeService;
@@ -29,16 +32,19 @@ public class AuthController {
     }
 
     @PostMapping("/register")
+    @Operation(summary = "Register account")
     public ApiResponse<RegisterResult> register(@Valid @RequestBody RegisterRequest request) {
         return ApiResponse.success(userAuthService.register(request));
     }
 
     @PostMapping("/login")
+    @Operation(summary = "Login by account and password")
     public ApiResponse<AuthResult> login(@Valid @RequestBody LoginRequest request) {
         return ApiResponse.success(userAuthService.login(request));
     }
 
     @PostMapping("/sms/send")
+    @Operation(summary = "Send SMS code")
     public ApiResponse<SmsSendResult> sendSms(@Valid @RequestBody SmsSendRequest request, HttpServletRequest httpRequest) {
         String ip = extractClientIp(httpRequest);
         smsCodeService.sendCode(request.phone(), request.scene(), ip);
@@ -47,6 +53,7 @@ public class AuthController {
     }
 
     @PostMapping("/login/sms")
+    @Operation(summary = "Login by SMS code")
     public ApiResponse<AuthResult> loginSms(@Valid @RequestBody SmsLoginRequest request) {
         smsCodeService.verifyCode(request.phone(), "login", request.captcha());
         return ApiResponse.success(userAuthService.loginBySms(request.phone(), request.captcha()));

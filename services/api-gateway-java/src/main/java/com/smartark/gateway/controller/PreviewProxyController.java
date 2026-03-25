@@ -4,6 +4,10 @@ import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.db.entity.TaskPreviewEntity;
 import com.smartark.gateway.db.repo.TaskPreviewRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +30,7 @@ import org.springframework.web.client.RestClientException;
  */
 @RestController
 @RequestMapping("/api/preview")
+@Tag(name = "Preview Proxy", description = "Preview container reverse proxy APIs")
 public class PreviewProxyController {
     private static final Logger logger = LoggerFactory.getLogger(PreviewProxyController.class);
 
@@ -40,8 +45,19 @@ public class PreviewProxyController {
     }
 
     @GetMapping("/{taskId}/**")
+    @Operation(
+            summary = "Proxy preview container content",
+            description = "Proxies /api/preview/{taskId}/** to task container host port.",
+            responses = {
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Proxied response"),
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                            responseCode = "502",
+                            description = "Container unreachable",
+                            content = @Content(mediaType = "text/plain"))
+            }
+    )
     public ResponseEntity<byte[]> proxy(
-            @PathVariable String taskId,
+            @Parameter(description = "Task ID", required = true) @PathVariable String taskId,
             HttpServletRequest request) {
 
         TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId)

@@ -1,6 +1,14 @@
 server:
   port: 8080
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+    tags-sorter: alpha
+
 spring:
   application:
     name: api-gateway
@@ -139,6 +147,8 @@ smartark:
     quality-rewrite:
       score-threshold: ${PAPER_QUALITY_REWRITE_SCORE_THRESHOLD:75}
       max-rounds: ${PAPER_QUALITY_REWRITE_MAX_ROUNDS:1}
+  openapi:
+    version: ${OPENAPI_VERSION:v1}
 
 management:
   endpoints:

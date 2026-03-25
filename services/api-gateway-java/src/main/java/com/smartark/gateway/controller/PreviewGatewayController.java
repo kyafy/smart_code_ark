@@ -5,6 +5,10 @@ import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.db.entity.TaskPreviewEntity;
 import com.smartark.gateway.db.repo.TaskPreviewRepository;
 import com.smartark.gateway.service.PreviewGatewayService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +23,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 @RestController
+@Tag(name = "Preview Gateway", description = "Public preview gateway proxy APIs")
 public class PreviewGatewayController {
     private static final Logger logger = LoggerFactory.getLogger(PreviewGatewayController.class);
 
@@ -36,8 +41,19 @@ public class PreviewGatewayController {
     }
 
     @GetMapping({"/p/{taskId}/**", "/t/{taskId}/**"})
+    @Operation(
+            summary = "Proxy preview content",
+            description = "Proxies preview static/app content via gateway route.",
+            responses = {
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Proxied response"),
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                            responseCode = "502",
+                            description = "Upstream unavailable",
+                            content = @Content(mediaType = "text/plain"))
+            }
+    )
     public ResponseEntity<byte[]> proxy(
-            @PathVariable String taskId,
+            @Parameter(description = "Task ID", required = true) @PathVariable String taskId,
             HttpServletRequest request) {
 
         TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId)

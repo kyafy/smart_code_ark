@@ -6,6 +6,9 @@ import com.smartark.gateway.db.repo.TaskPreviewRepository;
 import com.smartark.gateway.dto.PreviewStatusCallback;
 import com.smartark.gateway.dto.TaskPreviewResult;
 import com.smartark.gateway.service.PreviewSseRegistry;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,6 +23,7 @@ import java.time.LocalDateTime;
 
 @RestController
 @RequestMapping("/internal/preview")
+@Tag(name = "Internal Preview", description = "Internal preview callback APIs")
 public class InternalPreviewController {
     private static final Logger logger = LoggerFactory.getLogger(InternalPreviewController.class);
 
@@ -36,8 +40,10 @@ public class InternalPreviewController {
     }
 
     @PostMapping("/{taskId}/status")
+    @Operation(summary = "Update preview status callback", description = "Internal callback endpoint used by preview workers.")
     public ApiResponse<Void> updateStatus(
-            @PathVariable("taskId") String taskId,
+            @Parameter(description = "Task ID", required = true) @PathVariable("taskId") String taskId,
+            @Parameter(description = "Internal callback token", required = false)
             @RequestHeader(value = "X-Internal-Token", required = false) String token,
             @RequestBody PreviewStatusCallback callback) {
 

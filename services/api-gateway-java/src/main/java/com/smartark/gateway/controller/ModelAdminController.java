@@ -1,10 +1,16 @@
 package com.smartark.gateway.controller;
 
+import com.smartark.gateway.common.response.ApiResponse;
 import com.smartark.gateway.db.entity.ModelRegistryEntity;
 import com.smartark.gateway.db.entity.ModelUsageDailyEntity;
-import com.smartark.gateway.common.response.ApiResponse;
 import com.smartark.gateway.service.ModelService;
 import com.smartark.gateway.service.ModelRouterService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -23,6 +29,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin/models")
+@Tag(name = "Model Admin", description = "Model registry, route resolution, connectivity tests, and usage reporting")
 public class ModelAdminController {
 
     private final ModelRouterService modelRouterService;
@@ -37,6 +44,8 @@ public class ModelAdminController {
      * Dashboard: all models with config + today's usage + remaining quota.
      */
     @GetMapping("/dashboard")
+    @Operation(summary = "Model dashboard", description = "Returns model configuration and today's usage summary.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Success")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> dashboard() {
         return ResponseEntity.ok(ApiResponse.success(modelRouterService.dashboard()));
     }
@@ -45,6 +54,7 @@ public class ModelAdminController {
      * List all registered models.
      */
     @GetMapping
+    @Operation(summary = "List all models", description = "Lists all model registry records ordered by priority.")
     public ResponseEntity<ApiResponse<List<ModelRegistryEntity>>> listModels() {
         return ResponseEntity.ok(ApiResponse.success(modelRouterService.listAll()));
     }
@@ -53,7 +63,12 @@ public class ModelAdminController {
      * Get a single model by name.
      */
     @GetMapping("/{modelName}")
-    public ResponseEntity<ApiResponse<ModelRegistryEntity>> getModel(@PathVariable String modelName) {
+    @Operation(summary = "Get model by name")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Found")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Model not found")
+    public ResponseEntity<ApiResponse<ModelRegistryEntity>> getModel(
+            @Parameter(description = "Model name, for example qwen3.5-plus", required = true)
+            @PathVariable String modelName) {
         return modelRouterService.findByName(modelName)
                 .map(model -> ResponseEntity.ok(ApiResponse.success(model)))
                 .orElse(ResponseEntity.notFound().build());
@@ -61,9 +76,33 @@ public class ModelAdminController {
 
     /**
      * Add or update a model.
-     * Body: { modelName, displayName, provider, modelRole, dailyTokenLimit, priority, enabled }
+     * Body: { modelName, displayName, provider, modelRole(chat/code/paper/embedding), dailyTokenLimit, priority, enabled }
      */
     @PostMapping
+    @Operation(summary = "Create or update model", description = "Upserts a model record by modelName.")
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            description = "Model upsert payload",
+            content = @Content(
+                    mediaType = "application/json",
+                    schema = @Schema(implementation = Map.class),
+                    examples = @ExampleObject(
+                            value = """
+                                    {
+                                      "modelName": "qwen3.5-plus",
+                                      "displayName": "Qwen 3.5 Plus",
+                                      "provider": "dashscope",
+                                      "modelRole": "paper",
+                                      "dailyTokenLimit": 20000000,
+                                      "priority": 10,
+                                      "enabled": true,
+                                      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                                      "apiKey": "sk-***"
+                                    }
+                                    """
+                    )
+            )
+    )
     public ResponseEntity<ApiResponse<ModelRegistryEntity>> createOrUpdateModel(@RequestBody Map<String, Object> body) {
         String modelName = (String) body.get("modelName");
         if (modelName == null || modelName.isBlank()) {
@@ -90,8 +129,11 @@ public class ModelAdminController {
      * Update specific fields of a model.
      */
     @PutMapping("/{modelName}")
+    @Operation(summary = "Update model fields", description = "Updates selected fields for an existing model.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Updated")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Model not found")
     public ResponseEntity<ApiResponse<ModelRegistryEntity>> updateModel(
-            @PathVariable String modelName,
+            @Parameter(description = "Model name", required = true) @PathVariable String modelName,
             @RequestBody Map<String, Object> body) {
         if (modelRouterService.findByName(modelName).isEmpty()) {
             return ResponseEntity.notFound().build();
@@ -117,7 +159,9 @@ public class ModelAdminController {
      * Delete a model from registry.
      */
     @DeleteMapping("/{modelName}")
-    public ResponseEntity<ApiResponse<Void>> deleteModel(@PathVariable String modelName) {
+    @Operation(summary = "Delete model")
+    public ResponseEntity<ApiResponse<Void>> deleteModel(
+            @Parameter(description = "Model name", required = true) @PathVariable String modelName) {
         modelRouterService.deleteModel(modelName);
         return ResponseEntity.ok(ApiResponse.success(null));
     }
@@ -126,7 +170,11 @@ public class ModelAdminController {
      * Toggle model enabled/disabled.
      */
     @PostMapping("/{modelName}/toggle")
-    public ResponseEntity<ApiResponse<ModelRegistryEntity>> toggleModel(@PathVariable String modelName) {
+    @Operation(summary = "Toggle model enabled status")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Toggled")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Model not found")
+    public ResponseEntity<ApiResponse<ModelRegistryEntity>> toggleModel(
+            @Parameter(description = "Model name", required = true) @PathVariable String modelName) {
         return modelRouterService.findByName(modelName)
                 .map(model -> {
                     ModelRegistryEntity updated = modelRouterService.upsertModel(
@@ -137,8 +185,11 @@ public class ModelAdminController {
     }
 
     @PostMapping("/{modelName}/test")
+    @Operation(summary = "Test model connectivity", description = "Tests the registered model with optional override credentials.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Test result returned")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Model not found")
     public ResponseEntity<ApiResponse<ModelService.ConnectivityTestResult>> testModelConnectivity(
-            @PathVariable String modelName,
+            @Parameter(description = "Model name", required = true) @PathVariable String modelName,
             @RequestBody(required = false) Map<String, Object> body) {
         var modelOpt = modelRouterService.findByName(modelName);
         if (modelOpt.isEmpty()) {
@@ -163,6 +214,9 @@ public class ModelAdminController {
     }
 
     @PostMapping("/test-connectivity")
+    @Operation(summary = "Direct connectivity test", description = "Tests connectivity without requiring a pre-registered model.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Test result returned")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Bad request")
     public ResponseEntity<ApiResponse<ModelService.ConnectivityTestResult>> testConnectivityMvp(
             @RequestBody(required = false) Map<String, Object> body) {
         Map<String, Object> req = body == null ? Map.of() : body;
@@ -192,7 +246,10 @@ public class ModelAdminController {
      * Resolve which model would be used for a given role right now.
      */
     @GetMapping("/resolve/{role}")
-    public ResponseEntity<ApiResponse<Map<String, String>>> resolveModel(@PathVariable String role) {
+    @Operation(summary = "Resolve model by role", description = "Returns the model currently selected for a role.")
+    public ResponseEntity<ApiResponse<Map<String, String>>> resolveModel(
+            @Parameter(description = "Role: chat/code/paper/embedding", required = true)
+            @PathVariable String role) {
         String model = modelRouterService.resolve(role);
         return ResponseEntity.ok(ApiResponse.success(Map.of("role", role, "model", model)));
     }
@@ -201,6 +258,7 @@ public class ModelAdminController {
      * Get today's usage for all models.
      */
     @GetMapping("/usage/today")
+    @Operation(summary = "Get today's usage")
     public ResponseEntity<ApiResponse<Map<String, ModelUsageDailyEntity>>> todayUsage() {
         return ResponseEntity.ok(ApiResponse.success(modelRouterService.getTodayUsage()));
     }
@@ -209,10 +267,11 @@ public class ModelAdminController {
      * Get usage history for a date range.
      */
     @GetMapping("/usage/history")
+    @Operation(summary = "Get usage history", description = "Query usage history for a date range, optionally filtered by modelName.")
     public ResponseEntity<ApiResponse<List<ModelUsageDailyEntity>>> usageHistory(
-            @RequestParam(required = false) String modelName,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate start,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate end) {
+            @Parameter(description = "Optional model name filter", required = false) @RequestParam(required = false) String modelName,
+            @Parameter(description = "Start date, format: YYYY-MM-DD", required = true) @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate start,
+            @Parameter(description = "End date, format: YYYY-MM-DD", required = true) @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate end) {
         return ResponseEntity.ok(ApiResponse.success(modelRouterService.getUsageHistory(modelName, start, end)));
     }
 }

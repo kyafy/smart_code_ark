@@ -27,10 +27,15 @@ public class AuthInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         bindClientMetadata(request);
         String path = request.getRequestURI();
+        // Public endpoints and infrastructure endpoints do not require bearer auth.
+        // Swagger/OpenAPI paths are also exempt to keep API docs directly accessible.
         if (path.startsWith("/api/auth/") || path.startsWith("/api/v1/auth/")
                 || path.equals("/api/health") || path.equals("/api/v1/health")
                 || path.equals("/api/billing/recharge/callback")
                 || path.startsWith("/api/preview/")
+                || path.startsWith("/v3/api-docs")
+                || path.startsWith("/swagger-ui")
+                || path.equals("/swagger-ui.html")
                 || path.equals("/error")) {
             return true;
         }
