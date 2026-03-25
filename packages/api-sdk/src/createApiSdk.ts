@@ -7,6 +7,10 @@ import type {
   DeliveryReportResult,
   GenerateOptions,
   GenerateResult,
+  ModelConnectivityTestPayload,
+  ModelConnectivityTestResult,
+  ModelRegistry,
+  ModelUpsertPayload,
   PaperManuscriptResult,
   PaperOutlineGenerateRequest,
   PaperOutlineGenerateResult,
@@ -88,6 +92,30 @@ export const createApiSdk = (deps: {
     delete: (id: string) => requestJson<boolean>({ method: 'DELETE', url: `/api/projects/${id}` }),
   }
 
+  const modelAdminApi = {
+    list: () => requestJson<ModelRegistry[]>({ method: 'GET', url: '/api/admin/models' }),
+    get: (modelName: string) => requestJson<ModelRegistry>({ method: 'GET', url: `/api/admin/models/${encodeURIComponent(modelName)}` }),
+    upsert: (payload: ModelUpsertPayload) => requestJson<ModelRegistry>({ method: 'POST', url: '/api/admin/models', data: payload }),
+    update: (modelName: string, payload: Omit<ModelUpsertPayload, 'modelName'>) =>
+      requestJson<ModelRegistry>({ method: 'PUT', url: `/api/admin/models/${encodeURIComponent(modelName)}`, data: payload }),
+    toggle: (modelName: string) =>
+      requestJson<ModelRegistry>({ method: 'POST', url: `/api/admin/models/${encodeURIComponent(modelName)}/toggle` }),
+    remove: (modelName: string) =>
+      requestJson<void>({ method: 'DELETE', url: `/api/admin/models/${encodeURIComponent(modelName)}` }),
+    testConnectivity: (modelName: string, payload: ModelConnectivityTestPayload) =>
+      requestJson<ModelConnectivityTestResult>({
+        method: 'POST',
+        url: `/api/admin/models/${encodeURIComponent(modelName)}/test`,
+        data: payload
+      }),
+    testConnectivityMvp: (payload: ModelConnectivityTestPayload) =>
+      requestJson<ModelConnectivityTestResult>({
+        method: 'POST',
+        url: '/api/admin/models/test-connectivity',
+        data: payload
+      })
+  }
+
   const taskApi = {
     generate: (payload: { projectId: string; instructions?: string; options?: GenerateOptions }) =>
       requestJson<GenerateResult>({ method: 'POST', url: '/api/generate', data: payload }),
@@ -160,6 +188,7 @@ export const createApiSdk = (deps: {
     userApi,
     chatApi,
     projectApi,
+    modelAdminApi,
     taskApi,
     billingApi,
     paperApi,

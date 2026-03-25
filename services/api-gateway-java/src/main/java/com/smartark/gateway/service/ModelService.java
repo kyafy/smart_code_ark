@@ -28,6 +28,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class ModelService {
@@ -40,6 +42,21 @@ public class ModelService {
             int tokenInput,
             int tokenOutput
     ) {
+    }
+
+    public record ConnectivityTestResult(
+            boolean ok,
+            String modelName,
+            String provider,
+            long latencyMs,
+            String outputPreview,
+            String errorType,
+            String errorMessage,
+            Integer httpStatus
+    ) {
+    }
+
+    private record EffectiveConnection(String baseUrl, String apiKey, String source) {
     }
 
     private final ObjectMapper objectMapper;
@@ -102,6 +119,20 @@ public class ModelService {
         return modelRouterService.resolve("code");
     }
 
+    private String resolveCodeModel(String preferredModel) {
+        if (preferredModel != null && !preferredModel.isBlank()) {
+            String normalized = preferredModel.trim();
+            if (modelRouterService.resolveConnection(normalized).isPresent()) {
+                return normalized;
+            }
+            if (normalized.equals(codeModel)) {
+                return normalized;
+            }
+            logger.warn("Preferred code model {} has no registry connection config, fallback to router/env", normalized);
+        }
+        return resolveCodeModel();
+    }
+
     /**
      * Resolve global engineering rules from prompt_templates.
      * Prepended to system prompts of code-generation LLM calls.
@@ -129,7 +160,9 @@ public class ModelService {
     }
 
     public void streamChatReply(String sessionTitle, String projectType, String userMessage, List<Map<String, String>> history, Consumer<String> onContent, Runnable onDone, Consumer<Throwable> onError) {
-        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+        String resolvedChat = resolveChatModel();
+        EffectiveConnection connection = resolveConnectionForModel(resolvedChat);
+        if (connection == null) {
             if (!mockEnabled) {
                 onError.accept(new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型配置缺失：请设置 MODEL_BASE_URL 与 MODEL_API_KEY"));
                 return;
@@ -152,8 +185,7 @@ public class ModelService {
         }
 
         try {
-            String resolvedChat = resolveChatModel();
-            logger.info("Starting stream chat with model: {}", resolvedChat);
+            logger.info("Starting stream chat with model: {}, connectionSource={}", resolvedChat, connection.source());
             List<Map<String, String>> messages = new ArrayList<>();
             messages.add(Map.of("role", "system", "content", 
                 "你是智能助手，请帮助用户梳理软件系统需求。在回复用户时，请先以友好的语气进行对话，帮助澄清和完善需求细节。\n" +
@@ -181,20 +213,14 @@ public class ModelService {
                     "messages", messages,
                     "stream", true
             );
-            
-            String url;
-            if (baseUrl.endsWith("/v1/") || baseUrl.endsWith("/v1")) {
-                url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
-            } else {
-                url = baseUrl.endsWith("/") ? baseUrl + "v1/chat/completions" : baseUrl + "/v1/chat/completions";
-            }
+            String url = buildChatCompletionsUrl(connection.baseUrl());
             logger.debug("Requesting model API: {}", url);
 
             restClient.post()
                     .uri(url)
                     .headers(h -> {
-                        if (!apiKey.isEmpty()) {
-                            h.set("Authorization", "Bearer " + apiKey);
+                        if (!connection.apiKey().isEmpty()) {
+                            h.set("Authorization", "Bearer " + connection.apiKey());
                         }
                     })
                     .body(payload)
@@ -254,7 +280,8 @@ public class ModelService {
 
     public ModelResult chatReply(String sessionTitle, String projectType, String userMessage, List<Map<String, String>> history) {
         String resolvedChat = resolveChatModel();
-        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+        EffectiveConnection connection = resolveConnectionForModel(resolvedChat);
+        if (connection == null) {
             if (!mockEnabled) {
                 throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型配置缺失：请设置 MODEL_BASE_URL 与 MODEL_API_KEY");
             }
@@ -281,24 +308,7 @@ public class ModelService {
                     "model", resolvedChat,
                     "messages", messages
             );
-
-            String url;
-            if (baseUrl.endsWith("/v1/") || baseUrl.endsWith("/v1")) {
-                url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
-            } else {
-                url = baseUrl.endsWith("/") ? baseUrl + "v1/chat/completions" : baseUrl + "/v1/chat/completions";
-            }
-
-            String response = restClient.post()
-                    .uri(url)
-                    .headers(h -> {
-                        if (!apiKey.isEmpty()) {
-                            h.set("Authorization", "Bearer " + apiKey);
-                        }
-                    })
-                    .body(payload)
-                    .retrieve()
-                    .body(String.class);
+            String response = callModelApi(payload, connection.baseUrl(), connection.apiKey());
 
             JsonNode root = objectMapper.readTree(response);
             String reply = root.at("/choices/0/message/content").asText("");
@@ -313,14 +323,15 @@ public class ModelService {
     }
 
     public String generateRequirement(String sessionTitle, String projectType, List<Map<String, String>> history) {
-        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+        String resolvedChat = resolveChatModel();
+        EffectiveConnection connection = resolveConnectionForModel(resolvedChat);
+        if (connection == null) {
             if (!mockEnabled) {
                 throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型配置缺失：请设置 MODEL_BASE_URL 与 MODEL_API_KEY");
             }
             return "Mock PRD for " + sessionTitle + " (" + projectType + ")\n\nGenerated from chat history.";
         }
         try {
-            String resolvedChat = resolveChatModel();
             List<Map<String, String>> messages = new ArrayList<>();
             messages.add(Map.of("role", "system", "content", "你是一个资深产品经理。请根据以下对话历史，整理出一份详细的需求文档（PRD），包含项目目标、核心功能模块、用户角色及关键业务流程。输出格式为 Markdown。"));
             if (history != null) {
@@ -332,24 +343,7 @@ public class ModelService {
                     "model", resolvedChat,
                     "messages", messages
             );
-            
-            String url;
-            if (baseUrl.endsWith("/v1/") || baseUrl.endsWith("/v1")) {
-                url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
-            } else {
-                url = baseUrl.endsWith("/") ? baseUrl + "v1/chat/completions" : baseUrl + "/v1/chat/completions";
-            }
-
-            String response = restClient.post()
-                    .uri(url)
-                    .headers(h -> {
-                        if (!apiKey.isEmpty()) {
-                            h.set("Authorization", "Bearer " + apiKey);
-                        }
-                    })
-                    .body(payload)
-                    .retrieve()
-                    .body(String.class);
+            String response = callModelApi(payload, connection.baseUrl(), connection.apiKey());
 
             JsonNode root = objectMapper.readTree(response);
             return root.at("/choices/0/message/content").asText("");
@@ -436,7 +430,7 @@ public class ModelService {
             if (resolvedPrompt != null) {
                 versionNo = resolvedPrompt.version().getVersionNo();
                 if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
-                    modelName = resolvedPrompt.version().getModel();
+                    modelName = resolveCodeModel(resolvedPrompt.version().getModel());
                 }
                 if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
                     systemPrompt = resolvedPrompt.version().getSystemPrompt();
@@ -490,9 +484,44 @@ public class ModelService {
             }
             throw new BusinessException(ErrorCodes.MODEL_OUTPUT_SCHEMA_VIOLATION, "模型输出不符合结构约束");
         } catch (BusinessException e) {
+            if (e.getCode() != ErrorCodes.MODEL_OUTPUT_SCHEMA_VIOLATION) {
+                savePromptHistory(
+                        taskId,
+                        projectId,
+                        templateKey,
+                        versionNo,
+                        modelName,
+                        requestHash,
+                        requestJson,
+                        null,
+                        estimateTokens(requestJson),
+                        0,
+                        (int) (System.currentTimeMillis() - start),
+                        "failed",
+                        String.valueOf(e.getCode()),
+                        e.getMessage()
+                );
+            }
+            logger.error(
+                    "Project structure model call failed: taskId={}, projectId={}, model={}, requestHash={}, requestPreview={}",
+                    taskId,
+                    projectId,
+                    modelName,
+                    requestHash,
+                    compactForLog(requestJson, 1200),
+                    e
+            );
             throw e;
         } catch (Exception e) {
-            logger.error("Failed to generate project structure", e);
+            logger.error(
+                    "Failed to generate project structure: taskId={}, projectId={}, model={}, requestHash={}, requestPreview={}",
+                    taskId,
+                    projectId,
+                    modelName,
+                    requestHash,
+                    compactForLog(requestJson, 1200),
+                    e
+            );
             savePromptHistory(taskId, projectId, templateKey, versionNo, modelName, requestHash, requestJson, null, estimateTokens(requestJson), 0, (int) (System.currentTimeMillis() - start), "failed", String.valueOf(ErrorCodes.MODEL_SERVICE_ERROR), detailMessage(e));
             throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "生成项目结构失败");
         }
@@ -513,13 +542,13 @@ public class ModelService {
                                       String techStack,
                                       String instructions,
                                       String projectStructure) {
-        if (baseUrl.isEmpty()) {
-            return "// Mock content for " + filePath;
-        }
         long start = System.currentTimeMillis();
         String templateKey = "file_content_generate";
         int versionNo = 1;
         String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
+            return "// Mock content for " + filePath;
+        }
         String requestJson = null;
         String requestHash = null;
         try {
@@ -570,7 +599,7 @@ public class ModelService {
             if (resolvedPrompt != null) {
                 versionNo = resolvedPrompt.version().getVersionNo();
                 if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
-                    modelName = resolvedPrompt.version().getModel();
+                    modelName = resolveCodeModel(resolvedPrompt.version().getModel());
                 }
                 if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
                     systemPrompt = resolvedPrompt.version().getSystemPrompt();
@@ -625,13 +654,13 @@ public class ModelService {
                                                    String projectStructure,
                                                    String exampleCode,
                                                    String relatedExamples) {
-        if (baseUrl.isEmpty()) {
-            return "// Mock content for " + filePath;
-        }
         long start = System.currentTimeMillis();
         String templateKey = "file_content_generate_with_template";
         int versionNo = 1;
         String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
+            return "// Mock content for " + filePath;
+        }
         String requestJson = null;
         String requestHash = null;
         try {
@@ -678,7 +707,7 @@ public class ModelService {
             if (resolvedPrompt != null) {
                 versionNo = resolvedPrompt.version().getVersionNo();
                 if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
-                    modelName = resolvedPrompt.version().getModel();
+                    modelName = resolveCodeModel(resolvedPrompt.version().getModel());
                 }
                 if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
                     systemPrompt = resolvedPrompt.version().getSystemPrompt();
@@ -729,13 +758,13 @@ public class ModelService {
                                        String currentContent,
                                        String compilationError,
                                        String techStack) {
-        if (baseUrl.isEmpty()) {
-            return null;
-        }
         long start = System.currentTimeMillis();
         String templateKey = "compilation_error_fix";
         int versionNo = 1;
         String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
+            return null;
+        }
         String requestJson = null;
         String requestHash = null;
         try {
@@ -764,7 +793,7 @@ public class ModelService {
             if (resolvedPrompt != null) {
                 versionNo = resolvedPrompt.version().getVersionNo();
                 if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
-                    modelName = resolvedPrompt.version().getModel();
+                    modelName = resolveCodeModel(resolvedPrompt.version().getModel());
                 }
                 if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
                     systemPrompt = resolvedPrompt.version().getSystemPrompt();
@@ -817,7 +846,8 @@ public class ModelService {
                                       String discipline,
                                       String degreeLevel,
                                       String methodPreference) {
-        if (baseUrl.isEmpty()) {
+        String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
             return objectMapper.valueToTree(Map.of(
                     "topicRefined", topic,
                     "researchQuestions", List.of("核心研究问题是什么", "可行的研究方法是什么", "如何验证研究结论")
@@ -826,7 +856,6 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_topic_clarify";
         int versionNo = 1;
-        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic);
@@ -862,7 +891,8 @@ public class ModelService {
                                          String researchQuestionsJson,
                                          JsonNode sources,
                                          JsonNode ragEvidence) {
-        if (baseUrl.isEmpty()) {
+        String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
             return objectMapper.valueToTree(Map.of(
                     "researchQuestions", List.of("研究问题1", "研究问题2"),
                     "chapters", List.of(
@@ -878,7 +908,6 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_generate";
         int versionNo = ragEvidence != null ? 2 : 1;
-        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic);
@@ -910,7 +939,8 @@ public class ModelService {
                                              JsonNode outlineJson,
                                              JsonNode ragEvidence,
                                              String chapterEvidenceMapJson) {
-        if (baseUrl.isEmpty()) {
+        String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
             return normalizeQualityReport(objectMapper.valueToTree(Map.of(
                     "logicClosedLoop", true,
                     "methodConsistency", "ok",
@@ -924,7 +954,6 @@ public class ModelService {
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_quality_check";
         int versionNo = ragEvidence != null ? 2 : 1;
-        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic);
@@ -976,13 +1005,13 @@ public class ModelService {
                                        JsonNode outlineJson,
                                        JsonNode sources,
                                        JsonNode ragEvidence) {
-        if (baseUrl.isEmpty()) {
-            return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);
-        }
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_expand";
         int versionNo = ragEvidence != null ? 3 : 1;
         String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
+            return fallbackExpandedManuscript(topic, topicRefined, researchQuestionsJson, outlineJson);
+        }
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic);
@@ -1019,16 +1048,16 @@ public class ModelService {
                                             JsonNode batchEvidence,
                                             String batchRange,
                                             int totalChapters) {
-        if (baseUrl.isEmpty()) {
+        long start = System.currentTimeMillis();
+        String templateKey = "paper_outline_expand_batch";
+        int versionNo = 1;
+        String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
             return objectMapper.valueToTree(Map.of(
                     "chapters", batchOutlineJson == null ? List.of() : batchOutlineJson.path("chapters"),
                     "citationMap", List.of()
             ));
         }
-        long start = System.currentTimeMillis();
-        String templateKey = "paper_outline_expand_batch";
-        int versionNo = 1;
-        String modelName = resolveCodeModel();
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic == null ? "" : topic);
@@ -1061,13 +1090,13 @@ public class ModelService {
                                                   String citationStyle,
                                                   JsonNode qualityReportJson,
                                                   JsonNode manuscriptJson) {
-        if (baseUrl.isEmpty()) {
-            return fallbackRewriteResult(manuscriptJson, qualityReportJson);
-        }
         long start = System.currentTimeMillis();
         String templateKey = "paper_outline_quality_rewrite";
         int versionNo = 1;
         String modelName = resolveCodeModel();
+        if (resolveConnectionForModel(modelName) == null) {
+            return fallbackRewriteResult(manuscriptJson, qualityReportJson);
+        }
         try {
             Map<String, String> vars = new LinkedHashMap<>();
             vars.put("topic", topic == null ? "" : topic);
@@ -1105,7 +1134,7 @@ public class ModelService {
         if (resolvedPrompt != null) {
             versionNo = resolvedPrompt.version().getVersionNo();
             if (resolvedPrompt.version().getModel() != null && !resolvedPrompt.version().getModel().isBlank()) {
-                modelName = resolvedPrompt.version().getModel();
+                modelName = resolveCodeModel(resolvedPrompt.version().getModel());
             }
             if (resolvedPrompt.version().getSystemPrompt() != null && !resolvedPrompt.version().getSystemPrompt().isBlank()) {
                 systemPrompt = resolvedPrompt.version().getSystemPrompt();
@@ -1168,6 +1197,47 @@ public class ModelService {
         throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型调用失败");
     }
 
+    public ConnectivityTestResult testModelConnectivity(String modelName,
+                                                        String provider,
+                                                        String prompt,
+                                                        Integer timeoutMs,
+                                                        String overrideBaseUrl,
+                                                        String overrideApiKey) {
+        long start = System.currentTimeMillis();
+        String safeModelName = modelName == null ? "" : modelName.trim();
+        String safeProvider = provider == null ? "" : provider.trim();
+        if (safeModelName.isBlank()) {
+            return new ConnectivityTestResult(false, safeModelName, safeProvider, 0, null, "bad_request", "modelName 不能为空", null);
+        }
+        String effectiveBaseUrl = overrideBaseUrl != null && !overrideBaseUrl.isBlank() ? overrideBaseUrl.trim() : baseUrl;
+        String effectiveApiKey = overrideApiKey != null && !overrideApiKey.isBlank() ? overrideApiKey.trim() : apiKey;
+        if (effectiveBaseUrl.isBlank() || effectiveApiKey.isBlank()) {
+            return new ConnectivityTestResult(false, safeModelName, safeProvider, 0, null, "auth", "模型配置缺失：请设置可用的 baseUrl 与 apiKey", null);
+        }
+        String testPrompt = (prompt == null || prompt.isBlank()) ? "请回复OK" : prompt;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("model", safeModelName);
+        payload.put("messages", List.of(Map.of("role", "user", "content", testPrompt)));
+        payload.put("stream", false);
+        payload.put("max_tokens", 64);
+        if (timeoutMs != null && timeoutMs > 0) {
+            payload.put("timeout_ms", timeoutMs);
+        }
+        try {
+            String response = callModelApi(payload, effectiveBaseUrl, effectiveApiKey);
+            JsonNode root = objectMapper.readTree(response);
+            String content = root.at("/choices/0/message/content").asText("");
+            long latency = System.currentTimeMillis() - start;
+            return new ConnectivityTestResult(true, safeModelName, safeProvider, latency, truncate(content, 200), null, null, null);
+        } catch (Exception e) {
+            long latency = System.currentTimeMillis() - start;
+            String message = detailMessage(e);
+            Integer httpStatus = extractHttpStatus(message);
+            String errorType = classifyErrorType(message, httpStatus);
+            return new ConnectivityTestResult(false, safeModelName, safeProvider, latency, null, errorType, message, httpStatus);
+        }
+    }
+
     private String cleanupJsonContent(String content) {
         if (content == null) {
             return "{}";
@@ -1191,18 +1261,22 @@ public class ModelService {
     }
 
     private String callModelApi(Map<String, Object> payload) {
-        String url;
-        if (baseUrl.endsWith("/v1/") || baseUrl.endsWith("/v1")) {
-            url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
-        } else {
-            url = baseUrl.endsWith("/") ? baseUrl + "v1/chat/completions" : baseUrl + "/v1/chat/completions";
+        String modelName = payload == null ? null : String.valueOf(payload.get("model"));
+        EffectiveConnection connection = resolveConnectionForModel(modelName);
+        if (connection == null) {
+            return callModelApi(payload, baseUrl, apiKey);
         }
+        return callModelApi(payload, connection.baseUrl(), connection.apiKey());
+    }
+
+    private String callModelApi(Map<String, Object> payload, String effectiveBaseUrl, String effectiveApiKey) {
+        String url = buildChatCompletionsUrl(effectiveBaseUrl);
         try {
             return restClient.post()
                     .uri(url)
                     .headers(h -> {
-                        if (!apiKey.isEmpty()) {
-                            h.set("Authorization", "Bearer " + apiKey);
+                        if (effectiveApiKey != null && !effectiveApiKey.isBlank()) {
+                            h.set("Authorization", "Bearer " + effectiveApiKey.trim());
                         }
                     })
                     .body(payload)
@@ -1218,6 +1292,77 @@ public class ModelService {
         } catch (Exception e) {
             throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败(" + e.getClass().getSimpleName() + "): " + detailMessage(e));
         }
+    }
+
+    private String buildChatCompletionsUrl(String rawBaseUrl) {
+        if (rawBaseUrl == null || rawBaseUrl.isBlank()) {
+            throw new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "模型服务调用失败: baseUrl 为空");
+        }
+        String normalized = rawBaseUrl.trim();
+        if (normalized.endsWith("/v1/") || normalized.endsWith("/v1")) {
+            return normalized.endsWith("/") ? normalized + "chat/completions" : normalized + "/chat/completions";
+        }
+        return normalized.endsWith("/") ? normalized + "v1/chat/completions" : normalized + "/v1/chat/completions";
+    }
+
+    private Integer extractHttpStatus(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("HTTP\\s+(\\d{3})").matcher(message);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(matcher.group(1));
+        } catch (Exception ignore) {
+            return null;
+        }
+    }
+
+    private String classifyErrorType(String message, Integer httpStatus) {
+        String msg = message == null ? "" : message.toLowerCase();
+        if (msg.contains("read timed out") || msg.contains("timeout") || msg.contains("timed out")) {
+            return "timeout";
+        }
+        if (httpStatus != null) {
+            if (httpStatus == 401 || httpStatus == 403) {
+                return "auth";
+            }
+            if (httpStatus == 429) {
+                if (msg.contains("quota") || msg.contains("余额") || msg.contains("配额")) {
+                    return "quota";
+                }
+                return "rate_limit";
+            }
+            if (httpStatus == 400) {
+                return "bad_request";
+            }
+        }
+        if (msg.contains("model_not_found") || msg.contains("does not exist")) {
+            return "bad_request";
+        }
+        if (msg.contains("unauthorized") || msg.contains("forbidden") || msg.contains("api key")) {
+            return "auth";
+        }
+        if (msg.contains("quota") || msg.contains("余额") || msg.contains("配额")) {
+            return "quota";
+        }
+        return "unknown";
+    }
+
+    private EffectiveConnection resolveConnectionForModel(String modelName) {
+        if (modelName != null && !modelName.isBlank()) {
+            var fromRegistry = modelRouterService.resolveConnection(modelName);
+            if (fromRegistry.isPresent()) {
+                var c = fromRegistry.get();
+                return new EffectiveConnection(c.baseUrl(), c.apiKey(), "registry");
+            }
+        }
+        if (!baseUrl.isBlank() && !apiKey.isBlank()) {
+            return new EffectiveConnection(baseUrl, apiKey, "env");
+        }
+        return null;
     }
 
     private String detailMessage(Throwable throwable) {
@@ -1398,6 +1543,14 @@ public class ModelService {
             return text;
         }
         return text.substring(0, maxLen);
+    }
+
+    private String compactForLog(String text, int maxLen) {
+        String truncated = truncate(text, maxLen);
+        if (truncated == null) {
+            return "null";
+        }
+        return truncated.replace("\n", "\\n").replace("\r", "\\r");
     }
 
     public Map<String, Object> extractRequirements(String reply) {

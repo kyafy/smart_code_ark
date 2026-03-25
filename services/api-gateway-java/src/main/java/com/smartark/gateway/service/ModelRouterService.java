@@ -27,18 +27,27 @@ public class ModelRouterService {
 
     private final ModelRegistryRepository registryRepository;
     private final ModelUsageDailyRepository usageDailyRepository;
+    private final ModelCredentialCryptoService credentialCryptoService;
     private final String defaultChatModel;
     private final String defaultCodeModel;
+    private final String defaultEmbeddingModel;
+
+    public record ModelConnection(String baseUrl, String apiKey) {
+    }
 
     public ModelRouterService(
             ModelRegistryRepository registryRepository,
             ModelUsageDailyRepository usageDailyRepository,
+            ModelCredentialCryptoService credentialCryptoService,
             @Value("${smartark.model.chat-model:Qwen3.5-Plus}") String defaultChatModel,
-            @Value("${smartark.model.code-model:qwen-plus}") String defaultCodeModel) {
+            @Value("${smartark.model.code-model:qwen-plus}") String defaultCodeModel,
+            @Value("${smartark.rag.embedding-model:text-embedding-v4}") String defaultEmbeddingModel) {
         this.registryRepository = registryRepository;
         this.usageDailyRepository = usageDailyRepository;
+        this.credentialCryptoService = credentialCryptoService;
         this.defaultChatModel = defaultChatModel;
         this.defaultCodeModel = defaultCodeModel;
+        this.defaultEmbeddingModel = defaultEmbeddingModel;
     }
 
     /**
@@ -53,13 +62,21 @@ public class ModelRouterService {
                 .findByModelRoleAndEnabledTrueOrderByPriorityAsc(role);
 
         if (candidates.isEmpty()) {
-            String fallback = "chat".equals(role) ? defaultChatModel : defaultCodeModel;
-            logger.debug("No registered models for role={}, fallback to config: {}", role, fallback);
-            return fallback;
+            return fallbackModel(role, "no registered models");
         }
 
         LocalDate today = LocalDate.now();
-        for (ModelRegistryEntity candidate : candidates) {
+        List<ModelRegistryEntity> eligible = candidates.stream()
+                .filter(this::hasConnectionConfig)
+                .toList();
+        if (eligible.isEmpty()) {
+            return fallbackModel(role, "no model has base_url/api_key configured");
+        }
+        if (eligible.size() != candidates.size()) {
+            logger.info("Skipped {} models without connection config for role={}",
+                    candidates.size() - eligible.size(), role);
+        }
+        for (ModelRegistryEntity candidate : eligible) {
             if (isWithinLimit(candidate, today)) {
                 logger.debug("Resolved model for role={}: {} (priority={})",
                         role, candidate.getModelName(), candidate.getPriority());
@@ -69,9 +86,27 @@ public class ModelRouterService {
         }
 
         // All models exceeded limits — use the highest priority one anyway with a warning
-        String bestEffort = candidates.get(0).getModelName();
+        String bestEffort = eligible.get(0).getModelName();
         logger.warn("All models for role={} exceeded daily limits, using best-effort: {}", role, bestEffort);
         return bestEffort;
+    }
+
+    private boolean hasConnectionConfig(ModelRegistryEntity model) {
+        return model.getBaseUrl() != null && !model.getBaseUrl().isBlank()
+                && model.getApiKeyCiphertext() != null && !model.getApiKeyCiphertext().isBlank();
+    }
+
+    private String fallbackModel(String role, String reason) {
+        String fallback;
+        if ("chat".equals(role)) {
+            fallback = defaultChatModel;
+        } else if ("embedding".equals(role)) {
+            fallback = defaultEmbeddingModel;
+        } else {
+            fallback = defaultCodeModel;
+        }
+        logger.info("Fallback model for role={} to {} ({})", role, fallback, reason);
+        return fallback;
     }
 
     /**
@@ -127,6 +162,31 @@ public class ModelRouterService {
         return registryRepository.findByModelName(modelName);
     }
 
+    public Optional<ModelConnection> resolveConnection(String modelName) {
+        if (modelName == null || modelName.isBlank()) {
+            return Optional.empty();
+        }
+        return registryRepository.findByModelName(modelName)
+                .filter(model -> model.getEnabled() == null || model.getEnabled())
+                .flatMap(model -> {
+                    String base = model.getBaseUrl();
+                    String cipher = model.getApiKeyCiphertext();
+                    if (base == null || base.isBlank() || cipher == null || cipher.isBlank()) {
+                        return Optional.empty();
+                    }
+                    try {
+                        String apiKey = credentialCryptoService.decrypt(cipher);
+                        if (apiKey == null || apiKey.isBlank()) {
+                            return Optional.empty();
+                        }
+                        return Optional.of(new ModelConnection(base.trim(), apiKey.trim()));
+                    } catch (Exception e) {
+                        logger.warn("Failed to resolve model connection for {}", modelName);
+                        return Optional.empty();
+                    }
+                });
+    }
+
     @Transactional
     public ModelRegistryEntity saveModel(ModelRegistryEntity entity) {
         LocalDateTime now = LocalDateTime.now();
@@ -140,7 +200,7 @@ public class ModelRouterService {
     @Transactional
     public ModelRegistryEntity upsertModel(String modelName, String displayName, String provider,
                                            String modelRole, Long dailyTokenLimit, Integer priority,
-                                           Boolean enabled) {
+                                           Boolean enabled, String baseUrl, String apiKeyPlaintext) {
         ModelRegistryEntity entity = registryRepository.findByModelName(modelName).orElse(null);
         if (entity == null) {
             entity = new ModelRegistryEntity();
@@ -153,6 +213,18 @@ public class ModelRouterService {
         if (dailyTokenLimit != null) entity.setDailyTokenLimit(dailyTokenLimit);
         if (priority != null) entity.setPriority(priority);
         if (enabled != null) entity.setEnabled(enabled);
+        if (baseUrl != null) entity.setBaseUrl(baseUrl.isBlank() ? null : baseUrl.trim());
+        if (apiKeyPlaintext != null) {
+            if (apiKeyPlaintext.isBlank()) {
+                entity.setApiKeyCiphertext(null);
+                entity.setApiKeyMasked(null);
+                entity.setCryptoVersion(null);
+            } else {
+                entity.setApiKeyCiphertext(credentialCryptoService.encrypt(apiKeyPlaintext.trim()));
+                entity.setApiKeyMasked(credentialCryptoService.mask(apiKeyPlaintext.trim()));
+                entity.setCryptoVersion(credentialCryptoService.version());
+            }
+        }
         entity.setUpdatedAt(LocalDateTime.now());
         return registryRepository.save(entity);
     }

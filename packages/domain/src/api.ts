@@ -82,6 +82,51 @@ export type ProjectDetail = {
   messages: Array<{ role: string; content: string }>
 }
 
+export type ModelRegistry = {
+  id: number
+  modelName: string
+  displayName: string
+  provider: string
+  modelRole: string
+  dailyTokenLimit: number
+  priority: number
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type ModelUpsertPayload = {
+  modelName: string
+  displayName?: string
+  provider?: string
+  modelRole?: string
+  dailyTokenLimit?: number
+  priority?: number
+  enabled?: boolean
+  baseUrl?: string
+  apiKey?: string
+}
+
+export type ModelConnectivityTestPayload = {
+  modelName?: string
+  provider?: string
+  prompt?: string
+  timeoutMs?: number
+  baseUrl?: string
+  apiKey?: string
+}
+
+export type ModelConnectivityTestResult = {
+  ok: boolean
+  modelName: string
+  provider: string
+  latencyMs: number
+  outputPreview?: string | null
+  errorType?: 'timeout' | 'auth' | 'quota' | 'rate_limit' | 'bad_request' | 'unknown' | null
+  errorMessage?: string | null
+  httpStatus?: number | null
+}
+
 export type GenerateResult = {
   taskId: string
   status: string

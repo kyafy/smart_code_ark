@@ -3,6 +3,8 @@ package com.smartark.gateway.service;
 import com.smartark.gateway.common.auth.RequestContext;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.db.entity.UserEntity;
+import com.smartark.gateway.db.repo.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
@@ -14,9 +16,11 @@ public class AuthInterceptor implements HandlerInterceptor {
     private static final String HEADER_APP_VERSION = "X-App-Version";
     private static final String HEADER_DEVICE_ID = "X-Device-Id";
     private final TokenService tokenService;
+    private final UserRepository userRepository;
 
-    public AuthInterceptor(TokenService tokenService) {
+    public AuthInterceptor(TokenService tokenService, UserRepository userRepository) {
         this.tokenService = tokenService;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -38,8 +42,26 @@ public class AuthInterceptor implements HandlerInterceptor {
         String token = header.substring("Bearer ".length()).trim();
         String userId = tokenService.parseUserId(token)
                 .orElseThrow(() -> new BusinessException(ErrorCodes.UNAUTHORIZED, "无效令牌"));
+        if (path.startsWith("/api/admin/models")) {
+            assertAdmin(userId);
+        }
         RequestContext.setUserId(userId);
         return true;
+    }
+
+    private void assertAdmin(String userId) {
+        long uid;
+        try {
+            uid = Long.parseLong(userId);
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCodes.UNAUTHORIZED, "无效令牌");
+        }
+        UserEntity user = userRepository.findById(uid)
+                .orElseThrow(() -> new BusinessException(ErrorCodes.UNAUTHORIZED, "用户不存在"));
+        String role = user.getRole();
+        if (role == null || !role.equalsIgnoreCase("admin")) {
+            throw new BusinessException(ErrorCodes.FORBIDDEN, "forbidden");
+        }
     }
 
     private void bindClientMetadata(HttpServletRequest request) {

@@ -308,10 +308,13 @@ const onModify = async () => {
         <div class="mt-4 rounded-2xl border bg-white p-4">
           <div class="flex items-center justify-between gap-2">
             <div class="text-sm font-semibold">在线预览</div>
-            <el-tag v-if="previewStatus === 'ready'" type="success" effect="plain">ready</el-tag>
-            <el-tag v-else-if="previewStatus === 'provisioning'" type="warning" effect="plain">provisioning</el-tag>
-            <el-tag v-else-if="previewStatus === 'expired'" type="info" effect="plain">expired</el-tag>
-            <el-tag v-else type="danger" effect="plain">{{ previewStatus || 'failed' }}</el-tag>
+            <div class="flex items-center gap-2">
+              <el-button size="small" plain @click="showLogViewer = true">查看部署日志</el-button>
+              <el-tag v-if="previewStatus === 'ready'" type="success" effect="plain">ready</el-tag>
+              <el-tag v-else-if="previewStatus === 'provisioning'" type="warning" effect="plain">provisioning</el-tag>
+              <el-tag v-else-if="previewStatus === 'expired'" type="info" effect="plain">expired</el-tag>
+              <el-tag v-else type="danger" effect="plain">{{ previewStatus || 'failed' }}</el-tag>
+            </div>
           </div>
 
           <div v-if="previewStatus === 'provisioning'" class="mt-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-700">
@@ -345,9 +348,6 @@ const onModify = async () => {
             <div class="mt-3 flex items-center gap-2">
               <el-button size="small" type="danger" plain :loading="isRebuildingPreview" @click="onRebuildPreview">
                 重建预览
-              </el-button>
-              <el-button size="small" plain @click="showLogViewer = true">
-                查看部署日志
               </el-button>
             </div>
           </div>
@@ -391,4 +391,3 @@ const onModify = async () => {
     <PreviewLogViewer :task-id="taskId" v-model:visible="showLogViewer" />
   </div>
 </template>
-

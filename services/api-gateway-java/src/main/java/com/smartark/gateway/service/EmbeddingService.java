@@ -27,9 +27,14 @@ public class EmbeddingService {
     private final String apiKey;
     private final String embeddingModel;
     private final int embeddingDimension;
+    private final ModelRouterService modelRouterService;
+
+    private record EmbeddingConnection(String modelName, String baseUrl, String apiKey, String source) {
+    }
 
     public EmbeddingService(
             ObjectMapper objectMapper,
+            ModelRouterService modelRouterService,
             @Value("${smartark.model.base-url:}") String baseUrl,
             @Value("${smartark.rag.embedding-base-url:}") String embeddingBaseUrl,
             @Value("${smartark.model.api-key:}") String apiKey,
@@ -37,6 +42,7 @@ public class EmbeddingService {
             @Value("${smartark.rag.embedding-dimension:1024}") int embeddingDimension
     ) {
         this.objectMapper = objectMapper;
+        this.modelRouterService = modelRouterService;
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         this.embeddingBaseUrl = embeddingBaseUrl == null ? "" : embeddingBaseUrl.trim();
         this.apiKey = apiKey == null ? "" : apiKey.trim();
@@ -50,32 +56,31 @@ public class EmbeddingService {
             return List.of();
         }
 
-        if (resolveEmbeddingBaseUrl().isEmpty() || apiKey.isEmpty()) {
+        EmbeddingConnection connection = resolveEmbeddingConnection();
+        if (connection == null) {
             logger.warn("Embedding service not configured, returning mock vectors");
             return texts.stream()
                     .map(t -> new float[embeddingDimension])
                     .toList();
         }
 
-        String effectiveBaseUrl = resolveEmbeddingBaseUrl();
-        int batchSize = resolveBatchSize(effectiveBaseUrl);
+        int batchSize = resolveBatchSize(connection.baseUrl());
         List<float[]> allVectors = new ArrayList<>();
         for (int i = 0; i < texts.size(); i += batchSize) {
             List<String> batch = texts.subList(i, Math.min(i + batchSize, texts.size()));
-            List<float[]> batchVectors = embedBatch(batch);
+            List<float[]> batchVectors = embedBatch(batch, connection);
             allVectors.addAll(batchVectors);
         }
         return allVectors;
     }
 
-    private List<float[]> embedBatch(List<String> texts) {
+    private List<float[]> embedBatch(List<String> texts, EmbeddingConnection connection) {
         try {
-            String effectiveBaseUrl = resolveEmbeddingBaseUrl();
-            String embeddingUri = buildEmbeddingUri(effectiveBaseUrl);
-            Map<String, Object> requestBody = buildRequestBody(effectiveBaseUrl, texts);
+            String embeddingUri = buildEmbeddingUri(connection.baseUrl());
+            Map<String, Object> requestBody = buildRequestBody(connection.baseUrl(), connection.modelName(), texts);
             String responseJson = restClient.post()
                     .uri(embeddingUri)
-                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Authorization", "Bearer " + connection.apiKey())
                     .header("Content-Type", "application/json")
                     .body(objectMapper.writeValueAsString(requestBody))
                     .retrieve()
@@ -89,11 +94,21 @@ public class EmbeddingService {
         }
     }
 
-    private String resolveEmbeddingBaseUrl() {
-        if (!embeddingBaseUrl.isEmpty()) {
-            return embeddingBaseUrl;
+    private EmbeddingConnection resolveEmbeddingConnection() {
+        String resolvedEmbeddingModel = modelRouterService.resolve("embedding");
+        if (resolvedEmbeddingModel != null && !resolvedEmbeddingModel.isBlank()) {
+            var fromRegistry = modelRouterService.resolveConnection(resolvedEmbeddingModel);
+            if (fromRegistry.isPresent()) {
+                var c = fromRegistry.get();
+                return new EmbeddingConnection(resolvedEmbeddingModel, c.baseUrl(), c.apiKey(), "registry");
+            }
         }
-        return baseUrl;
+        String fallbackBase = !embeddingBaseUrl.isEmpty() ? embeddingBaseUrl : baseUrl;
+        if (!fallbackBase.isEmpty() && !apiKey.isEmpty()) {
+            String model = (resolvedEmbeddingModel == null || resolvedEmbeddingModel.isBlank()) ? embeddingModel : resolvedEmbeddingModel;
+            return new EmbeddingConnection(model, fallbackBase, apiKey, "env");
+        }
+        return null;
     }
 
     private String buildEmbeddingUri(String effectiveBaseUrl) {
@@ -109,16 +124,16 @@ public class EmbeddingService {
         return trimTrailingSlash(effectiveBaseUrl) + "/v1/embeddings";
     }
 
-    private Map<String, Object> buildRequestBody(String effectiveBaseUrl, List<String> texts) {
+    private Map<String, Object> buildRequestBody(String effectiveBaseUrl, String modelName, List<String> texts) {
         if (isDashScopeNative(effectiveBaseUrl)) {
             return Map.of(
-                    "model", embeddingModel,
+                    "model", modelName,
                     "input", Map.of("texts", texts),
                     "parameters", Map.of("dimension", embeddingDimension)
             );
         }
         return Map.of(
-                "model", embeddingModel,
+                "model", modelName,
                 "input", texts,
                 "dimensions", embeddingDimension
         );

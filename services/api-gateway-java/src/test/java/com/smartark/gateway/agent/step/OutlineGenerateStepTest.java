@@ -73,7 +73,7 @@ class OutlineGenerateStepTest {
         PaperOutlineVersionEntity oldVersion = new PaperOutlineVersionEntity();
         oldVersion.setVersionNo(2);
 
-        JsonNode generatedOutline = objectMapper.readTree("{\"chapters\":[{\"title\":\"第一章\"}],\"references\":[]}");
+        JsonNode generatedOutline = objectMapper.readTree("{\"chapters\":[{\"title\":\"第一章\",\"sections\":[{\"title\":\"1.1\"}]}],\"references\":[]}");
 
         when(paperTopicSessionRepository.findByTaskId("task-x")).thenReturn(Optional.of(session));
         when(paperSourceRepository.findBySessionIdOrderByCreatedAtAsc(7L)).thenReturn(List.of(source));

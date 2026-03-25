@@ -19,7 +19,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -206,6 +208,40 @@ class RequirementAnalyzeStepTest {
         assertTrue(context.getFilePlan().stream().anyMatch(item -> "template_repo:django-vue3-mysql".equals(item.getReason())));
         assertTrue(Files.exists(context.getWorkspaceDir().resolve("backend/manage.py")));
         assertTrue(Files.exists(context.getWorkspaceDir().resolve("frontend/package.json")));
+    }
+
+    @Test
+    void execute_shouldFailWhenPrdPagesManyButNoFrontendBusinessFilesPlanned() throws Exception {
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService());
+        AgentExecutionContext context = buildContext();
+
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"title\":\"Resume\",\"prd\":\"{\\\"pages\\\":[\\\"登录\\\",\\\"列表\\\",\\\"模板\\\",\\\"编辑\\\",\\\"个人中心\\\"],\\\"features\\\":[]}\",\"stack\":{\"backend\":\"springboot\",\"frontend\":\"vue3\",\"db\":\"mysql\"}}");
+        context.setSpec(spec);
+
+        when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of("frontend/src/App.vue"));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> step.execute(context));
+        assertEquals(ErrorCodes.TASK_VALIDATION_ERROR, ex.getCode());
+        assertTrue(ex.getMessage().contains("前端页面规划不足"));
+    }
+
+    @Test
+    void execute_shouldFailWhenFeaturesManyButNoBackendBusinessFilesPlanned() throws Exception {
+        RequirementAnalyzeStep step = new RequirementAnalyzeStep(modelService, new ObjectMapper(), stepMemoryService, templateRepoService());
+        AgentExecutionContext context = buildContext();
+
+        ProjectSpecEntity spec = new ProjectSpecEntity();
+        spec.setRequirementJson("{\"title\":\"Resume\",\"prd\":\"{\\\"pages\\\":[],\\\"features\\\":[\\\"登录\\\",\\\"模板库\\\",\\\"编辑\\\",\\\"纠错\\\",\\\"导出\\\"]}\",\"stack\":{\"backend\":\"springboot\",\"frontend\":\"vue3\",\"db\":\"mysql\"}}");
+        context.setSpec(spec);
+
+        when(modelService.generateProjectStructure(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(List.of("backend/pom.xml"));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> step.execute(context));
+        assertEquals(ErrorCodes.TASK_VALIDATION_ERROR, ex.getCode());
+        assertTrue(ex.getMessage().contains("后端业务规划不足"));
     }
 
     private AgentExecutionContext buildContext() {

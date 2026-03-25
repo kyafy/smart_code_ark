@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.FilePlanItem;
+import com.smartark.gateway.common.exception.BusinessException;
+import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.service.ModelService;
 import com.smartark.gateway.service.StepMemoryService;
 import com.smartark.gateway.service.TemplateRepoService;
@@ -138,6 +140,8 @@ public class RequirementAnalyzeStep implements AgentStep {
         }
 
         List<FilePlanItem> filePlan = buildFilePlan(fileList, templateFiles, templateSelection.map(TemplateRepoService.TemplateSelection::templateKey).orElse(null));
+        enforceFrontendBusinessCoverage(prd, stackFrontend, frontendRoot, filePlan, context);
+        enforceBackendBusinessCoverage(prd, stackBackend, backendRoot, filePlan, context);
 
         context.setFileList(filePlan.stream().map(FilePlanItem::getPath).toList());
         context.setFilePlan(filePlan);
@@ -510,6 +514,144 @@ public class RequirementAnalyzeStep implements AgentStep {
         item.setPriority(priority);
         item.setReason(reason);
         return item;
+    }
+
+    private void enforceFrontendBusinessCoverage(String prd,
+                                                 String stackFrontend,
+                                                 String frontendRoot,
+                                                 List<FilePlanItem> filePlan,
+                                                 AgentExecutionContext context) throws Exception {
+        int expectedPageCount = parseExpectedPageCount(prd);
+        if (expectedPageCount < 3 || filePlan == null || filePlan.isEmpty()) {
+            return;
+        }
+        String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
+        if (!(frontend.contains("vue") || frontend.contains("react") || frontend.contains("next"))) {
+            return;
+        }
+        int plannedBusinessPageFiles = (int) filePlan.stream()
+                .map(FilePlanItem::getPath)
+                .filter(path -> path != null && !path.isBlank())
+                .filter(path -> isBusinessPagePath(path, frontendRoot, frontend))
+                .count();
+        context.logInfo("Frontend coverage check: expectedPages=" + expectedPageCount
+                + ", plannedBusinessFiles=" + plannedBusinessPageFiles);
+        if (plannedBusinessPageFiles > 0) {
+            return;
+        }
+        throw new BusinessException(
+                ErrorCodes.TASK_VALIDATION_ERROR,
+                "前端页面规划不足：PRD包含" + expectedPageCount + "个页面，但生成计划仅包含模板壳文件，缺少业务页面文件"
+        );
+    }
+
+    private int parseExpectedPageCount(String prd) {
+        if (prd == null || prd.isBlank()) {
+            return 0;
+        }
+        try {
+            JsonNode prdNode = objectMapper.readTree(prd);
+            JsonNode pages = prdNode.path("pages");
+            return pages.isArray() ? pages.size() : 0;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private int parseExpectedFeatureCount(String prd) {
+        if (prd == null || prd.isBlank()) {
+            return 0;
+        }
+        try {
+            JsonNode prdNode = objectMapper.readTree(prd);
+            JsonNode features = prdNode.path("features");
+            return features.isArray() ? features.size() : 0;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private boolean isBusinessPagePath(String path, String frontendRoot, String frontend) {
+        String normalizedRoot = (frontendRoot == null || frontendRoot.isBlank() || ".".equals(frontendRoot))
+                ? ""
+                : frontendRoot + "/";
+        String relative = normalizedRoot.isEmpty() ? path : path.startsWith(normalizedRoot)
+                ? path.substring(normalizedRoot.length()) : path;
+        if (relative.equals(path) && !normalizedRoot.isEmpty()) {
+            return false;
+        }
+        String lower = relative.toLowerCase();
+        if (frontend.contains("next")) {
+            return lower.startsWith("app/") && lower.endsWith("/page.tsx")
+                    || lower.startsWith("app/") && lower.endsWith("/page.jsx");
+        }
+        return lower.startsWith("src/pages/") || lower.startsWith("src/views/");
+    }
+
+    private void enforceBackendBusinessCoverage(String prd,
+                                                String stackBackend,
+                                                String backendRoot,
+                                                List<FilePlanItem> filePlan,
+                                                AgentExecutionContext context) {
+        int expectedFeatureCount = parseExpectedFeatureCount(prd);
+        if (expectedFeatureCount < 4 || filePlan == null || filePlan.isEmpty()) {
+            return;
+        }
+        String backend = stackBackend == null ? "" : stackBackend.toLowerCase();
+        if (!(backend.contains("spring")
+                || backend.contains("django")
+                || backend.contains("fastapi")
+                || backend.contains("python")
+                || backend.contains("node")
+                || backend.contains("express")
+                || backend.contains("nestjs"))) {
+            return;
+        }
+        long plannedBackendBusinessFiles = filePlan.stream()
+                .filter(item -> item.getPath() != null && !item.getPath().isBlank())
+                .filter(item -> "backend".equals(item.getGroup()))
+                .filter(item -> isBackendBusinessPath(item.getPath(), backendRoot))
+                .filter(item -> item.getReason() == null || !item.getReason().startsWith("template_repo:"))
+                .count();
+        context.logInfo("Backend coverage check: expectedFeatures=" + expectedFeatureCount
+                + ", plannedBusinessFiles=" + plannedBackendBusinessFiles);
+        if (plannedBackendBusinessFiles > 0) {
+            return;
+        }
+        throw new BusinessException(
+                ErrorCodes.TASK_VALIDATION_ERROR,
+                "后端业务规划不足：PRD包含" + expectedFeatureCount + "个功能点，但生成计划缺少非模板业务后端文件"
+        );
+    }
+
+    private boolean isBackendBusinessPath(String path, String backendRoot) {
+        String normalizedRoot = (backendRoot == null || backendRoot.isBlank() || ".".equals(backendRoot))
+                ? ""
+                : backendRoot + "/";
+        String relative = normalizedRoot.isEmpty() ? path : path.startsWith(normalizedRoot)
+                ? path.substring(normalizedRoot.length()) : path;
+        if (relative.equals(path) && !normalizedRoot.isEmpty()) {
+            return false;
+        }
+        String lower = relative.toLowerCase();
+        if (lower.startsWith("src/main/java/")) {
+            return !lower.contains("/config/")
+                    && !lower.contains("/health/")
+                    && !lower.endsWith("application.java");
+        }
+        if (lower.startsWith("app/")) {
+            return lower.contains("/routers/")
+                    || lower.contains("/views.py")
+                    || lower.contains("/controllers/")
+                    || lower.contains("/services/")
+                    || lower.contains("/models.py");
+        }
+        if (lower.startsWith("src/")) {
+            return lower.contains("/modules/")
+                    || lower.contains("/controllers/")
+                    || lower.contains("/services/");
+        }
+        return false;
     }
 
     private record StructureCompleteness(boolean passed, List<String> missingFiles) {
