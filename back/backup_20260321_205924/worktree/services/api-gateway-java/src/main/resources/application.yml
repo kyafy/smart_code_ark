@@ -1,0 +1,115 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:smartark}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${DB_USER:smartark}
+    password: ${DB_PASSWORD:smartark}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      repositories:
+        enabled: false
+
+smartark:
+  agent:
+    workspace-root: /tmp/smartark/
+    max-retries: 2
+<<<<<<< HEAD
+    retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate
+=======
+    retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate,rag_index_enrich,rag_retrieve_rerank
+>>>>>>> origin/master
+  preview:
+    enabled: ${PREVIEW_ENABLED:false}
+    auto-deploy-on-finish: ${PREVIEW_AUTO_DEPLOY_ON_FINISH:true}
+    default-ttl-hours: ${PREVIEW_DEFAULT_TTL_HOURS:24}
+    max-concurrent-per-user: ${PREVIEW_MAX_CONCURRENT_PER_USER:2}
+    recycle-interval-ms: ${PREVIEW_RECYCLE_INTERVAL_MS:60000}
+<<<<<<< HEAD
+=======
+    docker-host: ${PREVIEW_DOCKER_HOST:unix:///var/run/docker.sock}
+    base-image: ${PREVIEW_BASE_IMAGE:node:20-alpine}
+    container-memory-mb: ${PREVIEW_CONTAINER_MEMORY_MB:512}
+    container-cpus: ${PREVIEW_CONTAINER_CPUS:1.0}
+    container-port: ${PREVIEW_CONTAINER_PORT:5173}
+    host-port-range-start: ${PREVIEW_HOST_PORT_RANGE_START:30000}
+    host-port-range-end: ${PREVIEW_HOST_PORT_RANGE_END:31000}
+    health-check-timeout-seconds: ${PREVIEW_HEALTH_CHECK_TIMEOUT:60}
+    health-check-interval-ms: ${PREVIEW_HEALTH_CHECK_INTERVAL:3000}
+    log-dir: ${PREVIEW_LOG_DIR:/tmp/smartark/preview-logs}
+>>>>>>> origin/master
+  cors:
+    allowed-origins: "*"
+  auth:
+    jwt-secret: ${JWT_SECRET:change-me}
+    token-ttl-seconds: ${JWT_TTL_SECONDS:604800}
+  model:
+    base-url: ${MODEL_BASE_URL:}
+    api-key: ${MODEL_API_KEY:}
+    mock-enabled: ${MODEL_MOCK_ENABLED:false}
+    chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
+    code-model: ${CODE_MODEL:qwen-plus}
+  billing:
+    recharge:
+      callback-mock-sign-enabled: ${RECHARGE_CALLBACK_MOCK_SIGN_ENABLED:true}
+      callback-mock-sign-secret: ${RECHARGE_CALLBACK_MOCK_SIGN_SECRET:smartark-recharge-secret}
+<<<<<<< HEAD
+=======
+  rag:
+    enabled: ${RAG_ENABLED:true}
+    embedding-model: ${RAG_EMBEDDING_MODEL:text-embedding-v3}
+    embedding-dimension: ${RAG_EMBEDDING_DIMENSION:1024}
+    chunk-max-tokens: ${RAG_CHUNK_MAX_TOKENS:512}
+    chunk-overlap-tokens: ${RAG_CHUNK_OVERLAP_TOKENS:64}
+    retrieve-top-k: ${RAG_RETRIEVE_TOP_K:30}
+    rerank-top-n: ${RAG_RERANK_TOP_N:15}
+    qdrant:
+      host: ${QDRANT_HOST:localhost}
+      port: ${QDRANT_GRPC_PORT:6334}
+      collection-name: ${QDRANT_COLLECTION:paper_chunks}
+>>>>>>> origin/master
+  paper:
+    semantic-scholar:
+      base-url: ${SEMANTIC_SCHOLAR_BASE_URL:https://api.semanticscholar.org}
+      api-key: ${SEMANTIC_SCHOLAR_API_KEY:}
+      timeout-ms: ${SEMANTIC_SCHOLAR_TIMEOUT_MS:10000}
+<<<<<<< HEAD
+=======
+    crossref:
+      base-url: ${CROSSREF_BASE_URL:https://api.crossref.org}
+      mailto: ${CROSSREF_MAILTO:aicfu71@gmail.com}
+      timeout-ms: ${CROSSREF_TIMEOUT_MS:15000}
+    arxiv:
+      base-url: ${ARXIV_BASE_URL:http://export.arxiv.org}
+      timeout-ms: ${ARXIV_TIMEOUT_MS:10000}
+      request-interval-ms: ${ARXIV_REQUEST_INTERVAL_MS:3000}
+>>>>>>> origin/master
+    quality-rewrite:
+      score-threshold: ${PAPER_QUALITY_REWRITE_SCORE_THRESHOLD:75}
+      max-rounds: ${PAPER_QUALITY_REWRITE_MAX_ROUNDS:1}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}

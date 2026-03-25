@@ -41,6 +41,9 @@ public class PaperOutlineVersionEntity {
     @Column(name = "rewrite_round", nullable = false)
     private Integer rewriteRound = 0;
 
+    @Column(name = "chapter_evidence_map_json", columnDefinition = "text")
+    private String chapterEvidenceMapJson;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -114,6 +117,14 @@ public class PaperOutlineVersionEntity {
 
     public void setRewriteRound(Integer rewriteRound) {
         this.rewriteRound = rewriteRound;
+    }
+
+    public String getChapterEvidenceMapJson() {
+        return chapterEvidenceMapJson;
+    }
+
+    public void setChapterEvidenceMapJson(String chapterEvidenceMapJson) {
+        this.chapterEvidenceMapJson = chapterEvidenceMapJson;
     }
 
     public LocalDateTime getCreatedAt() {

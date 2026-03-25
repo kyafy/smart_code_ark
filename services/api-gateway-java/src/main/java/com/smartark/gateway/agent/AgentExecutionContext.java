@@ -2,11 +2,14 @@ package com.smartark.gateway.agent;
 
 import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.agent.model.PaperSourceItem;
+import com.smartark.gateway.agent.model.RagEvidenceItem;
 import com.smartark.gateway.db.entity.ProjectEntity;
 import com.smartark.gateway.db.entity.ProjectSpecEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
+import com.smartark.gateway.service.TemplateRepoService;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 public class AgentExecutionContext {
     private TaskEntity task;
@@ -28,6 +31,17 @@ public class AgentExecutionContext {
     private String manuscriptJson;
     private String qualityReportJson;
     private List<String> qualityIssues;
+    private int ragIndexedChunkCount;
+    private List<RagEvidenceItem> ragEvidenceItems;
+    private String chapterEvidenceMapJson;
+    private List<String> contractViolations;
+    private List<String> shortTermMemories;
+    private List<String> longTermMemories;
+    private String assembledContextPack;
+    private String templateKey;
+    private TemplateRepoService.TemplateSelection templateSelection;
+    private int sidecarCallCount;
+    private BiConsumer<String, String> taskLogger;
 
     public TaskEntity getTask() {
         return task;
@@ -179,5 +193,115 @@ public class AgentExecutionContext {
 
     public void setQualityIssues(List<String> qualityIssues) {
         this.qualityIssues = qualityIssues;
+    }
+
+    public int getRagIndexedChunkCount() {
+        return ragIndexedChunkCount;
+    }
+
+    public void setRagIndexedChunkCount(int ragIndexedChunkCount) {
+        this.ragIndexedChunkCount = ragIndexedChunkCount;
+    }
+
+    public List<RagEvidenceItem> getRagEvidenceItems() {
+        return ragEvidenceItems;
+    }
+
+    public void setRagEvidenceItems(List<RagEvidenceItem> ragEvidenceItems) {
+        this.ragEvidenceItems = ragEvidenceItems;
+    }
+
+    public String getChapterEvidenceMapJson() {
+        return chapterEvidenceMapJson;
+    }
+
+    public void setChapterEvidenceMapJson(String chapterEvidenceMapJson) {
+        this.chapterEvidenceMapJson = chapterEvidenceMapJson;
+    }
+
+    public List<String> getContractViolations() {
+        return contractViolations;
+    }
+
+    public void setContractViolations(List<String> contractViolations) {
+        this.contractViolations = contractViolations;
+    }
+
+    public String getTemplateKey() {
+        return templateKey;
+    }
+
+    public void setTemplateKey(String templateKey) {
+        this.templateKey = templateKey;
+    }
+
+    public TemplateRepoService.TemplateSelection getTemplateSelection() {
+        return templateSelection;
+    }
+
+    public void setTemplateSelection(TemplateRepoService.TemplateSelection templateSelection) {
+        this.templateSelection = templateSelection;
+    }
+
+    public int getSidecarCallCount() {
+        return sidecarCallCount;
+    }
+
+    public void setSidecarCallCount(int sidecarCallCount) {
+        this.sidecarCallCount = Math.max(0, sidecarCallCount);
+    }
+
+    public void incrementSidecarCallCount() {
+        this.sidecarCallCount++;
+    }
+
+    public List<String> getShortTermMemories() {
+        return shortTermMemories;
+    }
+
+    public void setShortTermMemories(List<String> shortTermMemories) {
+        this.shortTermMemories = shortTermMemories;
+    }
+
+    public List<String> getLongTermMemories() {
+        return longTermMemories;
+    }
+
+    public void setLongTermMemories(List<String> longTermMemories) {
+        this.longTermMemories = longTermMemories;
+    }
+
+    public String getAssembledContextPack() {
+        return assembledContextPack;
+    }
+
+    public void setAssembledContextPack(String assembledContextPack) {
+        this.assembledContextPack = assembledContextPack;
+    }
+
+    public BiConsumer<String, String> getTaskLogger() {
+        return taskLogger;
+    }
+
+    public void setTaskLogger(BiConsumer<String, String> taskLogger) {
+        this.taskLogger = taskLogger;
+    }
+
+    public void log(String level, String content) {
+        if (taskLogger != null && level != null && content != null && !content.isBlank()) {
+            taskLogger.accept(level, content);
+        }
+    }
+
+    public void logInfo(String content) {
+        log("info", content);
+    }
+
+    public void logWarn(String content) {
+        log("warn", content);
+    }
+
+    public void logError(String content) {
+        log("error", content);
     }
 }

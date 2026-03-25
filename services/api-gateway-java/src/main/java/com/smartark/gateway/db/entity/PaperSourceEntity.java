@@ -50,6 +50,9 @@ public class PaperSourceEntity {
     @Column(name = "relevance_score", precision = 5, scale = 4)
     private BigDecimal relevanceScore;
 
+    @Column(name = "source", nullable = false, length = 32)
+    private String source = "semantic_scholar";
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -147,6 +150,14 @@ public class PaperSourceEntity {
 
     public void setRelevanceScore(BigDecimal relevanceScore) {
         this.relevanceScore = relevanceScore;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
     }
 
     public LocalDateTime getCreatedAt() {

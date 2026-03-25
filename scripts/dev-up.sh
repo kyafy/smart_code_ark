@@ -12,10 +12,11 @@ if [ -f ".env" ]; then
   set +a
 fi
 
-docker compose up -d mysql redis
+docker compose up -d mysql redis qdrant
 
 BACKEND_PORT="${BACKEND_PORT:-8080}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+QDRANT_HTTP_PORT="${QDRANT_HTTP_PORT:-6333}"
 
 export DB_HOST="${DB_HOST:-localhost}"
 export DB_PORT="${DB_PORT:-3306}"
@@ -25,6 +26,8 @@ export DB_PASSWORD="${DB_PASSWORD:-smartark}"
 
 export REDIS_HOST="${REDIS_HOST:-localhost}"
 export REDIS_PORT="${REDIS_PORT:-6379}"
+export QDRANT_HOST="${QDRANT_HOST:-localhost}"
+export QDRANT_GRPC_PORT="${QDRANT_GRPC_PORT:-6334}"
 
 export JWT_SECRET="${JWT_SECRET:-change-me}"
 export JWT_TTL_SECONDS="${JWT_TTL_SECONDS:-604800}"
@@ -39,12 +42,29 @@ fi
 export CHAT_MODEL="${CHAT_MODEL:-qwen-plus}"
 export CODE_MODEL="${CODE_MODEL:-qwen-plus}"
 
+echo "waiting for qdrant http://localhost:${QDRANT_HTTP_PORT}/healthz"
+for _ in $(seq 1 60); do
+  if curl -fsS "http://localhost:${QDRANT_HTTP_PORT}/healthz" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
 if [ -f ".pids/backend.pid" ] && kill -0 "$(cat .pids/backend.pid)" 2>/dev/null; then
   echo "backend already running (pid=$(cat .pids/backend.pid))"
 else
   (
     cd "$ROOT_DIR/services/api-gateway-java"
-    nohup mvn spring-boot:run -DskipTests >"$ROOT_DIR/.logs/backend.log" 2>&1 &
+    # Prefer Maven Wrapper if available, fallback to system mvn
+    if [ -x "./mvnw" ]; then
+      MVN_CMD="./mvnw"
+    elif command -v mvn >/dev/null 2>&1; then
+      MVN_CMD="mvn"
+    else
+      echo "ERROR: neither ./mvnw nor mvn found on PATH" >&2
+      exit 1
+    fi
+    nohup $MVN_CMD spring-boot:run -DskipTests >"$ROOT_DIR/.logs/backend.log" 2>&1 &
     echo $! >"$ROOT_DIR/.pids/backend.pid"
   )
 fi
@@ -62,7 +82,10 @@ if [ -f ".pids/frontend.pid" ] && kill -0 "$(cat .pids/frontend.pid)" 2>/dev/nul
 else
   (
     cd "$ROOT_DIR/frontend-web"
-    npm install >"$ROOT_DIR/.logs/frontend.install.log" 2>&1
+    if [ ! -d "node_modules" ]; then
+      echo "installing frontend dependencies..."
+      npm install >"$ROOT_DIR/.logs/frontend.install.log" 2>&1
+    fi
     nohup npm run dev -- --host 0.0.0.0 --port "${FRONTEND_PORT}" >"$ROOT_DIR/.logs/frontend.log" 2>&1 &
     echo $! >"$ROOT_DIR/.pids/frontend.pid"
   )

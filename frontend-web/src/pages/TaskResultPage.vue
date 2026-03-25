@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import ArtifactCards from '@/components/ArtifactCards.vue'
+import PreviewLogViewer from '@/components/PreviewLogViewer.vue'
 import { taskApi } from '@/api/endpoints'
 import { showApiError } from '@/api/http'
 
@@ -14,10 +15,26 @@ const previewStatus = ref('provisioning')
 const previewUrl = ref('')
 const previewExpireAt = ref('')
 const previewLastError = ref('')
+const previewPhase = ref<string | null>(null)
 const provisioningPhase = ref('准备开始部署')
 const isPreviewLoading = ref(false)
 const isRebuildingPreview = ref(false)
 const isDownloading = ref(false)
+const showLogViewer = ref(false)
+
+const PREVIEW_PHASES = [
+  { key: 'prepare_artifact', label: '准备部署产物' },
+  { key: 'start_runtime', label: '启动运行环境' },
+  { key: 'install_deps', label: '安装依赖' },
+  { key: 'boot_service', label: '启动服务' },
+  { key: 'health_check', label: '健康检查' },
+  { key: 'publish_gateway', label: '发布访问入口' },
+] as const
+
+const currentPhaseIndex = computed(() => {
+  if (!previewPhase.value) return -1
+  return PREVIEW_PHASES.findIndex(p => p.key === previewPhase.value)
+})
 let pollTimer: number | null = null
 let previewSse: EventSource | null = null
 const sseMode = ref<'idle' | 'connecting' | 'connected' | 'fallback'>('idle')
@@ -128,7 +145,9 @@ const startPreviewSse = () => {
         previewUrl.value = payload.previewUrl || previewUrl.value
         previewExpireAt.value = payload.expireAt || previewExpireAt.value
         previewLastError.value = payload.lastError || previewLastError.value
-        provisioningPhase.value = payload.phase || provisioningPhase.value
+        previewPhase.value = payload.phase || null
+        const phaseLabel = PREVIEW_PHASES.find(p => p.key === payload.phase)?.label
+        provisioningPhase.value = phaseLabel || payload.phase || provisioningPhase.value
         if (previewStatus.value !== 'provisioning') {
           stopPreviewSse()
           stopPolling()
@@ -171,8 +190,10 @@ const loadPreview = async (silent = false) => {
     previewUrl.value = p.previewUrl || ''
     previewExpireAt.value = p.expireAt || ''
     previewLastError.value = p.lastError || ''
+    previewPhase.value = p.phase || null
     if (previewStatus.value === 'provisioning') {
-      provisioningPhase.value = sseMode.value === 'connected' ? '预览部署进行中' : '正在部署预览实例'
+      const phaseLabel = PREVIEW_PHASES.find(ph => ph.key === p.phase)?.label
+      provisioningPhase.value = phaseLabel || (sseMode.value === 'connected' ? '预览部署进行中' : '正在部署预览实例')
       startPreviewSse()
       if (sseMode.value !== 'connected') {
         startPolling()
@@ -287,16 +308,24 @@ const onModify = async () => {
         <div class="mt-4 rounded-2xl border bg-white p-4">
           <div class="flex items-center justify-between gap-2">
             <div class="text-sm font-semibold">在线预览</div>
-            <el-tag v-if="previewStatus === 'ready'" type="success" effect="plain">ready</el-tag>
-            <el-tag v-else-if="previewStatus === 'provisioning'" type="warning" effect="plain">provisioning</el-tag>
-            <el-tag v-else-if="previewStatus === 'expired'" type="info" effect="plain">expired</el-tag>
-            <el-tag v-else type="danger" effect="plain">{{ previewStatus || 'failed' }}</el-tag>
+            <div class="flex items-center gap-2">
+              <el-button size="small" plain @click="showLogViewer = true">查看部署日志</el-button>
+              <el-tag v-if="previewStatus === 'ready'" type="success" effect="plain">ready</el-tag>
+              <el-tag v-else-if="previewStatus === 'provisioning'" type="warning" effect="plain">provisioning</el-tag>
+              <el-tag v-else-if="previewStatus === 'expired'" type="info" effect="plain">expired</el-tag>
+              <el-tag v-else type="danger" effect="plain">{{ previewStatus || 'failed' }}</el-tag>
+            </div>
           </div>
 
-          <div v-if="previewStatus === 'provisioning'" class="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-700">
-            <div>预览部署中：{{ provisioningPhase }}</div>
-            <div v-if="sseMode === 'fallback'" class="mt-1 text-xs">实时通道不可用，当前使用轮询模式（2.5 秒一次）。</div>
-            <div v-else class="mt-1 text-xs">优先使用实时通道，失败后自动回退到轮询模式。</div>
+          <div v-if="previewStatus === 'provisioning'" class="mt-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-700">
+            <div class="font-medium mb-3">预览部署中</div>
+            <el-steps :active="currentPhaseIndex" finish-status="success" process-status="process" :space="120" size="small">
+              <el-step v-for="phase in PREVIEW_PHASES" :key="phase.key" :title="phase.label" />
+            </el-steps>
+            <div class="mt-3 text-xs text-amber-600">
+              <span v-if="sseMode === 'fallback'">实时通道不可用，当前使用轮询模式（2.5 秒一次）。</span>
+              <span v-else>优先使用实时通道，失败后自动回退到轮询模式。</span>
+            </div>
           </div>
 
           <div v-else-if="previewStatus === 'ready' && effectivePreviewUrl" class="mt-3">
@@ -316,9 +345,11 @@ const onModify = async () => {
 
           <div v-else-if="previewStatus === 'failed'" class="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">
             <div>预览部署失败：{{ previewLastError || '请稍后重试或先下载 ZIP 在本地运行。' }}</div>
-            <el-button class="mt-3" size="small" type="danger" plain :loading="isRebuildingPreview" @click="onRebuildPreview">
-              重建预览
-            </el-button>
+            <div class="mt-3 flex items-center gap-2">
+              <el-button size="small" type="danger" plain :loading="isRebuildingPreview" @click="onRebuildPreview">
+                重建预览
+              </el-button>
+            </div>
           </div>
 
           <div v-else-if="previewStatus === 'expired'" class="mt-3 rounded-xl bg-slate-100 p-3 text-sm text-slate-600">
@@ -356,6 +387,7 @@ const onModify = async () => {
         </div>
       </div>
     </div>
+
+    <PreviewLogViewer :task-id="taskId" v-model:visible="showLogViewer" />
   </div>
 </template>
-

@@ -1,0 +1,482 @@
+package com.smartark.gateway.service;
+
+import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.db.entity.TaskEntity;
+import com.smartark.gateway.db.entity.TaskLogEntity;
+import com.smartark.gateway.db.entity.TaskPreviewEntity;
+import com.smartark.gateway.db.repo.TaskLogRepository;
+import com.smartark.gateway.db.repo.TaskPreviewRepository;
+import com.smartark.gateway.db.repo.TaskRepository;
+<<<<<<< HEAD
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+=======
+import com.smartark.gateway.dto.TaskPreviewResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+>>>>>>> origin/master
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
+<<<<<<< HEAD
+=======
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+>>>>>>> origin/master
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+@Service
+public class PreviewDeployService {
+    private static final Logger logger = LoggerFactory.getLogger(PreviewDeployService.class);
+
+<<<<<<< HEAD
+=======
+    // Phase constants
+    public static final String PHASE_PREPARE_ARTIFACT = "prepare_artifact";
+    public static final String PHASE_START_RUNTIME = "start_runtime";
+    public static final String PHASE_INSTALL_DEPS = "install_deps";
+    public static final String PHASE_BOOT_SERVICE = "boot_service";
+    public static final String PHASE_HEALTH_CHECK = "health_check";
+    public static final String PHASE_PUBLISH_GATEWAY = "publish_gateway";
+
+>>>>>>> origin/master
+    private final TaskPreviewRepository taskPreviewRepository;
+    private final TaskRepository taskRepository;
+    private final TaskLogRepository taskLogRepository;
+
+<<<<<<< HEAD
+=======
+    @Autowired(required = false)
+    private ContainerRuntimeService containerRuntimeService;
+
+    @Autowired
+    private PreviewSseRegistry previewSseRegistry;
+
+>>>>>>> origin/master
+    @Value("${smartark.preview.enabled:false}")
+    private boolean previewEnabled;
+    @Value("${smartark.preview.auto-deploy-on-finish:true}")
+    private boolean autoDeployOnFinish;
+    @Value("${smartark.preview.default-ttl-hours:24}")
+    private int previewDefaultTtlHours;
+    @Value("${smartark.preview.max-concurrent-per-user:2}")
+    private int previewMaxConcurrentPerUser;
+<<<<<<< HEAD
+=======
+    @Value("${smartark.agent.workspace-root:/tmp/smartark/}")
+    private String workspaceRoot;
+    @Value("${smartark.preview.health-check-timeout-seconds:60}")
+    private int healthCheckTimeoutSeconds;
+    @Value("${smartark.preview.health-check-interval-ms:3000}")
+    private int healthCheckIntervalMs;
+    @Value("${smartark.preview.log-dir:/tmp/smartark/preview-logs}")
+    private String previewLogDir;
+>>>>>>> origin/master
+
+    public PreviewDeployService(TaskPreviewRepository taskPreviewRepository,
+                                TaskRepository taskRepository,
+                                TaskLogRepository taskLogRepository) {
+        this.taskPreviewRepository = taskPreviewRepository;
+        this.taskRepository = taskRepository;
+        this.taskLogRepository = taskLogRepository;
+    }
+
+    @Async
+    public void deployPreviewAsync(String taskId) {
+        long startedAt = System.currentTimeMillis();
+<<<<<<< HEAD
+=======
+        TaskPreviewEntity preview = null;
+>>>>>>> origin/master
+        try {
+            Optional<TaskEntity> taskOptional = taskRepository.findById(taskId);
+            if (taskOptional.isEmpty()) {
+                return;
+            }
+            TaskEntity task = taskOptional.get();
+            if (!shouldTriggerDeploy(task)) {
+                return;
+            }
+            LocalDateTime now = LocalDateTime.now();
+<<<<<<< HEAD
+            TaskPreviewEntity preview = taskPreviewRepository.findByTaskId(taskId)
+=======
+            preview = taskPreviewRepository.findByTaskId(taskId)
+>>>>>>> origin/master
+                    .orElseGet(() -> {
+                        TaskPreviewEntity entity = new TaskPreviewEntity();
+                        entity.setTaskId(task.getId());
+                        entity.setProjectId(task.getProjectId());
+                        entity.setUserId(task.getUserId());
+                        entity.setCreatedAt(now);
+                        return entity;
+                    });
+            if (isUserPreviewQuotaExceeded(task, preview)) {
+                preview.setStatus("failed");
+<<<<<<< HEAD
+                preview.setPreviewUrl(null);
+                preview.setExpireAt(null);
+                preview.setLastError("[" + ErrorCodes.PREVIEW_CONCURRENCY_LIMIT + "] 预览并发数已达上限(" + Math.max(previewMaxConcurrentPerUser, 1) + ")");
+=======
+                preview.setPhase(null);
+                preview.setPreviewUrl(null);
+                preview.setExpireAt(null);
+                preview.setLastError("预览并发数已达上限(" + Math.max(previewMaxConcurrentPerUser, 1) + ")");
+                preview.setLastErrorCode(ErrorCodes.PREVIEW_CONCURRENCY_LIMIT);
+>>>>>>> origin/master
+                preview.setUpdatedAt(now);
+                taskPreviewRepository.save(preview);
+                appendTaskLog(taskId, "warn", "Preview deployment skipped: user concurrency limit reached");
+                return;
+            }
+<<<<<<< HEAD
+            preview.setStatus("provisioning");
+            preview.setPreviewUrl(null);
+            preview.setRuntimeId(UUID.randomUUID().toString().replace("-", ""));
+            preview.setExpireAt(null);
+            preview.setLastError(null);
+            preview.setUpdatedAt(now);
+            taskPreviewRepository.save(preview);
+
+            appendTaskLog(taskId, "info", "Preview deployment started");
+
+            String previewUrl = buildStaticPreviewUrl(taskId);
+            LocalDateTime readyAt = LocalDateTime.now();
+            LocalDateTime expireAt = readyAt.plusHours(Math.max(previewDefaultTtlHours, 1));
+            preview.setStatus("ready");
+            preview.setPreviewUrl(previewUrl);
+            preview.setExpireAt(expireAt);
+            preview.setLastError(null);
+            preview.setUpdatedAt(readyAt);
+            taskPreviewRepository.save(preview);
+=======
+
+            // Reset to provisioning
+            preview.setStatus("provisioning");
+            preview.setPhase(null);
+            preview.setPreviewUrl(null);
+            preview.setRuntimeId(null);
+            preview.setBuildLogUrl(null);
+            preview.setExpireAt(null);
+            preview.setLastError(null);
+            preview.setLastErrorCode(null);
+            preview.setUpdatedAt(now);
+            taskPreviewRepository.save(preview);
+            appendTaskLog(taskId, "info", "Preview deployment started");
+
+            // If container runtime is not available, fallback to static URL
+            if (containerRuntimeService == null) {
+                logger.info("ContainerRuntimeService not available, falling back to static preview for task {}", taskId);
+                deployStaticFallback(taskId, task, preview, startedAt);
+                return;
+            }
+
+            // ===== Phase 1: prepare_artifact =====
+            updatePhase(preview, PHASE_PREPARE_ARTIFACT);
+            appendTaskLog(taskId, "info", "Phase: prepare_artifact - locating frontend artifact");
+
+            String workspacePath = resolveWorkspacePath(taskId);
+            String frontendPath = resolveFrontendPath(workspacePath);
+            if (frontendPath == null) {
+                throw new RuntimeException("Frontend artifact not found in workspace: " + workspacePath);
+            }
+            appendTaskLog(taskId, "info", "Frontend artifact found: " + frontendPath);
+
+            // ===== Phase 2: start_runtime =====
+            updatePhase(preview, PHASE_START_RUNTIME);
+            appendTaskLog(taskId, "info", "Phase: start_runtime - creating Docker container");
+
+            int hostPort = containerRuntimeService.findAvailablePort();
+            String containerId = containerRuntimeService.createAndStartContainer(frontendPath, hostPort, taskId);
+            preview.setRuntimeId(containerId);
+            preview.setUpdatedAt(LocalDateTime.now());
+            taskPreviewRepository.save(preview);
+            appendTaskLog(taskId, "info", "Container started: " + containerId + " on port " + hostPort);
+
+            // ===== Phase 3: install_deps =====
+            updatePhase(preview, PHASE_INSTALL_DEPS);
+            appendTaskLog(taskId, "info", "Phase: install_deps - running npm install");
+
+            ContainerRuntimeService.ExecResult installResult =
+                    containerRuntimeService.execInContainer(containerId, "sh", "-c", "npm install --prefer-offline 2>&1");
+
+            // Save build log
+            saveBuildLog(taskId, "install", installResult.output());
+            preview.setBuildLogUrl("file://" + previewLogDir + "/" + taskId + "-install.log");
+            preview.setUpdatedAt(LocalDateTime.now());
+            taskPreviewRepository.save(preview);
+
+            if (!installResult.isSuccess()) {
+                throw new RuntimeException("npm install failed (exit=" + installResult.exitCode() + "): "
+                        + truncate(installResult.output(), 500));
+            }
+            appendTaskLog(taskId, "info", "npm install completed successfully");
+
+            // ===== Phase 4: boot_service =====
+            updatePhase(preview, PHASE_BOOT_SERVICE);
+            appendTaskLog(taskId, "info", "Phase: boot_service - starting dev server");
+
+            // Start dev server in background (detached)
+            containerRuntimeService.execDetached(containerId, "sh", "-c",
+                    "npm run dev -- --host 0.0.0.0 > /tmp/dev-server.log 2>&1 || npm run preview -- --host 0.0.0.0 > /tmp/dev-server.log 2>&1");
+
+            appendTaskLog(taskId, "info", "Dev server process started");
+
+            // ===== Phase 5: health_check =====
+            updatePhase(preview, PHASE_HEALTH_CHECK);
+            appendTaskLog(taskId, "info", "Phase: health_check - waiting for service to be ready");
+
+            boolean healthy = containerRuntimeService.checkHealth("localhost", hostPort,
+                    healthCheckTimeoutSeconds, healthCheckIntervalMs);
+
+            preview.setLastHealthCheckAt(LocalDateTime.now());
+            preview.setUpdatedAt(LocalDateTime.now());
+            taskPreviewRepository.save(preview);
+
+            if (!healthy) {
+                // Capture container logs for diagnostics
+                String containerLogs = containerRuntimeService.getContainerLogs(containerId, 50);
+                saveBuildLog(taskId, "boot", containerLogs);
+                throw new RuntimeException("Health check timed out after " + healthCheckTimeoutSeconds + "s");
+            }
+            appendTaskLog(taskId, "info", "Health check passed");
+
+            // ===== Phase 6: publish_gateway =====
+            updatePhase(preview, PHASE_PUBLISH_GATEWAY);
+            appendTaskLog(taskId, "info", "Phase: publish_gateway - publishing preview URL");
+
+            // Phase 1 simplified: use host:port directly
+            String previewUrl = "http://localhost:" + hostPort;
+
+            LocalDateTime readyAt = LocalDateTime.now();
+            LocalDateTime expireAt = readyAt.plusHours(Math.max(previewDefaultTtlHours, 1));
+            preview.setStatus("ready");
+            preview.setPhase(null);
+            preview.setPreviewUrl(previewUrl);
+            preview.setExpireAt(expireAt);
+            preview.setLastError(null);
+            preview.setLastErrorCode(null);
+            preview.setUpdatedAt(readyAt);
+            taskPreviewRepository.save(preview);
+            broadcastStatus(preview);
+>>>>>>> origin/master
+
+            task.setResultUrl(previewUrl);
+            task.setUpdatedAt(readyAt);
+            taskRepository.save(task);
+
+            long duration = System.currentTimeMillis() - startedAt;
+<<<<<<< HEAD
+            appendTaskLog(taskId, "info", "Preview deployment succeeded in " + duration + "ms");
+=======
+            appendTaskLog(taskId, "info", "Preview deployment succeeded in " + duration + "ms, URL: " + previewUrl);
+>>>>>>> origin/master
+        } catch (Exception e) {
+            logger.error("Preview deployment failed for task {}", taskId, e);
+            int errorCode = resolvePreviewErrorCode(e);
+            LocalDateTime failedAt = LocalDateTime.now();
+<<<<<<< HEAD
+            taskPreviewRepository.findByTaskId(taskId).ifPresent(preview -> {
+                preview.setStatus("failed");
+                preview.setLastError("[" + errorCode + "] " + messageOf(e));
+                preview.setUpdatedAt(failedAt);
+                taskPreviewRepository.save(preview);
+            });
+            long duration = System.currentTimeMillis() - startedAt;
+            appendTaskLog(taskId, "error", "Preview deployment failed in " + duration + "ms, code=" + errorCode + ": " + messageOf(e));
+        }
+    }
+
+=======
+
+            TaskPreviewEntity failedPreview = preview != null ? preview
+                    : taskPreviewRepository.findByTaskId(taskId).orElse(null);
+            if (failedPreview != null) {
+                failedPreview.setStatus("failed");
+                failedPreview.setLastError(truncate(messageOf(e), 1000));
+                failedPreview.setLastErrorCode(errorCode);
+                failedPreview.setUpdatedAt(failedAt);
+                taskPreviewRepository.save(failedPreview);
+                broadcastStatus(failedPreview);
+            }
+
+            long duration = System.currentTimeMillis() - startedAt;
+            appendTaskLog(taskId, "error",
+                    "Preview deployment failed in " + duration + "ms, code=" + errorCode + ": " + messageOf(e));
+        }
+    }
+
+    /**
+     * Fallback: generate static preview URL when Docker is not available.
+     */
+    private void deployStaticFallback(String taskId, TaskEntity task, TaskPreviewEntity preview, long startedAt) {
+        String previewUrl = buildStaticPreviewUrl(taskId);
+        LocalDateTime readyAt = LocalDateTime.now();
+        LocalDateTime expireAt = readyAt.plusHours(Math.max(previewDefaultTtlHours, 1));
+        preview.setStatus("ready");
+        preview.setPhase(null);
+        preview.setPreviewUrl(previewUrl);
+        preview.setExpireAt(expireAt);
+        preview.setLastError(null);
+        preview.setLastErrorCode(null);
+        preview.setRuntimeId(UUID.randomUUID().toString().replace("-", ""));
+        preview.setUpdatedAt(readyAt);
+        taskPreviewRepository.save(preview);
+
+        task.setResultUrl(previewUrl);
+        task.setUpdatedAt(readyAt);
+        taskRepository.save(task);
+
+        long duration = System.currentTimeMillis() - startedAt;
+        appendTaskLog(taskId, "info", "Preview deployed (static fallback) in " + duration + "ms");
+    }
+
+>>>>>>> origin/master
+    private boolean shouldTriggerDeploy(TaskEntity task) {
+        return previewEnabled
+                && autoDeployOnFinish
+                && "finished".equals(task.getStatus())
+                && ("generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType()));
+    }
+
+    private String buildStaticPreviewUrl(String taskId) {
+        return "http://localhost:5173/preview/" + taskId;
+    }
+
+<<<<<<< HEAD
+=======
+    private void updatePhase(TaskPreviewEntity preview, String phase) {
+        preview.setPhase(phase);
+        preview.setUpdatedAt(LocalDateTime.now());
+        taskPreviewRepository.save(preview);
+        broadcastStatus(preview);
+    }
+
+    private void broadcastStatus(TaskPreviewEntity preview) {
+        if (previewSseRegistry == null) return;
+        TaskPreviewResult result = new TaskPreviewResult(
+                preview.getTaskId(),
+                preview.getStatus(),
+                preview.getPhase(),
+                preview.getPreviewUrl(),
+                preview.getExpireAt() == null ? null : preview.getExpireAt().toString(),
+                preview.getLastError(),
+                preview.getLastErrorCode(),
+                preview.getBuildLogUrl()
+        );
+        previewSseRegistry.broadcast(preview.getTaskId(), result);
+    }
+
+    /**
+     * Resolve the workspace directory for a task.
+     */
+    private String resolveWorkspacePath(String taskId) {
+        return Paths.get(workspaceRoot, taskId).toAbsolutePath().toString();
+    }
+
+    /**
+     * Try to locate the frontend project directory within the workspace.
+     * Looks for common patterns: frontend/, client/, web/, or root with package.json.
+     */
+    private String resolveFrontendPath(String workspacePath) {
+        Path workspace = Paths.get(workspacePath);
+        // Check common frontend directory names
+        String[] candidates = {"frontend", "client", "web", "frontend-web", "app"};
+        for (String candidate : candidates) {
+            Path candidatePath = workspace.resolve(candidate);
+            if (Files.exists(candidatePath.resolve("package.json"))) {
+                return candidatePath.toAbsolutePath().toString();
+            }
+        }
+        // Check if workspace root itself is a frontend project
+        if (Files.exists(workspace.resolve("package.json"))) {
+            return workspace.toAbsolutePath().toString();
+        }
+        return null;
+    }
+
+    private void saveBuildLog(String taskId, String phase, String content) {
+        try {
+            Path logDir = Paths.get(previewLogDir);
+            Files.createDirectories(logDir);
+            Path logFile = logDir.resolve(taskId + "-" + phase + ".log");
+            Files.writeString(logFile, content, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            logger.warn("Failed to save build log for task {}: {}", taskId, e.getMessage());
+        }
+    }
+
+>>>>>>> origin/master
+    private void appendTaskLog(String taskId, String level, String content) {
+        TaskLogEntity log = new TaskLogEntity();
+        log.setTaskId(taskId);
+        log.setLevel(level);
+        log.setContent(content);
+        log.setCreatedAt(LocalDateTime.now());
+        taskLogRepository.save(log);
+    }
+
+    private String messageOf(Throwable throwable) {
+        String message = throwable.getMessage();
+        if (message == null || message.isBlank()) {
+            return throwable.getClass().getSimpleName();
+        }
+        return message;
+    }
+
+<<<<<<< HEAD
+    private int resolvePreviewErrorCode(Throwable throwable) {
+        String name = throwable.getClass().getSimpleName().toLowerCase();
+        String message = messageOf(throwable).toLowerCase();
+        if (name.contains("timeout") || message.contains("timeout") || message.contains("超时")) {
+=======
+    private String truncate(String text, int maxLength) {
+        if (text == null) return "";
+        return text.length() <= maxLength ? text : text.substring(0, maxLength) + "...";
+    }
+
+    private int resolvePreviewErrorCode(Throwable throwable) {
+        String name = throwable.getClass().getSimpleName().toLowerCase();
+        String message = messageOf(throwable).toLowerCase();
+        if (name.contains("timeout") || message.contains("timeout") || message.contains("超时")
+                || message.contains("health check timed out")) {
+>>>>>>> origin/master
+            return ErrorCodes.PREVIEW_TIMEOUT;
+        }
+        if (message.contains("proxy") || message.contains("代理")) {
+            return ErrorCodes.PREVIEW_PROXY_FAILED;
+        }
+<<<<<<< HEAD
+        if (message.contains("start") || message.contains("启动")) {
+            return ErrorCodes.PREVIEW_START_FAILED;
+        }
+=======
+        if (message.contains("start") || message.contains("启动") || message.contains("container")) {
+            return ErrorCodes.PREVIEW_START_FAILED;
+        }
+        if (message.contains("npm install") || message.contains("build")) {
+            return ErrorCodes.PREVIEW_BUILD_FAILED;
+        }
+>>>>>>> origin/master
+        return ErrorCodes.PREVIEW_BUILD_FAILED;
+    }
+
+    private boolean isUserPreviewQuotaExceeded(TaskEntity task, TaskPreviewEntity currentPreview) {
+        long activeCount = taskPreviewRepository.countByUserIdAndStatusIn(
+                task.getUserId(),
+                List.of("provisioning", "ready")
+        );
+        if (currentPreview.getId() != null && ("provisioning".equals(currentPreview.getStatus()) || "ready".equals(currentPreview.getStatus()))) {
+            activeCount = Math.max(0, activeCount - 1);
+        }
+        return activeCount >= Math.max(previewMaxConcurrentPerUser, 1);
+    }
+}

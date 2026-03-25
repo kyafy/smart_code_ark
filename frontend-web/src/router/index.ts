@@ -13,6 +13,7 @@ import TaskResultPage from '@/pages/TaskResultPage.vue'
 import PreviewPage from '@/pages/PreviewPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
 import RechargePage from '@/pages/RechargePage.vue'
+import ModelConfigPage from '@/pages/ModelConfigPage.vue'
 import PaperTopicPage from '@/pages/paper/PaperTopicPage.vue'
 import PaperOutlineProgressPage from '@/pages/paper/PaperOutlineProgressPage.vue'
 import PaperOutlineResultPage from '@/pages/paper/PaperOutlineResultPage.vue'
@@ -56,6 +57,12 @@ const routes: RouteRecordRaw[] = [
     path: '/projects/new',
     name: 'project-new',
     component: ProjectNewPage,
+    meta: { requiresAuth: true } satisfies RouteMeta,
+  },
+  {
+    path: '/model-config',
+    name: 'model-config',
+    component: ModelConfigPage,
     meta: { requiresAuth: true } satisfies RouteMeta,
   },
   {

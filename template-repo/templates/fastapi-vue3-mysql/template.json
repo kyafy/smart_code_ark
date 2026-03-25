@@ -1,0 +1,27 @@
+{
+  "key": "fastapi-vue3-mysql",
+  "name": "FastAPI + Vue 3 + MySQL",
+  "stack": {
+    "backend": "FastAPI + SQLAlchemy + MySQL",
+    "frontend": "Vue 3 + TypeScript + Vite"
+  },
+  "run": {
+    "docker": "docker compose up --build",
+    "backend": "cd backend && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt && .venv\\Scripts\\python -m uvicorn app.main:app --reload --port 8000",
+    "frontend": "cd frontend && npm install && npm run dev"
+  },
+  "exampleFiles": {
+    "backendController": "backend/app/main.py",
+    "backendEntity": "backend/app/models.py",
+    "backendRequest": "backend/app/schemas.py",
+    "backendServiceTest": "backend/tests/test_main.py",
+    "backendAiClient": "backend/app/ai/client.py",
+    "backendEmbeddingClient": "backend/app/ai/embedding.py",
+    "backendPromptBuilder": "backend/app/ai/prompt.py",
+    "backendAiConfig": "backend/app/ai/config.py",
+    "frontendPage": "frontend/src/App.vue",
+    "frontendApi": "frontend/src/api.ts",
+    "frontendPageTest": "frontend/src/__tests__/App.test.ts",
+    "dbMigration": "backend/app/database.py"
+  }
+}

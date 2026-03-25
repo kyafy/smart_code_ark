@@ -1,6 +1,14 @@
 server:
   port: 8080
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+    tags-sorter: alpha
+
 spring:
   application:
     name: api-gateway
@@ -28,16 +36,62 @@ spring:
         enabled: false
 
 smartark:
+  langchain:
+    enabled: ${LANGCHAIN_ENABLED:false}
+    sidecar:
+      base-url: ${LANGCHAIN_SIDECAR_BASE_URL:http://localhost:18080}
+      timeout-ms: ${LANGCHAIN_SIDECAR_TIMEOUT_MS:3000}
+      api-version: ${LANGCHAIN_SIDECAR_API_VERSION:v1}
+  delivery:
+    guard:
+      enabled: ${DELIVERY_GUARD_ENABLED:true}
+  build-verify:
+    enabled: ${BUILD_VERIFY_ENABLED:true}
+    command-execution-enabled: ${BUILD_VERIFY_COMMAND_EXECUTION_ENABLED:true}
+    compose-check-enabled: ${BUILD_VERIFY_COMPOSE_CHECK_ENABLED:true}
+    timeout-seconds: ${BUILD_VERIFY_TIMEOUT_SECONDS:600}
+    auto-fix-enabled: ${BUILD_VERIFY_AUTO_FIX_ENABLED:true}
+    auto-fix-max-retries: ${BUILD_VERIFY_AUTO_FIX_MAX_RETRIES:2}
+  runtime-smoke:
+    enabled: ${RUNTIME_SMOKE_ENABLED:true}
+    command-execution-enabled: ${RUNTIME_SMOKE_COMMAND_EXECUTION_ENABLED:true}
+    health-check-timeout-seconds: ${RUNTIME_SMOKE_HEALTH_CHECK_TIMEOUT:60}
+    health-check-interval-ms: ${RUNTIME_SMOKE_HEALTH_CHECK_INTERVAL:3000}
+    keep-runtime-for-preview-enabled: ${RUNTIME_SMOKE_KEEP_RUNTIME_FOR_PREVIEW_ENABLED:true}
+  memory:
+    short-term:
+      top-k: ${MEMORY_SHORT_TERM_TOP_K:8}
+    long-term:
+      top-k: ${MEMORY_LONG_TERM_TOP_K:8}
+    context:
+      max-chars: ${MEMORY_CONTEXT_MAX_CHARS:4000}
+  quality-gate:
+    enabled: ${QUALITY_GATE_ENABLED:false}
+    min-score: ${QUALITY_GATE_MIN_SCORE:0.66}
+    auto-fix-enabled: ${QUALITY_GATE_AUTO_FIX_ENABLED:true}
+    max-retries: ${QUALITY_GATE_MAX_RETRIES:2}
   agent:
     workspace-root: /tmp/smartark/
     max-retries: 2
-    retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate
+    retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate,artifact_contract_validate,rag_index_enrich,rag_retrieve_rerank
   preview:
     enabled: ${PREVIEW_ENABLED:false}
     auto-deploy-on-finish: ${PREVIEW_AUTO_DEPLOY_ON_FINISH:true}
     default-ttl-hours: ${PREVIEW_DEFAULT_TTL_HOURS:24}
     max-concurrent-per-user: ${PREVIEW_MAX_CONCURRENT_PER_USER:2}
     recycle-interval-ms: ${PREVIEW_RECYCLE_INTERVAL_MS:60000}
+    docker-host: ${PREVIEW_DOCKER_HOST:unix:///var/run/docker.sock}
+    base-image: ${PREVIEW_BASE_IMAGE:node:20-alpine}
+    container-memory-mb: ${PREVIEW_CONTAINER_MEMORY_MB:512}
+    container-cpus: ${PREVIEW_CONTAINER_CPUS:1.0}
+    container-port: ${PREVIEW_CONTAINER_PORT:5173}
+    host-port-range-start: ${PREVIEW_HOST_PORT_RANGE_START:30000}
+    host-port-range-end: ${PREVIEW_HOST_PORT_RANGE_END:31000}
+    health-check-timeout-seconds: ${PREVIEW_HEALTH_CHECK_TIMEOUT:60}
+    health-check-interval-ms: ${PREVIEW_HEALTH_CHECK_INTERVAL:3000}
+    log-dir: ${PREVIEW_LOG_DIR:/tmp/smartark/preview-logs}
+    gateway:
+      enabled: ${PREVIEW_GATEWAY_ENABLED:false}
   cors:
     allowed-origins: "*"
   auth:
@@ -49,18 +103,52 @@ smartark:
     mock-enabled: ${MODEL_MOCK_ENABLED:false}
     chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
     code-model: ${CODE_MODEL:qwen-plus}
+    paper-model: ${PAPER_MODEL:Qwen3.5-Plus}
+    schema-validation-enabled: ${MODEL_SCHEMA_VALIDATION_ENABLED:true}
+    corrective-retry-max: ${MODEL_CORRECTIVE_RETRY_MAX:2}
   billing:
     recharge:
       callback-mock-sign-enabled: ${RECHARGE_CALLBACK_MOCK_SIGN_ENABLED:true}
       callback-mock-sign-secret: ${RECHARGE_CALLBACK_MOCK_SIGN_SECRET:smartark-recharge-secret}
+  rag:
+    enabled: ${RAG_ENABLED:true}
+    embedding-base-url: ${RAG_EMBEDDING_BASE_URL:}
+    embedding-model: ${RAG_EMBEDDING_MODEL:text-embedding-v3}
+    embedding-dimension: ${RAG_EMBEDDING_DIMENSION:1024}
+    chunk-max-tokens: ${RAG_CHUNK_MAX_TOKENS:512}
+    chunk-overlap-tokens: ${RAG_CHUNK_OVERLAP_TOKENS:64}
+    retrieve-top-k: ${RAG_RETRIEVE_TOP_K:30}
+    rerank-top-n: ${RAG_RERANK_TOP_N:15}
+    qdrant:
+      host: ${QDRANT_HOST:localhost}
+      port: ${QDRANT_GRPC_PORT:6334}
+      collection-name: ${QDRANT_COLLECTION:paper_chunks}
   paper:
+    expand:
+      batch-enabled: ${PAPER_EXPAND_BATCH_ENABLED:true}
+      batch-chapter-size: ${PAPER_EXPAND_BATCH_CHAPTER_SIZE:2}
+      batch-max-retries: ${PAPER_EXPAND_BATCH_MAX_RETRIES:2}
+      batch-max-workers: ${PAPER_EXPAND_BATCH_MAX_WORKERS:1}
+      chapter-evidence-topk: ${PAPER_EXPAND_CHAPTER_EVIDENCE_TOPK:8}
+    model:
+      request-timeout-ms: ${PAPER_MODEL_REQUEST_TIMEOUT_MS:45000}
     semantic-scholar:
       base-url: ${SEMANTIC_SCHOLAR_BASE_URL:https://api.semanticscholar.org}
       api-key: ${SEMANTIC_SCHOLAR_API_KEY:}
       timeout-ms: ${SEMANTIC_SCHOLAR_TIMEOUT_MS:10000}
+    crossref:
+      base-url: ${CROSSREF_BASE_URL:https://api.crossref.org}
+      mailto: ${CROSSREF_MAILTO:aicfu71@gmail.com}
+      timeout-ms: ${CROSSREF_TIMEOUT_MS:15000}
+    arxiv:
+      base-url: ${ARXIV_BASE_URL:http://export.arxiv.org}
+      timeout-ms: ${ARXIV_TIMEOUT_MS:10000}
+      request-interval-ms: ${ARXIV_REQUEST_INTERVAL_MS:3000}
     quality-rewrite:
       score-threshold: ${PAPER_QUALITY_REWRITE_SCORE_THRESHOLD:75}
       max-rounds: ${PAPER_QUALITY_REWRITE_MAX_ROUNDS:1}
+  openapi:
+    version: ${OPENAPI_VERSION:v1}
 
 management:
   endpoints:

@@ -1,0 +1,30 @@
+{
+  "key": "springboot-vue3-mysql",
+  "name": "Spring Boot + Vue 3 + MySQL",
+  "stack": {
+    "backend": "Spring Boot 3.4 + JPA + Flyway + MySQL",
+    "frontend": "Vue 3 + TypeScript + Vite"
+  },
+  "run": {
+    "docker": "docker compose up --build",
+    "backend": "cd backend && mvn spring-boot:run",
+    "frontend": "cd frontend && npm install && npm run dev"
+  },
+  "exampleFiles": {
+    "backendController": "backend/src/main/java/com/smartark/template/user/UserController.java",
+    "backendService": "backend/src/main/java/com/smartark/template/user/UserService.java",
+    "backendRepository": "backend/src/main/java/com/smartark/template/user/UserRepository.java",
+    "backendEntity": "backend/src/main/java/com/smartark/template/user/UserEntity.java",
+    "backendRequest": "backend/src/main/java/com/smartark/template/user/CreateUserRequest.java",
+    "backendServiceTest": "backend/src/test/java/com/smartark/template/user/UserServiceTest.java",
+    "backendControllerTest": "backend/src/test/java/com/smartark/template/user/UserControllerTest.java",
+    "backendAiClient": "backend/src/main/java/com/smartark/template/ai/AiClient.java",
+    "backendEmbeddingClient": "backend/src/main/java/com/smartark/template/ai/EmbeddingClient.java",
+    "backendPromptBuilder": "backend/src/main/java/com/smartark/template/ai/PromptBuilder.java",
+    "backendAiConfig": "backend/src/main/java/com/smartark/template/ai/AiConfig.java",
+    "frontendPage": "frontend/src/App.vue",
+    "frontendApi": "frontend/src/api.ts",
+    "frontendPageTest": "frontend/src/__tests__/App.test.ts",
+    "dbMigration": "backend/src/main/resources/db/migration/V1__init.sql"
+  }
+}

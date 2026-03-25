@@ -5,26 +5,40 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.FilePlanItem;
+import com.smartark.gateway.common.exception.BusinessException;
+import com.smartark.gateway.common.exception.ErrorCodes;
 import com.smartark.gateway.service.ModelService;
+import com.smartark.gateway.service.StepMemoryService;
+import com.smartark.gateway.service.TemplateRepoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 @Component
 public class RequirementAnalyzeStep implements AgentStep {
     private static final Logger logger = LoggerFactory.getLogger(RequirementAnalyzeStep.class);
-    
+
     private final ModelService modelService;
     private final ObjectMapper objectMapper;
+    private final StepMemoryService stepMemoryService;
+    private final TemplateRepoService templateRepoService;
 
-    public RequirementAnalyzeStep(ModelService modelService, ObjectMapper objectMapper) {
+    public RequirementAnalyzeStep(ModelService modelService,
+                                  ObjectMapper objectMapper,
+                                  StepMemoryService stepMemoryService,
+                                  TemplateRepoService templateRepoService) {
         this.modelService = modelService;
         this.objectMapper = objectMapper;
+        this.stepMemoryService = stepMemoryService;
+        this.templateRepoService = templateRepoService;
     }
 
     @Override
@@ -34,44 +48,128 @@ public class RequirementAnalyzeStep implements AgentStep {
 
     @Override
     public void execute(AgentExecutionContext context) throws Exception {
-        logger.info("Analyzing requirements and planning project structure...");
-        
+        logger.info("Analyzing requirements and planning project structure: taskId={}", context.getTask().getId());
+        context.logInfo("Step requirement_analyze start: taskId=" + context.getTask().getId());
+
         JsonNode reqJson = objectMapper.readTree(context.getSpec().getRequirementJson());
         String prd = reqJson.path("prd").asText("");
         String projectType = reqJson.path("projectType").asText("");
         String stackBackend = reqJson.at("/stack/backend").asText("springboot");
         String stackFrontend = reqJson.at("/stack/frontend").asText("vue3");
         String stackDb = reqJson.at("/stack/db").asText("mysql");
-        
-        List<String> fileList;
+        String explicitTemplateId = context.getTask() == null ? null : context.getTask().getTemplateId();
+        Optional<TemplateRepoService.TemplateSelection> templateSelection = templateRepoService.resolveTemplate(
+                explicitTemplateId,
+                stackBackend,
+                stackFrontend,
+                stackDb
+        );
+        List<String> templateFiles = templateSelection.map(templateRepoService::listTemplateFiles).orElse(List.of());
+        String backendRoot = templateSelection.map(TemplateRepoService.TemplateSelection::backendRoot).orElse("backend");
+        String frontendRoot = templateSelection.map(TemplateRepoService.TemplateSelection::frontendRoot).orElse("frontend");
+        templateSelection.ifPresent(selection -> {
+                context.setTemplateKey(selection.templateKey());
+                context.setTemplateSelection(selection);
+                context.logInfo("Template selected: key=" + selection.templateKey()
+                        + ", explicit=" + (explicitTemplateId != null && !explicitTemplateId.isBlank())
+                        + ", fileCount=" + templateFiles.size());
+        });
+
+        String effectiveInstructions = context.getNormalizedInstructions() != null
+                ? context.getNormalizedInstructions()
+                : context.getInstructions();
+        List<String> generatedFiles;
         try {
-            fileList = modelService.generateProjectStructure(
+            generatedFiles = modelService.generateProjectStructure(
                     context.getTask().getId(),
                     context.getTask().getProjectId(),
-                    prd, stackBackend, stackFrontend, stackDb, context.getInstructions()
+                    prd, stackBackend, stackFrontend, stackDb, effectiveInstructions
             );
         } catch (Exception e) {
             logger.warn("Project structure generation failed, fallback to builtin structure", e);
-            fileList = fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb);
+            generatedFiles = templateSelection.isPresent()
+                    ? List.of()
+                    : fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb);
         }
-        fileList = sanitizeFileList(fileList, prd, projectType, stackBackend, stackFrontend, stackDb);
-
-        List<FilePlanItem> filePlan = new ArrayList<>();
-        for (String path : fileList) {
-            FilePlanItem item = new FilePlanItem();
-            item.setPath(path);
-            item.setGroup(detectGroup(path));
-            item.setPriority(50);
-            item.setReason("fallback_from_path_list");
-            filePlan.add(item);
+        List<String> fileList = sanitizeFileList(
+                generatedFiles,
+                prd,
+                projectType,
+                stackBackend,
+                stackFrontend,
+                stackDb,
+                templateSelection.isEmpty(),
+                backendRoot,
+                frontendRoot
+        );
+        fileList = mergeTemplateFiles(templateFiles, fileList);
+        context.logInfo("Structure after sanitize: fileCount=" + fileList.size());
+        StructureCompleteness completeness = validateStructureCompleteness(fileList, stackBackend, stackFrontend, stackDb, backendRoot, frontendRoot);
+        if (completeness.passed()) {
+            context.logInfo("Structure completeness check PASSED: all critical files present");
+        }
+        if (!completeness.passed() && !completeness.missingFiles().isEmpty()) {
+            context.logWarn("Structure completeness check FAILED: missing=" + completeness.missingFiles());
+            String retryInstruction = (effectiveInstructions == null ? "" : effectiveInstructions) +
+                    "\n\n请补齐以下缺失关键文件：\n" + String.join("\n", completeness.missingFiles());
+            try {
+                logger.warn("Project structure missing critical files, corrective retry: taskId={}, missing={}",
+                        context.getTask().getId(), completeness.missingFiles());
+                List<String> retried = modelService.generateProjectStructure(
+                        context.getTask().getId(),
+                        context.getTask().getProjectId(),
+                        prd, stackBackend, stackFrontend, stackDb, retryInstruction
+                );
+                fileList = sanitizeFileList(
+                        retried,
+                        prd,
+                        projectType,
+                        stackBackend,
+                        stackFrontend,
+                        stackDb,
+                        templateSelection.isEmpty(),
+                        backendRoot,
+                        frontendRoot
+                );
+                fileList = mergeTemplateFiles(templateFiles, fileList);
+                context.logInfo("Corrective retry result: fileCount=" + fileList.size());
+            } catch (Exception e) {
+                logger.warn("Corrective retry for project structure failed", e);
+                context.logWarn("Corrective retry failed: " + e.getMessage());
+            }
         }
 
-        context.setFileList(fileList);
+        List<FilePlanItem> filePlan = buildFilePlan(fileList, templateFiles, templateSelection.map(TemplateRepoService.TemplateSelection::templateKey).orElse(null));
+        enforceFrontendBusinessCoverage(prd, stackFrontend, frontendRoot, filePlan, context);
+        enforceBackendBusinessCoverage(prd, stackBackend, backendRoot, filePlan, context);
+
+        context.setFileList(filePlan.stream().map(FilePlanItem::getPath).toList());
         context.setFilePlan(filePlan);
         logger.info("Generated {} files in plan.", fileList.size());
+        context.logInfo("Step requirement_analyze output: filePlanSize=" + filePlan.size()
+                + ", groups=" + filePlan.stream().map(FilePlanItem::getGroup).distinct().toList());
+        if (templateSelection.isPresent()) {
+            templateRepoService.materializeTemplate(context);
+        }
+
+        // Persist filePlan and templateKey to step memory for recovery on retry
+        String taskId = context.getTask().getId();
+        stepMemoryService.save(taskId, "requirement_analyze", "filePlan", filePlan);
+        stepMemoryService.save(taskId, "requirement_analyze", "fileList", context.getFileList());
+        if (context.getTemplateKey() != null) {
+            stepMemoryService.save(taskId, "requirement_analyze", "templateKey", context.getTemplateKey());
+        }
     }
 
-    private List<String> sanitizeFileList(List<String> fileList, String prd, String projectType, String stackBackend, String stackFrontend, String stackDb) {
+    private List<String> sanitizeFileList(List<String> fileList,
+                                          String prd,
+                                          String projectType,
+                                          String stackBackend,
+                                          String stackFrontend,
+                                          String stackDb,
+                                          boolean allowBuiltinFallback,
+                                          String backendRoot,
+                                          String frontendRoot) {
         Set<String> dedup = new LinkedHashSet<>();
         if (fileList != null) {
             for (String path : fileList) {
@@ -88,11 +186,22 @@ public class RequirementAnalyzeStep implements AgentStep {
                 dedup.add(normalized);
             }
         }
-        if (dedup.isEmpty()) {
+        if (dedup.isEmpty() && allowBuiltinFallback) {
             dedup.addAll(fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb));
         }
-        ensureDeploymentArtifacts(dedup);
+        ensureDeploymentArtifacts(dedup, stackBackend, stackFrontend, backendRoot, frontendRoot);
         return new ArrayList<>(dedup);
+    }
+
+    private List<String> mergeTemplateFiles(List<String> templateFiles, List<String> plannedFiles) {
+        Set<String> merged = new LinkedHashSet<>();
+        if (templateFiles != null) {
+            merged.addAll(templateFiles);
+        }
+        if (plannedFiles != null) {
+            merged.addAll(plannedFiles);
+        }
+        return new ArrayList<>(merged);
     }
 
     private List<String> fallbackStructure(String prd, String projectType, String stackBackend, String stackFrontend, String stackDb) {
@@ -109,6 +218,9 @@ public class RequirementAnalyzeStep implements AgentStep {
         List<String> modules = normalizeModules(modelService.guessModules("", prd, projectType));
         if (backend.contains("spring")) {
             files.add("backend/pom.xml");
+            files.add("backend/mvnw");
+            files.add("backend/mvnw.cmd");
+            files.add("backend/Dockerfile");
             files.add("backend/src/main/java/com/example/Application.java");
             files.add("backend/src/main/resources/application.yml");
             files.add("backend/src/main/java/com/example/common/ApiResponse.java");
@@ -120,8 +232,36 @@ public class RequirementAnalyzeStep implements AgentStep {
                 files.add(base + "/" + capitalize(module) + "Repository.java");
                 files.add(base + "/" + capitalize(module) + "Entity.java");
             }
+        } else if (backend.contains("django")) {
+            files.add("backend/requirements.txt");
+            files.add("backend/Dockerfile");
+            files.add("backend/manage.py");
+            files.add("backend/config/__init__.py");
+            files.add("backend/config/settings.py");
+            files.add("backend/config/urls.py");
+            files.add("backend/config/asgi.py");
+            files.add("backend/config/wsgi.py");
+            files.add("backend/users/__init__.py");
+            files.add("backend/users/apps.py");
+            files.add("backend/users/models.py");
+            files.add("backend/users/views.py");
+            files.add("backend/users/urls.py");
+            files.add("backend/users/migrations/__init__.py");
+        } else if (backend.contains("fastapi") || backend.contains("python")) {
+            files.add("backend/requirements.txt");
+            files.add("backend/Dockerfile");
+            files.add("backend/app/__init__.py");
+            files.add("backend/app/main.py");
+            files.add("backend/app/config.py");
+            files.add("backend/app/database.py");
+            files.add("backend/app/models.py");
+            files.add("backend/app/schemas.py");
+            for (String module : modules) {
+                files.add("backend/app/routers/" + module + ".py");
+            }
         } else if (backend.contains("node") || backend.contains("express") || backend.contains("nestjs")) {
             files.add("backend/package.json");
+            files.add("backend/Dockerfile");
             files.add("backend/src/main.ts");
             for (String module : modules) {
                 String base = "backend/src/modules/" + module;
@@ -134,8 +274,17 @@ public class RequirementAnalyzeStep implements AgentStep {
         }
 
         String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
-        if (frontend.contains("vue")) {
+        if (frontend.contains("next")) {
+            files.add("package.json");
+            files.add("next.config.ts");
+            files.add("app/layout.tsx");
+            files.add("app/page.tsx");
+            files.add("app/api/health/route.ts");
+        } else if (frontend.contains("vue")) {
             files.add("frontend/package.json");
+            files.add("frontend/index.html");
+            files.add("frontend/vite.config.ts");
+            files.add("frontend/Dockerfile");
             files.add("frontend/src/main.ts");
             files.add("frontend/src/App.vue");
             files.add("frontend/src/router/index.ts");
@@ -146,6 +295,9 @@ public class RequirementAnalyzeStep implements AgentStep {
             }
         } else if (frontend.contains("react")) {
             files.add("frontend/package.json");
+            files.add("frontend/index.html");
+            files.add("frontend/vite.config.ts");
+            files.add("frontend/Dockerfile");
             files.add("frontend/src/main.tsx");
             files.add("frontend/src/App.tsx");
             files.add("frontend/src/router/index.tsx");
@@ -211,19 +363,297 @@ public class RequirementAnalyzeStep implements AgentStep {
     }
 
     private String detectGroup(String path) {
-        String p = path == null ? "" : path.toLowerCase();
-        if (p.contains("backend/")) return "backend";
-        if (p.contains("frontend/")) return "frontend";
-        if (p.endsWith(".sql") || p.contains("/db/") || p.contains("database")) return "database";
-        if (p.contains("docker") || p.contains(".yml") || p.startsWith("scripts/") || p.endsWith(".sh") || p.endsWith(".bat")) return "infra";
-        if (p.startsWith("docs/") || p.endsWith("readme.md")) return "docs";
-        return "backend";
+        return FileGroupDetector.detect(path);
     }
 
-    private void ensureDeploymentArtifacts(Set<String> files) {
+    private void ensureDeploymentArtifacts(Set<String> files,
+                                          String stackBackend,
+                                          String stackFrontend,
+                                          String backendRoot,
+                                          String frontendRoot) {
         files.add("docs/deploy.md");
         files.add("scripts/deploy.sh");
         files.add("scripts/start.sh");
         files.add("docker-compose.yml");
+        files.add("README.md");
+        String backend = stackBackend == null ? "" : stackBackend.toLowerCase();
+        String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
+        if (backend.contains("spring") || backend.contains("java")) {
+            files.add(resolvePath(backendRoot, "pom.xml"));
+            files.add(resolvePath(backendRoot, "mvnw"));
+            files.add(resolvePath(backendRoot, "mvnw.cmd"));
+            files.add(resolvePath(backendRoot, "Dockerfile"));
+        } else if (backend.contains("django")) {
+            files.add(resolvePath(backendRoot, "requirements.txt"));
+            files.add(resolvePath(backendRoot, "Dockerfile"));
+            files.add(resolvePath(backendRoot, "manage.py"));
+            files.add(resolvePath(backendRoot, "config/settings.py"));
+        } else if (backend.contains("fastapi") || backend.contains("python")) {
+            files.add(resolvePath(backendRoot, "requirements.txt"));
+            files.add(resolvePath(backendRoot, "Dockerfile"));
+            files.add(resolvePath(backendRoot, "app/main.py"));
+        } else if (backend.contains("node") || backend.contains("express") || backend.contains("nestjs")) {
+            files.add(resolvePath(backendRoot, "package.json"));
+            files.add(resolvePath(backendRoot, "Dockerfile"));
+        }
+        if (frontend.contains("next")) {
+            files.add(resolvePath(frontendRoot, "package.json"));
+            files.add(resolvePath(frontendRoot, "next.config.ts"));
+            files.add(resolvePath(frontendRoot, "app/layout.tsx"));
+            files.add(resolvePath(frontendRoot, "app/page.tsx"));
+            files.add(resolvePath(frontendRoot, "Dockerfile"));
+        } else if (frontend.contains("vue") || frontend.contains("react") || frontend.contains("uni")) {
+            files.add(resolvePath(frontendRoot, "package.json"));
+            files.add(resolvePath(frontendRoot, "index.html"));
+            files.add(resolvePath(frontendRoot, "vite.config.ts"));
+            files.add(resolvePath(frontendRoot, "Dockerfile"));
+        }
+    }
+
+    private StructureCompleteness validateStructureCompleteness(List<String> fileList,
+                                                                String stackBackend,
+                                                                String stackFrontend,
+                                                                String stackDb,
+                                                                String backendRoot,
+                                                                String frontendRoot) {
+        Set<String> missing = new LinkedHashSet<>();
+        Set<String> files = new LinkedHashSet<>(fileList == null ? List.of() : fileList);
+        require(files, missing, "README.md");
+        require(files, missing, "docker-compose.yml");
+        require(files, missing, "scripts/start.sh");
+        require(files, missing, "scripts/deploy.sh");
+        require(files, missing, "docs/deploy.md");
+
+        String backend = stackBackend == null ? "" : stackBackend.toLowerCase();
+        if (backend.contains("spring") || backend.contains("java")) {
+            require(files, missing, resolvePath(backendRoot, "pom.xml"));
+            require(files, missing, resolvePath(backendRoot, "mvnw"));
+            require(files, missing, resolvePath(backendRoot, "Dockerfile"));
+            require(files, missing, resolvePath(backendRoot, "src/main/resources/application.yml"));
+            String javaRoot = resolvePath(backendRoot, "src/main/java/");
+            if (files.stream().noneMatch(p -> p.startsWith(javaRoot) && p.endsWith("/Application.java"))) {
+                missing.add(resolvePath(backendRoot, "src/main/java/**/Application.java"));
+            }
+        } else if (backend.contains("django")) {
+            require(files, missing, resolvePath(backendRoot, "requirements.txt"));
+            require(files, missing, resolvePath(backendRoot, "Dockerfile"));
+            require(files, missing, resolvePath(backendRoot, "manage.py"));
+            require(files, missing, resolvePath(backendRoot, "config/settings.py"));
+        } else if (backend.contains("fastapi") || backend.contains("python")) {
+            require(files, missing, resolvePath(backendRoot, "requirements.txt"));
+            require(files, missing, resolvePath(backendRoot, "Dockerfile"));
+            require(files, missing, resolvePath(backendRoot, "app/main.py"));
+        } else if (backend.contains("node") || backend.contains("express") || backend.contains("nestjs")) {
+            require(files, missing, resolvePath(backendRoot, "package.json"));
+            require(files, missing, resolvePath(backendRoot, "Dockerfile"));
+            require(files, missing, resolvePath(backendRoot, "src/main.ts"));
+        }
+
+        String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
+        if (frontend.contains("next")) {
+            require(files, missing, resolvePath(frontendRoot, "package.json"));
+            require(files, missing, resolvePath(frontendRoot, "next.config.ts"));
+            require(files, missing, resolvePath(frontendRoot, "app/layout.tsx"));
+            require(files, missing, resolvePath(frontendRoot, "app/page.tsx"));
+        } else if (frontend.contains("vue")) {
+            require(files, missing, resolvePath(frontendRoot, "package.json"));
+            require(files, missing, resolvePath(frontendRoot, "index.html"));
+            require(files, missing, resolvePath(frontendRoot, "vite.config.ts"));
+            require(files, missing, resolvePath(frontendRoot, "Dockerfile"));
+            require(files, missing, resolvePath(frontendRoot, "src/main.ts"));
+            require(files, missing, resolvePath(frontendRoot, "src/App.vue"));
+        } else if (frontend.contains("react")) {
+            require(files, missing, resolvePath(frontendRoot, "package.json"));
+            require(files, missing, resolvePath(frontendRoot, "index.html"));
+            require(files, missing, resolvePath(frontendRoot, "vite.config.ts"));
+            require(files, missing, resolvePath(frontendRoot, "Dockerfile"));
+            require(files, missing, resolvePath(frontendRoot, "src/main.tsx"));
+            require(files, missing, resolvePath(frontendRoot, "src/App.tsx"));
+        }
+
+        String db = stackDb == null ? "" : stackDb.toLowerCase();
+        if (db.contains("mysql") || db.contains("postgres") || db.contains("sql")) {
+            require(files, missing, "database/schema.sql");
+        }
+        return new StructureCompleteness(missing.isEmpty(), new ArrayList<>(missing));
+    }
+
+    private void require(Set<String> files, Set<String> missing, String expected) {
+        if (!files.contains(expected)) {
+            missing.add(expected);
+        }
+    }
+
+    private String resolvePath(String root, String relativePath) {
+        if (root == null || root.isBlank() || ".".equals(root)) {
+            return relativePath;
+        }
+        return root + "/" + relativePath;
+    }
+
+    private List<FilePlanItem> buildFilePlan(List<String> mergedFiles, List<String> templateFiles, String templateKey) {
+        Set<String> templateFileSet = new LinkedHashSet<>(templateFiles == null ? List.of() : templateFiles);
+        Map<String, FilePlanItem> filePlanMap = new LinkedHashMap<>();
+        if (templateFiles != null) {
+            for (String path : templateFiles) {
+                filePlanMap.put(path, createPlanItem(path, 20, templateKey == null ? "template_repo" : "template_repo:" + templateKey));
+            }
+        }
+        if (mergedFiles != null) {
+            for (String path : mergedFiles) {
+                filePlanMap.putIfAbsent(path, createPlanItem(path, 50, templateFileSet.contains(path) ? "template_repo" : "planned_from_structure"));
+            }
+        }
+        return new ArrayList<>(filePlanMap.values());
+    }
+
+    private FilePlanItem createPlanItem(String path, int priority, String reason) {
+        FilePlanItem item = new FilePlanItem();
+        item.setPath(path);
+        item.setGroup(detectGroup(path));
+        item.setPriority(priority);
+        item.setReason(reason);
+        return item;
+    }
+
+    private void enforceFrontendBusinessCoverage(String prd,
+                                                 String stackFrontend,
+                                                 String frontendRoot,
+                                                 List<FilePlanItem> filePlan,
+                                                 AgentExecutionContext context) throws Exception {
+        int expectedPageCount = parseExpectedPageCount(prd);
+        if (expectedPageCount < 3 || filePlan == null || filePlan.isEmpty()) {
+            return;
+        }
+        String frontend = stackFrontend == null ? "" : stackFrontend.toLowerCase();
+        if (!(frontend.contains("vue") || frontend.contains("react") || frontend.contains("next"))) {
+            return;
+        }
+        int plannedBusinessPageFiles = (int) filePlan.stream()
+                .map(FilePlanItem::getPath)
+                .filter(path -> path != null && !path.isBlank())
+                .filter(path -> isBusinessPagePath(path, frontendRoot, frontend))
+                .count();
+        context.logInfo("Frontend coverage check: expectedPages=" + expectedPageCount
+                + ", plannedBusinessFiles=" + plannedBusinessPageFiles);
+        if (plannedBusinessPageFiles > 0) {
+            return;
+        }
+        throw new BusinessException(
+                ErrorCodes.TASK_VALIDATION_ERROR,
+                "前端页面规划不足：PRD包含" + expectedPageCount + "个页面，但生成计划仅包含模板壳文件，缺少业务页面文件"
+        );
+    }
+
+    private int parseExpectedPageCount(String prd) {
+        if (prd == null || prd.isBlank()) {
+            return 0;
+        }
+        try {
+            JsonNode prdNode = objectMapper.readTree(prd);
+            JsonNode pages = prdNode.path("pages");
+            return pages.isArray() ? pages.size() : 0;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private int parseExpectedFeatureCount(String prd) {
+        if (prd == null || prd.isBlank()) {
+            return 0;
+        }
+        try {
+            JsonNode prdNode = objectMapper.readTree(prd);
+            JsonNode features = prdNode.path("features");
+            return features.isArray() ? features.size() : 0;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private boolean isBusinessPagePath(String path, String frontendRoot, String frontend) {
+        String normalizedRoot = (frontendRoot == null || frontendRoot.isBlank() || ".".equals(frontendRoot))
+                ? ""
+                : frontendRoot + "/";
+        String relative = normalizedRoot.isEmpty() ? path : path.startsWith(normalizedRoot)
+                ? path.substring(normalizedRoot.length()) : path;
+        if (relative.equals(path) && !normalizedRoot.isEmpty()) {
+            return false;
+        }
+        String lower = relative.toLowerCase();
+        if (frontend.contains("next")) {
+            return lower.startsWith("app/") && lower.endsWith("/page.tsx")
+                    || lower.startsWith("app/") && lower.endsWith("/page.jsx");
+        }
+        return lower.startsWith("src/pages/") || lower.startsWith("src/views/");
+    }
+
+    private void enforceBackendBusinessCoverage(String prd,
+                                                String stackBackend,
+                                                String backendRoot,
+                                                List<FilePlanItem> filePlan,
+                                                AgentExecutionContext context) {
+        int expectedFeatureCount = parseExpectedFeatureCount(prd);
+        if (expectedFeatureCount < 4 || filePlan == null || filePlan.isEmpty()) {
+            return;
+        }
+        String backend = stackBackend == null ? "" : stackBackend.toLowerCase();
+        if (!(backend.contains("spring")
+                || backend.contains("django")
+                || backend.contains("fastapi")
+                || backend.contains("python")
+                || backend.contains("node")
+                || backend.contains("express")
+                || backend.contains("nestjs"))) {
+            return;
+        }
+        long plannedBackendBusinessFiles = filePlan.stream()
+                .filter(item -> item.getPath() != null && !item.getPath().isBlank())
+                .filter(item -> "backend".equals(item.getGroup()))
+                .filter(item -> isBackendBusinessPath(item.getPath(), backendRoot))
+                .filter(item -> item.getReason() == null || !item.getReason().startsWith("template_repo:"))
+                .count();
+        context.logInfo("Backend coverage check: expectedFeatures=" + expectedFeatureCount
+                + ", plannedBusinessFiles=" + plannedBackendBusinessFiles);
+        if (plannedBackendBusinessFiles > 0) {
+            return;
+        }
+        throw new BusinessException(
+                ErrorCodes.TASK_VALIDATION_ERROR,
+                "后端业务规划不足：PRD包含" + expectedFeatureCount + "个功能点，但生成计划缺少非模板业务后端文件"
+        );
+    }
+
+    private boolean isBackendBusinessPath(String path, String backendRoot) {
+        String normalizedRoot = (backendRoot == null || backendRoot.isBlank() || ".".equals(backendRoot))
+                ? ""
+                : backendRoot + "/";
+        String relative = normalizedRoot.isEmpty() ? path : path.startsWith(normalizedRoot)
+                ? path.substring(normalizedRoot.length()) : path;
+        if (relative.equals(path) && !normalizedRoot.isEmpty()) {
+            return false;
+        }
+        String lower = relative.toLowerCase();
+        if (lower.startsWith("src/main/java/")) {
+            return !lower.contains("/config/")
+                    && !lower.contains("/health/")
+                    && !lower.endsWith("application.java");
+        }
+        if (lower.startsWith("app/")) {
+            return lower.contains("/routers/")
+                    || lower.contains("/views.py")
+                    || lower.contains("/controllers/")
+                    || lower.contains("/services/")
+                    || lower.contains("/models.py");
+        }
+        if (lower.startsWith("src/")) {
+            return lower.contains("/modules/")
+                    || lower.contains("/controllers/")
+                    || lower.contains("/services/");
+        }
+        return false;
+    }
+
+    private record StructureCompleteness(boolean passed, List<String> missingFiles) {
     }
 }

@@ -1,0 +1,23 @@
+{
+  "key": "uniapp-springboot-api",
+  "name": "UniApp + Spring Boot API",
+  "stack": {
+    "frontend": "UniApp Vue 3 + Vite",
+    "backend": "Spring Boot 3 REST API"
+  },
+  "run": {
+    "backend": "cd backend && mvn spring-boot:run",
+    "frontend": "cd frontend-mobile && npm install && npm run dev:h5"
+  },
+  "exampleFiles": {
+    "backendController": "backend/src/main/java/com/smartark/template/mobile/news/NewsController.java",
+    "backendEntity": "backend/src/main/java/com/smartark/template/mobile/news/NewsItem.java",
+    "backendControllerTest": "backend/src/test/java/com/smartark/template/mobile/news/NewsControllerTest.java",
+    "backendAiClient": "backend/src/main/java/com/smartark/template/mobile/ai/AiClient.java",
+    "backendEmbeddingClient": "backend/src/main/java/com/smartark/template/mobile/ai/EmbeddingClient.java",
+    "backendPromptBuilder": "backend/src/main/java/com/smartark/template/mobile/ai/PromptBuilder.java",
+    "backendAiConfig": "backend/src/main/java/com/smartark/template/mobile/ai/AiConfig.java",
+    "frontendPage": "frontend-mobile/src/pages/home/index.vue",
+    "frontendApi": "frontend-mobile/src/utils/api.ts"
+  }
+}

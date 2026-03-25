@@ -24,7 +24,21 @@
 Authorization: Bearer <token>
 ```
 
-### 1.3 错误码
+多端请求需追加以下头（v3.0 约定）：
+
+```http
+X-Client-Platform: web|miniprogram|app
+X-App-Version: 3.0.0
+X-Device-Id: <device-unique-id>
+```
+
+### 1.3 时间与分页约定
+
+1. 时间字段统一使用 ISO-8601 字符串（如 `2026-03-21T10:30:00`）。
+2. 分页接口统一结构：`{ pageNo, pageSize, total, list }`。
+3. 客户端负责做本地化展示与时区转换。
+
+### 1.4 错误码
 
 1. `0` 成功
 2. `1001` 参数校验失败
@@ -43,7 +57,7 @@ Authorization: Bearer <token>
 15. `3007` 任务取消
 16. `9000` 内部错误
 
-### 1.4 聊天删除相关错误映射（前后端约定）
+### 1.5 聊天删除相关错误映射（前后端约定）
 
 1. `403 / code=1003`：无权限访问该会话
 2. `404 / code=1004`：会话不存在（包含会话已被软删除）

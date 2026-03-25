@@ -46,6 +46,12 @@ public class PaperTopicSessionEntity {
     @Column(name = "research_questions_json", columnDefinition = "json")
     private String researchQuestionsJson;
 
+    @Column(name = "suggested_topics_json", columnDefinition = "text")
+    private String suggestedTopicsJson;
+
+    @Column(name = "suggestion_round")
+    private Integer suggestionRound = 0;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -138,6 +144,22 @@ public class PaperTopicSessionEntity {
 
     public void setResearchQuestionsJson(String researchQuestionsJson) {
         this.researchQuestionsJson = researchQuestionsJson;
+    }
+
+    public String getSuggestedTopicsJson() {
+        return suggestedTopicsJson;
+    }
+
+    public void setSuggestedTopicsJson(String suggestedTopicsJson) {
+        this.suggestedTopicsJson = suggestedTopicsJson;
+    }
+
+    public Integer getSuggestionRound() {
+        return suggestionRound;
+    }
+
+    public void setSuggestionRound(Integer suggestionRound) {
+        this.suggestionRound = suggestionRound;
     }
 
     public LocalDateTime getCreatedAt() {

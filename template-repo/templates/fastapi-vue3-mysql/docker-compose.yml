@@ -1,0 +1,54 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: __PROJECT_NAME___mysql
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-app_db}
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-app123456}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      APP_NAME: ${APP_NAME:-__PROJECT_NAME__}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE:-app_db}
+      DB_USER: ${MYSQL_USER:-app}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-app123456}
+      AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-qwen-plus}
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-text-embedding-v3}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-60}
+      AI_MAX_TOKENS: ${AI_MAX_TOKENS:-4096}
+      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.7}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      VITE_API_BASE_URL: http://backend:8000
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+
+volumes:
+  mysql_data:

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
+import com.smartark.gateway.agent.model.RagEvidenceItem;
 import com.smartark.gateway.db.entity.PaperOutlineVersionEntity;
 import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.repo.PaperOutlineVersionRepository;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Component
 public class OutlineQualityCheckStep implements AgentStep {
@@ -43,13 +45,27 @@ public class OutlineQualityCheckStep implements AgentStep {
         PaperOutlineVersionEntity version = paperOutlineVersionRepository.findTopBySessionIdOrderByVersionNoDesc(session.getId())
                 .orElseThrow();
 
+        // Build RAG evidence JSON if available
+        JsonNode ragEvidenceNode = null;
+        List<RagEvidenceItem> ragItems = context.getRagEvidenceItems();
+        if (ragItems != null && !ragItems.isEmpty()) {
+            ragEvidenceNode = objectMapper.readTree(objectMapper.writeValueAsString(ragItems));
+        }
+
+        String chapterEvidenceMapJson = context.getChapterEvidenceMapJson();
+        if (chapterEvidenceMapJson == null || chapterEvidenceMapJson.isBlank()) {
+            chapterEvidenceMapJson = version.getChapterEvidenceMapJson();
+        }
+
         JsonNode qualityReport = modelService.qualityCheckPaperOutline(
                 context.getTask().getId(),
                 context.getTask().getProjectId(),
                 session.getTopic(),
                 session.getTopicRefined(),
                 version.getCitationStyle(),
-                objectMapper.readTree(version.getOutlineJson())
+                objectMapper.readTree(version.getOutlineJson()),
+                ragEvidenceNode,
+                chapterEvidenceMapJson
         );
         version.setQualityReportJson(objectMapper.writeValueAsString(qualityReport));
         int score = 0;

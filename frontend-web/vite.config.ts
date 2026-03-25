@@ -34,6 +34,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'), // ✅ 定义 @ = src
+      '@smartark/domain': path.resolve(__dirname, '../packages/domain/src'),
+      '@smartark/api-sdk': path.resolve(__dirname, '../packages/api-sdk/src/index.ts'),
+      '@smartark/constants': path.resolve(__dirname, '../packages/constants/src/index.ts'),
     },
   },
 })

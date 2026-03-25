@@ -2,19 +2,23 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { projectApi } from '@/api/endpoints'
-import { showApiError } from '@/api/http'
+import { ApiRequestError, showApiError } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
+import { useProjectStore } from '@/stores/project'
 import type { ProjectDetail } from '@/types/api'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const projectStore = useProjectStore()
 const projectId = computed(() => String(route.params.projectId))
 
 const loading = ref(true)
 const project = ref<ProjectDetail | null>(null)
 const activeTab = ref('tasks')
+const deleting = ref(false)
 
 const loadDetail = async () => {
   if (!projectId.value) return
@@ -25,6 +29,44 @@ const loadDetail = async () => {
     showApiError(e)
   } finally {
     loading.value = false
+  }
+}
+
+const confirmDeleteProject = async () => {
+  await ElMessageBox.confirm('删除后该项目将从列表中移除。', '确认删除项目', {
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
+}
+
+const onDeleteProject = async () => {
+  if (!projectId.value) return
+  if (deleting.value) return
+  try {
+    await confirmDeleteProject()
+    deleting.value = true
+    await projectApi.delete(projectId.value)
+    await projectStore.refresh()
+    ElMessage.success('项目已删除')
+    await router.push({ name: 'projects' })
+  } catch (err) {
+    if (String((err as any)?.message || '').includes('cancel')) return
+    if (err instanceof ApiRequestError) {
+      if (err.code === 1003 || err.httpStatus === 403) {
+        ElMessage.error('无权限删除该项目')
+        return
+      }
+      if (err.code === 1004 || err.httpStatus === 404) {
+        ElMessage.warning('项目不存在或已删除')
+        await projectStore.refresh()
+        await router.push({ name: 'projects' })
+        return
+      }
+    }
+    showApiError(err)
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -121,9 +163,12 @@ onMounted(() => {
             <h1 class="text-2xl font-bold text-text-primary">{{ project.title }}</h1>
             <p class="text-text-secondary mt-2">{{ project.description }}</p>
           </div>
-          <el-tag :type="getStatusType(project.status)" effect="light" round>
-            {{ getStatusText(project.status) }}
-          </el-tag>
+          <div class="flex items-center gap-3">
+            <el-button type="danger" plain :loading="deleting" @click="onDeleteProject">删除项目</el-button>
+            <el-tag :type="getStatusType(project.status)" effect="light" round>
+              {{ getStatusText(project.status) }}
+            </el-tag>
+          </div>
         </div>
         
         <div class="mt-6 flex gap-4">

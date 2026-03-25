@@ -1,0 +1,28 @@
+{
+  "key": "fastapi-nextjs-mysql",
+  "name": "FastAPI + Next.js + MySQL",
+  "stack": {
+    "backend": "FastAPI + SQLAlchemy + MySQL",
+    "frontend": "Next.js 15 + React 19",
+    "database": "MySQL 8"
+  },
+  "run": {
+    "docker": "docker compose up --build",
+    "backend": "cd backend && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt && .venv\\Scripts\\python -m uvicorn app.main:app --reload --port 8000",
+    "frontend": "cd frontend && npm install && npm run dev"
+  },
+  "exampleFiles": {
+    "backendController": "backend/app/main.py",
+    "backendEntity": "backend/app/models.py",
+    "backendRequest": "backend/app/schemas.py",
+    "backendServiceTest": "backend/tests/test_main.py",
+    "backendAiClient": "backend/app/ai/client.py",
+    "backendEmbeddingClient": "backend/app/ai/embedding.py",
+    "backendPromptBuilder": "backend/app/ai/prompt.py",
+    "backendAiConfig": "backend/app/ai/config.py",
+    "frontendPage": "frontend/app/page.tsx",
+    "frontendApi": "frontend/app/api/users/route.ts",
+    "frontendPageTest": "frontend/__tests__/page.test.tsx",
+    "dbMigration": "backend/app/database.py"
+  }
+}

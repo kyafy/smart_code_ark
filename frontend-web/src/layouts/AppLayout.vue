@@ -13,6 +13,7 @@ import {
   User,
   Home,
   MessageSquare,
+  SlidersHorizontal,
 } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useTheme } from '@/composables/useTheme'
@@ -26,6 +27,7 @@ const activeKey = computed(() => {
   const p = String(route.path)
   if (p.startsWith('/home')) return 'home'
   if (p.startsWith('/projects')) return 'projects'
+  if (p.startsWith('/model-config')) return 'model-config'
   if (p.startsWith('/chat')) return 'chat'
   if (p.startsWith('/paper')) return 'paper'
   if (p.startsWith('/recharge')) return 'recharge'
@@ -87,6 +89,18 @@ const toastSoon = () => {
             >
               <LayoutDashboard class="h-4 w-4 text-slate-500" />
               <span>我的项目</span>
+            </button>
+
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm"
+              :class="activeKey === 'model-config'
+                ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300'
+                : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900'"
+              @click="router.push({ name: 'model-config' })"
+            >
+              <SlidersHorizontal class="h-4 w-4 text-slate-500" />
+              <span>模型配置</span>
             </button>
 
             <button

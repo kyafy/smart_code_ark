@@ -1,0 +1,39 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": false,
+    "baseUrl": "./",
+    "paths": {
+      "@/*": [
+        "./src/*"
+<<<<<<< HEAD
+=======
+      ],
+      "@smartark/domain/*": [
+        "../packages/domain/src/*"
+      ],
+      "@smartark/api-sdk": [
+        "../packages/api-sdk/src/index.ts"
+      ],
+      "@smartark/constants": [
+        "../packages/constants/src/index.ts"
+>>>>>>> origin/master
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+<<<<<<< HEAD
+    "api"
+=======
+    "api",
+    "../packages/**/*.ts"
+>>>>>>> origin/master
+  ]
+}

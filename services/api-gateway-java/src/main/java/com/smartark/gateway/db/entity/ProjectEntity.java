@@ -44,6 +44,9 @@ public class ProjectEntity {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
     public String getId() {
         return id;
     }
@@ -130,5 +133,13 @@ public class ProjectEntity {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public LocalDateTime getDeletedAt() {
+        return deletedAt;
+    }
+
+    public void setDeletedAt(LocalDateTime deletedAt) {
+        this.deletedAt = deletedAt;
     }
 }

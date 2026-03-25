@@ -1,0 +1,17 @@
+{
+  "name": "SmartCodeArkMobile",
+  "appid": "__UNI__SMARTARK",
+  "description": "Smart Code Ark 小程序与 App MVP",
+  "versionName": "0.0.1",
+  "versionCode": "1",
+  "transformPx": false,
+  "app-plus": {
+    "usingComponents": true
+  },
+  "mp-weixin": {
+    "appid": ""
+  },
+  "h5": {
+    "title": "Smart Code Ark Mobile"
+  }
+}

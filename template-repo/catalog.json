@@ -1,0 +1,65 @@
+{
+  "version": "1.0.0",
+  "templates": [
+    {
+      "key": "springboot-vue3-mysql",
+      "name": "Spring Boot + Vue 3 + MySQL",
+      "category": "fullstack",
+      "description": "Separated frontend and backend starter for admin systems and business apps.",
+      "paths": {
+        "backend": "backend",
+        "frontend": "frontend"
+      }
+    },
+    {
+      "key": "nextjs-mysql",
+      "name": "Next.js + MySQL",
+      "category": "fullstack",
+      "description": "Next.js App Router starter with Prisma and MySQL.",
+      "paths": {
+        "app": ".",
+        "database": "prisma"
+      }
+    },
+    {
+      "key": "fastapi-vue3-mysql",
+      "name": "FastAPI + Vue 3 + MySQL",
+      "category": "fullstack",
+      "description": "Separated Python backend and Vue frontend starter with FastAPI and MySQL.",
+      "paths": {
+        "backend": "backend",
+        "frontend": "frontend"
+      }
+    },
+    {
+      "key": "fastapi-nextjs-mysql",
+      "name": "FastAPI + Next.js + MySQL",
+      "category": "fullstack",
+      "description": "Separated Python backend and Next.js frontend starter with FastAPI and MySQL.",
+      "paths": {
+        "backend": "backend",
+        "frontend": "frontend"
+      }
+    },
+    {
+      "key": "django-vue3-mysql",
+      "name": "Django + Vue 3 + MySQL",
+      "category": "fullstack",
+      "description": "Separated Django backend and Vue frontend starter with MySQL.",
+      "paths": {
+        "backend": "backend",
+        "frontend": "frontend"
+      }
+    },
+    {
+      "key": "uniapp-springboot-api",
+      "name": "UniApp + Spring Boot API",
+      "category": "mobile",
+      "description": "Mobile starter with UniApp frontend and Spring Boot backend API.",
+      "paths": {
+        "backend": "backend",
+        "frontend": "frontend-mobile"
+      }
+    }
+  ]
+}
