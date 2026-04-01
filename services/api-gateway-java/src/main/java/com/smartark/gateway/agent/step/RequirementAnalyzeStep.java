@@ -7,11 +7,13 @@ import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.service.JeecgCodegenClient;
 import com.smartark.gateway.service.ModelService;
 import com.smartark.gateway.service.StepMemoryService;
 import com.smartark.gateway.service.TemplateRepoService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -30,6 +32,8 @@ public class RequirementAnalyzeStep implements AgentStep {
     private final ObjectMapper objectMapper;
     private final StepMemoryService stepMemoryService;
     private final TemplateRepoService templateRepoService;
+    @Autowired(required = false)
+    private JeecgCodegenClient jeecgCodegenClient;
 
     public RequirementAnalyzeStep(ModelService modelService,
                                   ObjectMapper objectMapper,
@@ -58,6 +62,9 @@ public class RequirementAnalyzeStep implements AgentStep {
         String stackFrontend = reqJson.at("/stack/frontend").asText("vue3");
         String stackDb = reqJson.at("/stack/db").asText("mysql");
         String explicitTemplateId = context.getTask() == null ? null : context.getTask().getTemplateId();
+        String codegenEngine = normalizeCodegenEngine(context.getTask() == null ? null : context.getTask().getCodegenEngine());
+        boolean jeecgOnly = "jeecg_rule".equals(codegenEngine);
+        boolean jeecgPreferred = jeecgOnly || "hybrid".equals(codegenEngine);
         Optional<TemplateRepoService.TemplateSelection> templateSelection = templateRepoService.resolveTemplate(
                 explicitTemplateId,
                 stackBackend,
@@ -78,18 +85,48 @@ public class RequirementAnalyzeStep implements AgentStep {
         String effectiveInstructions = context.getNormalizedInstructions() != null
                 ? context.getNormalizedInstructions()
                 : context.getInstructions();
+
+        List<String> jeecgFiles = List.of();
+        if (jeecgPreferred && templateSelection.isPresent()) {
+            if (jeecgCodegenClient == null) {
+                String message = "Jeecg codegen client is not configured";
+                if (jeecgOnly) {
+                    throw new BusinessException(ErrorCodes.TASK_FAILED, message);
+                }
+                context.logWarn(message + ", fallback to llm");
+            } else {
+                templateRepoService.materializeTemplate(context);
+                JeecgCodegenClient.JeecgRenderResult renderResult = jeecgCodegenClient.tryRender(context, templateSelection.get());
+                context.logInfo("Jeecg render invoked=" + renderResult.invoked()
+                        + ", success=" + renderResult.success()
+                        + ", files=" + renderResult.files().size()
+                        + ", message=" + renderResult.message());
+                if (renderResult.success() && !renderResult.files().isEmpty()) {
+                    jeecgFiles = renderResult.files();
+                } else if (jeecgOnly) {
+                    throw new BusinessException(ErrorCodes.TASK_FAILED, "jeecg rule render failed: " + renderResult.message());
+                }
+            }
+        }
+
         List<String> generatedFiles;
-        try {
-            generatedFiles = modelService.generateProjectStructure(
-                    context.getTask().getId(),
-                    context.getTask().getProjectId(),
-                    prd, stackBackend, stackFrontend, stackDb, effectiveInstructions
-            );
-        } catch (Exception e) {
-            logger.warn("Project structure generation failed, fallback to builtin structure", e);
-            generatedFiles = templateSelection.isPresent()
-                    ? List.of()
-                    : fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb);
+        if (!jeecgFiles.isEmpty()) {
+            generatedFiles = jeecgFiles;
+        } else if (jeecgOnly) {
+            generatedFiles = templateFiles;
+        } else {
+            try {
+                generatedFiles = modelService.generateProjectStructure(
+                        context.getTask().getId(),
+                        context.getTask().getProjectId(),
+                        prd, stackBackend, stackFrontend, stackDb, effectiveInstructions
+                );
+            } catch (Exception e) {
+                logger.warn("Project structure generation failed, fallback to builtin structure", e);
+                generatedFiles = templateSelection.isPresent()
+                        ? List.of()
+                        : fallbackStructure(prd, projectType, stackBackend, stackFrontend, stackDb);
+            }
         }
         List<String> fileList = sanitizeFileList(
                 generatedFiles,
@@ -148,7 +185,7 @@ public class RequirementAnalyzeStep implements AgentStep {
         logger.info("Generated {} files in plan.", fileList.size());
         context.logInfo("Step requirement_analyze output: filePlanSize=" + filePlan.size()
                 + ", groups=" + filePlan.stream().map(FilePlanItem::getGroup).distinct().toList());
-        if (templateSelection.isPresent()) {
+        if (templateSelection.isPresent() && jeecgFiles.isEmpty()) {
             templateRepoService.materializeTemplate(context);
         }
 
@@ -514,6 +551,17 @@ public class RequirementAnalyzeStep implements AgentStep {
         item.setPriority(priority);
         item.setReason(reason);
         return item;
+    }
+
+    private String normalizeCodegenEngine(String value) {
+        if (value == null || value.isBlank()) {
+            return "llm";
+        }
+        String normalized = value.trim().toLowerCase();
+        return switch (normalized) {
+            case "llm", "jeecg_rule", "hybrid" -> normalized;
+            default -> "llm";
+        };
     }
 
     private void enforceFrontendBusinessCoverage(String prd,

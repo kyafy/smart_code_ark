@@ -56,6 +56,30 @@ public class TaskEntity {
     @Column(name = "template_id", length = 128)
     private String templateId;
 
+    @Column(name = "codegen_engine", length = 32)
+    private String codegenEngine;
+
+    @Column(name = "deploy_mode", length = 32)
+    private String deployMode;
+
+    @Column(name = "deploy_env", length = 32)
+    private String deployEnv;
+
+    @Column(name = "strict_delivery")
+    private Boolean strictDelivery;
+
+    @Column(name = "auto_build_image")
+    private Boolean autoBuildImage;
+
+    @Column(name = "auto_push_image")
+    private Boolean autoPushImage;
+
+    @Column(name = "auto_deploy_target")
+    private Boolean autoDeployTarget;
+
+    @Column(name = "release_status", length = 32)
+    private String releaseStatus;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -196,6 +220,70 @@ public class TaskEntity {
 
     public void setTemplateId(String templateId) {
         this.templateId = truncate(templateId, 128);
+    }
+
+    public String getCodegenEngine() {
+        return codegenEngine;
+    }
+
+    public void setCodegenEngine(String codegenEngine) {
+        this.codegenEngine = truncate(codegenEngine, 32);
+    }
+
+    public String getDeployMode() {
+        return deployMode;
+    }
+
+    public void setDeployMode(String deployMode) {
+        this.deployMode = truncate(deployMode, 32);
+    }
+
+    public String getDeployEnv() {
+        return deployEnv;
+    }
+
+    public void setDeployEnv(String deployEnv) {
+        this.deployEnv = truncate(deployEnv, 32);
+    }
+
+    public Boolean getStrictDelivery() {
+        return strictDelivery;
+    }
+
+    public void setStrictDelivery(Boolean strictDelivery) {
+        this.strictDelivery = strictDelivery;
+    }
+
+    public Boolean getAutoBuildImage() {
+        return autoBuildImage;
+    }
+
+    public void setAutoBuildImage(Boolean autoBuildImage) {
+        this.autoBuildImage = autoBuildImage;
+    }
+
+    public Boolean getAutoPushImage() {
+        return autoPushImage;
+    }
+
+    public void setAutoPushImage(Boolean autoPushImage) {
+        this.autoPushImage = autoPushImage;
+    }
+
+    public Boolean getAutoDeployTarget() {
+        return autoDeployTarget;
+    }
+
+    public void setAutoDeployTarget(Boolean autoDeployTarget) {
+        this.autoDeployTarget = autoDeployTarget;
+    }
+
+    public String getReleaseStatus() {
+        return releaseStatus;
+    }
+
+    public void setReleaseStatus(String releaseStatus) {
+        this.releaseStatus = truncate(releaseStatus, 32);
     }
 
     private static String truncate(String value, int maxLen) {

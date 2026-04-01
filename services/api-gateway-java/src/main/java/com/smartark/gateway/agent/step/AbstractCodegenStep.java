@@ -36,6 +36,8 @@ public abstract class AbstractCodegenStep implements AgentStep {
         String fullStack = getFullStack(context);
         List<FilePlanItem> filePlan = context.getFilePlan();
         String instructions = context.getNormalizedInstructions() != null ? context.getNormalizedInstructions() : context.getInstructions();
+        String codegenEngine = context.getTask() == null ? "llm" : normalizeCodegenEngine(context.getTask().getCodegenEngine());
+        boolean jeecgRuleMode = "jeecg_rule".equals(codegenEngine);
         String groupStructure = buildGroupStructure(filePlan, groups);
 
         if (filePlan == null || filePlan.isEmpty()) {
@@ -68,6 +70,16 @@ public abstract class AbstractCodegenStep implements AgentStep {
                 logger.info("Skip template-managed file already materialized: {}", filePath);
                 context.logInfo("Codegen skip template-managed file: " + filePath);
                 successCount++;
+                continue;
+            }
+            if (jeecgRuleMode) {
+                if (templateFileAlreadyPresent(context, filePath)) {
+                    context.logInfo("Codegen skip in jeecg_rule mode, file already exists: " + filePath);
+                    successCount++;
+                } else {
+                    failCount++;
+                    context.logWarn("Codegen missing required file in jeecg_rule mode: " + filePath);
+                }
                 continue;
             }
             try {
@@ -167,7 +179,9 @@ public abstract class AbstractCodegenStep implements AgentStep {
     }
 
     private boolean isTemplateManaged(FilePlanItem item) {
-        return item != null && item.getReason() != null && item.getReason().startsWith("template_repo:");
+        return item != null
+                && item.getReason() != null
+                && (item.getReason().startsWith("template_repo:") || item.getReason().startsWith("jeecg_rule:"));
     }
 
     private boolean templateFileAlreadyPresent(AgentExecutionContext context, String filePath) {
@@ -295,5 +309,16 @@ public abstract class AbstractCodegenStep implements AgentStep {
         }
 
         return null;
+    }
+
+    private String normalizeCodegenEngine(String value) {
+        if (value == null || value.isBlank()) {
+            return "llm";
+        }
+        String normalized = value.trim().toLowerCase();
+        return switch (normalized) {
+            case "llm", "jeecg_rule", "hybrid" -> normalized;
+            default -> "llm";
+        };
     }
 }

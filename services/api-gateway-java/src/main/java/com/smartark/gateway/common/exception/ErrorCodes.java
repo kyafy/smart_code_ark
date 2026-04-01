@@ -40,6 +40,11 @@ public final class ErrorCodes {
     public static final int BUILD_VERIFY_FAILED = 3205;
     public static final int DELIVERY_LEVEL_DOWNGRADED = 3206;
     public static final int RUNTIME_SMOKE_TEST_FAILED = 3207;
+    public static final int RELEASE_IMAGE_BUILD_FAILED = 3208;
+    public static final int RELEASE_IMAGE_PUSH_FAILED = 3209;
+    public static final int RELEASE_DEPLOY_FAILED = 3210;
+    public static final int RELEASE_VERIFY_FAILED = 3211;
+    public static final int RELEASE_ROLLBACK_FAILED = 3212;
 
     // RAG 错误码 (4xxx)
     public static final int RAG_EMBEDDING_FAILED = 4001;

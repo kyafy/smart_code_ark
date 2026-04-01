@@ -166,9 +166,15 @@ public class TaskService {
         GenerateOptions options = new GenerateOptions(
                 parentTask.getDeliveryLevelRequested(),
                 parentTask.getTemplateId(),
-                Boolean.FALSE,
+                parentTask.getCodegenEngine(),
+                parentTask.getDeployMode(),
+                parentTask.getDeployEnv(),
+                parentTask.getStrictDelivery(),
                 Boolean.TRUE,
-                Boolean.TRUE
+                Boolean.TRUE,
+                parentTask.getAutoBuildImage(),
+                parentTask.getAutoPushImage(),
+                parentTask.getAutoDeployTarget()
         );
         return createAndStartTask(parentTask.getProjectId(), userId, "modify", request.changeInstructions(), options);
     }
@@ -291,6 +297,14 @@ public class TaskService {
         task.setDeliveryLevelActual("draft");
         task.setDeliveryStatus("pending");
         task.setTemplateId(normalizedOptions.templateId());
+        task.setCodegenEngine(normalizedOptions.codegenEngine());
+        task.setDeployMode(normalizedOptions.deployMode());
+        task.setDeployEnv(normalizedOptions.deployEnv());
+        task.setStrictDelivery(normalizedOptions.strictDelivery());
+        task.setAutoBuildImage(normalizedOptions.autoBuildImage());
+        task.setAutoPushImage(normalizedOptions.autoPushImage());
+        task.setAutoDeployTarget(normalizedOptions.autoDeployTarget());
+        task.setReleaseStatus("pending");
         task.setCreatedAt(now);
         task.setUpdatedAt(now);
         taskRepository.save(task);
@@ -303,6 +317,13 @@ public class TaskService {
         createStep(taskId, "build_verify", "构建验证", 6);
         createStep(taskId, "runtime_smoke_test", "Runtime smoke test", 7);
         createStep(taskId, "package", "打包交付物", 8);
+        if (normalizedOptions.needsReleasePipeline()) {
+            createStep(taskId, "image_build", "构建镜像", 9);
+            createStep(taskId, "image_push", "推送镜像", 10);
+            createStep(taskId, "deploy_target", "部署目标环境", 11);
+            createStep(taskId, "deploy_verify", "部署验证", 12);
+            createStep(taskId, "deploy_rollback", "部署回滚", 13);
+        }
 
         taskExecutorService.executeTask(taskId);
 

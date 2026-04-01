@@ -4,11 +4,19 @@ import { computed } from 'vue'
 type StepItem = { code: string; name: string }
 
 const defaultSteps: StepItem[] = [
-  { code: 'requirement_analyze', name: '需求分析' },
-  { code: 'codegen_backend', name: '生成后端' },
-  { code: 'codegen_frontend', name: '生成前端' },
-  { code: 'sql_generate', name: '生成 SQL' },
-  { code: 'package', name: '打包交付物' },
+  { code: 'requirement_analyze', name: 'Requirement Analyze' },
+  { code: 'codegen_backend', name: 'Backend Codegen' },
+  { code: 'codegen_frontend', name: 'Frontend Codegen' },
+  { code: 'sql_generate', name: 'SQL Generate' },
+  { code: 'artifact_contract_validate', name: 'Contract Validate' },
+  { code: 'build_verify', name: 'Build Verify' },
+  { code: 'runtime_smoke_test', name: 'Runtime Smoke Test' },
+  { code: 'package', name: 'Package Artifact' },
+  { code: 'image_build', name: 'Image Build' },
+  { code: 'image_push', name: 'Image Push' },
+  { code: 'deploy_target', name: 'Deploy Target' },
+  { code: 'deploy_verify', name: 'Deploy Verify' },
+  { code: 'deploy_rollback', name: 'Deploy Rollback' },
 ]
 
 const props = defineProps<{ currentStep: string; status: string; steps?: StepItem[] }>()

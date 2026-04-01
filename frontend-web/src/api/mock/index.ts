@@ -3,6 +3,7 @@ import type {
   AuthLoginResult,
   ChatReplyResult,
   ChatStartResult,
+  GenerateOptions,
   GenerateResult,
   ProjectConfirmResult,
   ProjectSummary,
@@ -52,6 +53,9 @@ type Task = {
   status: 'queued' | 'running' | 'finished' | 'failed' | 'timeout'
   progress: number
   step: string
+  steps?: string[]
+  tick?: number
+  options?: GenerateOptions
   logs: { level: 'info' | 'warn' | 'error'; content: string; ts: number }[]
   previewStatus?: 'provisioning' | 'ready' | 'failed' | 'expired'
   previewPollCount?: number
@@ -138,10 +142,10 @@ const ensureUser = () => {
 }
 
 const pickModules = (text: string) => {
-  const modules = ['用户', '商品', '订单', '支付', '评论', '统计']
+  const modules = ['user', 'product', 'order', 'payment', 'comment', 'analytics']
   const picked = modules.filter((m) => text.includes(m))
   if (picked.length > 0) return picked.slice(0, 5)
-  return ['用户', '商品', '订单']
+  return ['user', 'product', 'order']
 }
 
 const getTask = (taskId: string) => {
@@ -151,31 +155,78 @@ const getTask = (taskId: string) => {
   return { state, task }
 }
 
+const BASE_STEPS = [
+  'requirement_analyze',
+  'codegen_backend',
+  'codegen_frontend',
+  'sql_generate',
+  'artifact_contract_validate',
+  'build_verify',
+  'runtime_smoke_test',
+  'package',
+]
+
+const RELEASE_STEPS = ['image_build', 'image_push', 'deploy_target', 'deploy_verify', 'deploy_rollback']
+
+const asBoolean = (value: unknown): boolean => value === true
+
+const usesReleasePipeline = (options?: GenerateOptions): boolean => {
+  if (!options) return false
+  if ((options.deployMode ?? 'none') !== 'none') return true
+  return (
+    asBoolean(options.autoBuildImage) ||
+    asBoolean(options.autoPushImage) ||
+    asBoolean(options.autoDeployTarget)
+  )
+}
+
+const buildTaskSteps = (options?: GenerateOptions): string[] => {
+  const steps = [...BASE_STEPS]
+  if (usesReleasePipeline(options)) {
+    steps.push(...RELEASE_STEPS)
+  }
+  return steps
+}
+
 const advanceTask = (task: Task) => {
   if (task.status === 'failed' || task.status === 'timeout' || task.status === 'finished') return
+  const steps = task.steps && task.steps.length > 0 ? task.steps : BASE_STEPS
+  task.steps = steps
+
   if (task.status === 'queued') {
     task.status = 'running'
-    task.step = 'requirement_analyze'
-    task.logs.push({ level: 'info', content: '任务开始执行', ts: Date.now() })
+    task.step = steps[0]
+    task.progress = 5
+    const engine = (task.options?.codegenEngine ?? 'llm').toLowerCase()
+    if (engine === 'jeecg_rule') {
+      task.logs.push({ level: 'info', content: 'Requirement analyzed. Using Jeecg rule renderer.', ts: Date.now() })
+    } else if (engine === 'hybrid') {
+      task.logs.push({ level: 'info', content: 'Requirement analyzed. Using hybrid mode (Jeecg first, LLM fallback).', ts: Date.now() })
+    } else {
+      task.logs.push({ level: 'info', content: 'Requirement analyzed. Using LLM generation.', ts: Date.now() })
+    }
     return
   }
 
-  const steps = ['requirement_analyze', 'codegen_backend', 'codegen_frontend', 'sql_generate', 'package']
-  const nextProgress = Math.min(100, task.progress + 15 + Math.floor(Math.random() * 10))
-  task.progress = nextProgress
-  const stepIndex = Math.min(steps.length - 1, Math.floor((task.progress / 100) * steps.length))
-  task.step = steps[stepIndex]
-  task.logs.push({ level: 'info', content: `执行中：${task.step}（${task.progress}%）`, ts: Date.now() })
+  const currentIndex = Math.max(0, steps.findIndex((s) => s === task.step))
+  const nextIndex = currentIndex + 1
+  task.tick = (task.tick ?? 0) + 1
 
-  if (task.progress >= 100) {
+  if (nextIndex >= steps.length) {
     task.status = 'finished'
     task.step = 'finished'
+    task.progress = 100
     task.previewStatus = 'provisioning'
     task.previewPollCount = 0
     task.previewExpireAt = null
     task.previewLastError = null
-    task.logs.push({ level: 'info', content: '任务完成', ts: Date.now() })
+    task.logs.push({ level: 'info', content: 'Task completed. Preview is provisioning.', ts: Date.now() })
+    return
   }
+
+  task.step = steps[nextIndex]
+  task.progress = Math.min(95, Math.max(5, Math.round(((nextIndex + 1) / steps.length) * 100)))
+  task.logs.push({ level: 'info', content: `Step ${task.step} running (${task.progress}%).`, ts: Date.now() })
 }
 
 export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown> | Blob> => {
@@ -206,7 +257,7 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
 
   if (method === 'POST' && url === '/api/chat/start') {
     const body = (req.body ?? {}) as Record<string, unknown>
-    const title = String(body.title ?? '未命名项目')
+    const title = String(body.title ?? 'New project')
     const projectType = String(body.projectType ?? 'web')
     const sessionId = genId('s')
     const session: Session = {
@@ -232,7 +283,7 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
     session.messages.push({ speaker: 'user', message })
     const draft = pickModules(message)
     session.draftModules = Array.from(new Set([...session.draftModules, ...draft]))
-    const reply = `已收到：${message}\n建议模块：${session.draftModules.join('、')}。你还需要哪些角色/权限？`
+    const reply = `Acknowledged: ${message}`
     session.messages.push({ speaker: 'assistant', message: reply })
     session.updatedAt = Date.now()
     setState(state)
@@ -348,7 +399,7 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
     const orderId = url.replace('/api/billing/recharge/orders/', '')
     const order = state.rechargeOrders.find((o) => o.orderId === orderId)
     if (!order || order.userId !== u.userId) {
-      return { code: 1004, message: '订单不存在', data: null }
+      return { code: 1004, message: 'order not found', data: null }
     }
     return ok(order)
   }
@@ -360,18 +411,18 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
     const signature = String(body.signature ?? '')
     const order = state.rechargeOrders.find((o) => o.orderId === orderId)
     if (!order) {
-      return { code: 1004, message: '订单不存在', data: null }
+      return { code: 1004, message: 'order not found', data: null }
     }
     const expectedSign = `${orderId}|${paymentNo}|smartark-recharge-secret`
     if (signature !== expectedSign) {
-      return { code: 1003, message: '验签失败', data: null }
+      return { code: 1003, message: 'invalid signature', data: null }
     }
     if (order.status === 'paid') {
       return ok(order)
     }
     const duplicated = state.rechargeOrders.find((o) => o.paymentNo === paymentNo && o.status === 'paid')
     if (duplicated && duplicated.orderId !== orderId) {
-      return { code: 1003, message: '支付单号已处理', data: null }
+      return { code: 1003, message: 'duplicated paid paymentNo', data: null }
     }
     order.status = 'paid'
     order.paymentNo = paymentNo
@@ -395,6 +446,8 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
   if (method === 'POST' && url === '/api/generate') {
     const body = (req.body ?? {}) as Record<string, unknown>
     const projectId = String(body.projectId ?? '')
+    const options = ((body.options ?? {}) as GenerateOptions) || {}
+    const steps = buildTaskSteps(options)
     const taskId = genId('t')
     const task: Task = {
       taskId,
@@ -402,7 +455,17 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
       status: 'queued',
       progress: 0,
       step: 'queued',
-      logs: [{ level: 'info', content: '任务已入队', ts: Date.now() }],
+      steps,
+      tick: 0,
+      options,
+      logs: [
+        { level: 'info', content: 'Task accepted and queued.', ts: Date.now() },
+        {
+          level: 'info',
+          content: `Engine=${options.codegenEngine ?? 'llm'}, DeployMode=${options.deployMode ?? 'none'}, Steps=${steps.length}`,
+          ts: Date.now(),
+        },
+      ],
       previewStatus: 'provisioning',
       previewPollCount: 0,
       previewExpireAt: null,
@@ -476,7 +539,7 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
       return status === 'provisioning' || status === 'ready'
     }).length
     if (activePreviewCount >= 2) {
-      return { code: 3106, message: '预览并发数已达上限(2)', data: null }
+      return { code: 3106, message: 'preview concurrency limit reached (2)', data: null }
     }
     const currentStatus = task.previewStatus || 'provisioning'
     if (currentStatus !== 'failed' && currentStatus !== 'expired') {
@@ -486,7 +549,7 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
     task.previewPollCount = 0
     task.previewExpireAt = null
     task.previewLastError = null
-    task.logs.push({ level: 'info', content: '预览重建已触发', ts: Date.now() })
+    task.logs.push({ level: 'info', content: 'Preview rebuild accepted.', ts: Date.now() })
     const r: TaskPreviewResult = {
       taskId,
       status: 'provisioning',
@@ -514,7 +577,10 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
       status: 'queued',
       progress: 0,
       step: 'queued',
-      logs: [{ level: 'info', content: '修改任务已入队', ts: Date.now() }],
+      steps: src.task.steps ? [...src.task.steps] : buildTaskSteps(src.task.options),
+      tick: 0,
+      options: src.task.options,
+      logs: [{ level: 'info', content: 'Modify task accepted and queued.', ts: Date.now() }],
       previewStatus: 'provisioning',
       previewPollCount: 0,
       previewExpireAt: null,
@@ -527,3 +593,6 @@ export const handleMock = async (req: MockRequest): Promise<ApiResponse<unknown>
 
   return { code: 1004, message: `mock route not found: ${method} ${url}`, data: null }
 }
+
+
+

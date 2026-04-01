@@ -178,7 +178,19 @@ class TaskServiceDeliveryReportTest {
         assertThatThrownBy(() -> taskService.generate(new com.smartark.gateway.dto.GenerateRequest(
                 "project-1",
                 "build app",
-                new com.smartark.gateway.dto.GenerateOptions("validated", "missing-template", false, true, true)
+                new com.smartark.gateway.dto.GenerateOptions(
+                        "validated",
+                        "missing-template",
+                        "llm",
+                        "none",
+                        "local",
+                        false,
+                        true,
+                        true,
+                        false,
+                        false,
+                        false
+                )
         )))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {

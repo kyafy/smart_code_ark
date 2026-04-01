@@ -135,9 +135,15 @@ export type GenerateResult = {
 export type GenerateOptions = {
   deliveryLevel?: 'draft' | 'validated' | 'deliverable' | string
   templateId?: string | null
+  codegenEngine?: 'llm' | 'jeecg_rule' | 'hybrid' | string
+  deployMode?: 'none' | 'compose' | 'k8s' | string
+  deployEnv?: 'local' | 'test' | 'staging' | 'prod' | string
   strictDelivery?: boolean
   enablePreview?: boolean
   enableAutoRepair?: boolean
+  autoBuildImage?: boolean
+  autoPushImage?: boolean
+  autoDeployTarget?: boolean
 }
 
 export type DeliveryReportResult = {

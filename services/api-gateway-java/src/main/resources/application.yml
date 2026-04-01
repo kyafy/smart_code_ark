@@ -58,6 +58,18 @@ smartark:
     health-check-timeout-seconds: ${RUNTIME_SMOKE_HEALTH_CHECK_TIMEOUT:60}
     health-check-interval-ms: ${RUNTIME_SMOKE_HEALTH_CHECK_INTERVAL:3000}
     keep-runtime-for-preview-enabled: ${RUNTIME_SMOKE_KEEP_RUNTIME_FOR_PREVIEW_ENABLED:true}
+  codegen:
+    jeecg:
+      enabled: ${CODEGEN_JEECG_ENABLED:false}
+      base-url: ${CODEGEN_JEECG_BASE_URL:http://localhost:19090}
+      render-path: ${CODEGEN_JEECG_RENDER_PATH:/api/codegen/jeecg/render}
+      timeout-ms: ${CODEGEN_JEECG_TIMEOUT_MS:8000}
+  release:
+    enabled: ${RELEASE_ENABLED:true}
+    command-execution-enabled: ${RELEASE_COMMAND_EXECUTION_ENABLED:true}
+    timeout-seconds: ${RELEASE_TIMEOUT_SECONDS:900}
+    registry-prefix: ${RELEASE_REGISTRY_PREFIX:}
+    verify-health-url: ${RELEASE_VERIFY_HEALTH_URL:}
   memory:
     short-term:
       top-k: ${MEMORY_SHORT_TERM_TOP_K:8}
