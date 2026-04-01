@@ -1,0 +1,79 @@
+server:
+  # Demo 服务端口。
+  port: 8088
+
+spring:
+  application:
+    name: merchant-gateway-resilience4j-demo
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    root: INFO
+    com.example.merchantgateway: INFO
+
+demo:
+  # local：本地启动配置 + 管理接口热更新
+  # nacos：从 Nacos 订阅商家池配置
+  # apollo：从 Apollo 订阅商家池配置
+  config-provider: local # local | nacos | apollo
+  # 网关代理调用下游 mock 服务的基础地址。
+  downstream-base-url: http://localhost:${server.port}
+
+  pool:
+    # 配置版本号，便于追踪与回滚。
+    version: local-v1
+    # merchantTier 未命中时的默认 tier。
+    defaultTier: default
+    # 各 tier 的韧性参数。
+    tiers:
+      default:
+        maxConcurrentCalls: 20
+        maxWaitDurationMs: 0
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        openStateWaitMs: 5000
+        halfOpenCalls: 3
+        retryMaxAttempts: 2
+        retryWaitMs: 150
+      normal:
+        maxConcurrentCalls: 50
+        maxWaitDurationMs: 10
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        openStateWaitMs: 5000
+        halfOpenCalls: 3
+        retryMaxAttempts: 2
+        retryWaitMs: 100
+      vip:
+        maxConcurrentCalls: 100
+        maxWaitDurationMs: 20
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        openStateWaitMs: 5000
+        halfOpenCalls: 3
+        retryMaxAttempts: 3
+        retryWaitMs: 80
+    # 商家 ID -> tier 映射关系。
+    merchantTier:
+      m1001: vip
+      m2001: normal
+
+  nacos:
+    # 仅在 config-provider=nacos 时使用。
+    server-addr: 127.0.0.1:8848
+    data-id: merchant-pool.yaml
+    group: DEFAULT_GROUP
+
+  apollo:
+    # 仅在 config-provider=apollo 时使用。
+    namespace: merchant-pool
+    key: merchant.pool.json

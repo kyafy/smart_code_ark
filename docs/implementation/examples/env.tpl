@@ -1,0 +1,13 @@
+﻿PROJECT_CODE=demo-order
+DEPLOY_ENV=test
+GEN_OUTPUT_ROOT=/data/gen-output
+REGISTRY_HOST=registry.example.com
+REGISTRY_NAMESPACE=jeecg
+IMAGE_TAG=latest
+BACKEND_PORT=8080
+FRONTEND_PORT=80
+DB_URL=jdbc:mysql://mysql:3306/jeecg?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+DB_USERNAME=jeecg
+DB_PASSWORD=change_me
+REDIS_HOST=redis
+REDIS_PORT=6379

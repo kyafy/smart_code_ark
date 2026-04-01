@@ -1,0 +1,44 @@
+﻿{
+  "version": "apollo-v2",
+  "defaultTier": "default",
+  "tiers": {
+    "default": {
+      "maxConcurrentCalls": 10,
+      "maxWaitDurationMs": 0,
+      "slidingWindowSize": 10,
+      "minimumNumberOfCalls": 5,
+      "failureRateThreshold": 50,
+      "openStateWaitMs": 5000,
+      "halfOpenCalls": 3,
+      "retryMaxAttempts": 1,
+      "retryWaitMs": 120
+    },
+    "normal": {
+      "maxConcurrentCalls": 40,
+      "maxWaitDurationMs": 10,
+      "slidingWindowSize": 20,
+      "minimumNumberOfCalls": 10,
+      "failureRateThreshold": 50,
+      "openStateWaitMs": 5000,
+      "halfOpenCalls": 3,
+      "retryMaxAttempts": 2,
+      "retryWaitMs": 100
+    },
+    "vip": {
+      "maxConcurrentCalls": 100,
+      "maxWaitDurationMs": 20,
+      "slidingWindowSize": 20,
+      "minimumNumberOfCalls": 10,
+      "failureRateThreshold": 50,
+      "openStateWaitMs": 5000,
+      "halfOpenCalls": 3,
+      "retryMaxAttempts": 3,
+      "retryWaitMs": 80
+    }
+  },
+  "merchantTier": {
+    "m1001": "vip",
+    "m2001": "normal",
+    "m3001": "default"
+  }
+}

@@ -1,0 +1,23 @@
+﻿services:
+  backend:
+    image: ${REGISTRY_HOST}/${REGISTRY_NAMESPACE}/${PROJECT_CODE}-backend:${IMAGE_TAG}
+    container_name: ${PROJECT_CODE}-backend
+    restart: always
+    environment:
+      - SPRING_PROFILES_ACTIVE=${DEPLOY_ENV}
+      - DB_URL=${DB_URL}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+    ports:
+      - "${BACKEND_PORT}:8080"
+
+  frontend:
+    image: ${REGISTRY_HOST}/${REGISTRY_NAMESPACE}/${PROJECT_CODE}-frontend:${IMAGE_TAG}
+    container_name: ${PROJECT_CODE}-frontend
+    restart: always
+    ports:
+      - "${FRONTEND_PORT}:80"
+    depends_on:
+      - backend

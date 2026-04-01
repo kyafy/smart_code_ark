@@ -1,0 +1,20 @@
+﻿{
+  "moduleName": "order",
+  "bussiPackage": "org.jeecg.modules.demo",
+  "tableNames": [
+    "demo_order",
+    "demo_order_item"
+  ],
+  "templateStyle": "default",
+  "oneToMany": {
+    "mainTable": "demo_order",
+    "subTables": [
+      "demo_order_item"
+    ]
+  },
+  "deploy": {
+    "env": "test",
+    "mode": "compose",
+    "autoDeploy": true
+  }
+}
