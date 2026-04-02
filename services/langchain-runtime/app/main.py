@@ -1329,9 +1329,19 @@ app = FastAPI(
     version=RUNTIME_API_VERSION,
     description=(
         "LangChain/LangGraph runtime for SmartArk. "
-        "Includes sidecar-compatible APIs and new v1 runtime APIs."
+        "Includes sidecar-compatible APIs, v1 runtime APIs, "
+        "and DeepAgent orchestration endpoints."
     ),
 )
+
+# --- DeepAgent Router ---
+try:
+    from .deepagent.routers.agent_router import router as deepagent_router
+
+    app.include_router(deepagent_router)
+    logger.info("DeepAgent router registered at /v1/agent/*")
+except Exception as _da_err:  # pragma: no cover
+    logger.warning("DeepAgent router not available: %s", _da_err)
 
 
 @app.get("/health", response_model=HealthResult, tags=["Sidecar"])
