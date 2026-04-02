@@ -157,8 +157,11 @@ Notes:
 - Set `command-execution-enabled=false` for dry-run style validation.
 - Set `registry-prefix` to your real image registry namespace.
 - Default provider order is `local_template,jeecg`: local deterministic rewrite first, sidecar fallback second.
-- Sidecar now forwards to real Jeecg endpoint `/online/cgform/api/codeGenerate`.
-- Configure sidecar upstream env (`JEECG_UPSTREAM_BASE_URL`, `JEECG_USERNAME`, `JEECG_PASSWORD` or `JEECG_ACCESS_TOKEN`).
+- Sidecar can forward to Jeecg internal endpoint (recommended) `/internal/codegen/render`.
+- Legacy compatibility endpoint remains `/online/cgform/api/codeGenerate`.
+- Configure sidecar upstream env (`JEECG_UPSTREAM_BASE_URL`, `JEECG_CODEGEN_PATH`, `JEECG_USERNAME`, `JEECG_PASSWORD` or `JEECG_ACCESS_TOKEN`).
+- JeecgBoot internal endpoint env uses `JEECG_CODEGEN_INTERNAL_*` (see `docs/jeecg_boot_internal_codegen_endpoint.md`).
+- If startup logs show `NoClassDefFoundError: ... CodeGenerateOne`, verify `org.jeecgframework.boot:codegenerate` is resolved with `-s ../.mvn-settings.xml`.
 
 ## 5. Frontend Operator Flow
 

@@ -8,6 +8,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -54,6 +55,25 @@ class InternalCodegenServiceTest {
         assertThat(result.success()).isTrue();
         assertThat(result.provider()).isEqualTo("mock");
         assertThat(result.message()).contains("fallback");
+    }
+
+    @Test
+    void tryRender_jeecgRuleShouldForceJeecgProvider() {
+        List<String> calledProviders = new ArrayList<>();
+        InternalCodegenService service = buildService(List.of(
+                trackingProvider("local_template", calledProviders,
+                        new CodegenRenderResult(true, true, "local_template", "local ok", List.of("backend/A.java"))),
+                trackingProvider("jeecg", calledProviders,
+                        new CodegenRenderResult(true, true, "jeecg", "jeecg ok", List.of("backend/B.java")))
+        ));
+        ReflectionTestUtils.setField(service, "strictProviderOrder", "local_template,jeecg");
+
+        CodegenRenderResult result = service.tryRender("jeecg_rule", null, mockSelection());
+        assertThat(result.invoked()).isTrue();
+        assertThat(result.success()).isTrue();
+        assertThat(result.provider()).isEqualTo("jeecg");
+        assertThat(result.files()).contains("backend/B.java");
+        assertThat(calledProviders).containsExactly("jeecg");
     }
 
     private InternalCodegenService buildService(List<CodegenProvider> providers) {
@@ -104,5 +124,21 @@ class InternalCodegenServiceTest {
             }
         };
     }
-}
 
+    private CodegenProvider trackingProvider(String key, List<String> calledProviders, CodegenRenderResult result) {
+        return new CodegenProvider() {
+            @Override
+            public String providerKey() {
+                return key;
+            }
+
+            @Override
+            public CodegenRenderResult tryRender(AgentExecutionContext context,
+                                                 TemplateRepoService.TemplateSelection selection,
+                                                 String codegenEngine) {
+                calledProviders.add(key);
+                return result;
+            }
+        };
+    }
+}

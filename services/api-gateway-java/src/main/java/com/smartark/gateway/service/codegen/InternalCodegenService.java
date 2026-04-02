@@ -75,9 +75,15 @@ public class InternalCodegenService {
     }
 
     private List<String> resolveProviderOrder(String codegenEngine) {
-        String rawOrder = switch (normalizeCodegenEngine(codegenEngine)) {
+        String normalizedEngine = normalizeCodegenEngine(codegenEngine);
+        if ("jeecg_rule".equals(normalizedEngine)) {
+            // jeecg_rule is expected to always hit Jeecg render path first
+            // so sidecar/upstream diagnostics are observable and deterministic.
+            return parseProviderOrder("jeecg");
+        }
+        String rawOrder = switch (normalizedEngine) {
             case "hybrid" -> hybridProviderOrder;
-            case "jeecg_rule", "internal_service" -> strictProviderOrder;
+            case "internal_service" -> strictProviderOrder;
             default -> providerOrder;
         };
         return parseProviderOrder(rawOrder);
@@ -109,4 +115,3 @@ public class InternalCodegenService {
         };
     }
 }
-

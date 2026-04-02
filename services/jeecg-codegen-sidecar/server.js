@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 
 const PORT = Number(process.env.PORT || 19090);
 const WORKSPACE_ROOT = process.env.JEECG_WORKSPACE_ROOT || '/tmp/smartark';
@@ -15,10 +16,74 @@ const PASSWORD = String(process.env.JEECG_PASSWORD || '').trim();
 const REQUEST_TIMEOUT_MS = parseIntSafe(process.env.JEECG_REQUEST_TIMEOUT_MS, 45000);
 const MAX_SCAN_FILES = parseIntSafe(process.env.JEECG_MAX_SCAN_FILES, 20000);
 const MAX_SCAN_DEPTH = parseIntSafe(process.env.JEECG_MAX_SCAN_DEPTH, 12);
+const INTERNAL_APP_ID = String(process.env.JEECG_INTERNAL_APP_ID || 'smart_code_ark').trim();
+const INTERNAL_SIGN_SECRET = String(process.env.JEECG_INTERNAL_SIGN_SECRET || '').trim();
+const INTERNAL_SIGN_VERSION = String(process.env.JEECG_INTERNAL_SIGN_VERSION || 'v1').trim();
+const INTERNAL_HEADER_APP_ID = process.env.JEECG_INTERNAL_HEADER_APP_ID || 'X-SmartArk-AppId';
+const INTERNAL_HEADER_TIMESTAMP = process.env.JEECG_INTERNAL_HEADER_TIMESTAMP || 'X-SmartArk-Timestamp';
+const INTERNAL_HEADER_NONCE = process.env.JEECG_INTERNAL_HEADER_NONCE || 'X-SmartArk-Nonce';
+const INTERNAL_HEADER_BODY_SHA256 = process.env.JEECG_INTERNAL_HEADER_BODY_SHA256 || 'X-SmartArk-Body-SHA256';
+const INTERNAL_HEADER_SIGNATURE = process.env.JEECG_INTERNAL_HEADER_SIGNATURE || 'X-SmartArk-Signature';
+const INTERNAL_HEADER_SIGN_VERSION = process.env.JEECG_INTERNAL_HEADER_SIGN_VERSION || 'X-SmartArk-Sign-Version';
 
 function parseIntSafe(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+function sha256Hex(content) {
+  return crypto.createHash('sha256').update(content || '', 'utf8').digest('hex');
+}
+
+function hmacSha256Hex(secret, content) {
+  return crypto.createHmac('sha256', secret).update(content || '', 'utf8').digest('hex');
+}
+
+function randomNonce() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID().replace(/-/g, '');
+  }
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function buildSignatureBase(method, pathAndQuery, timestamp, nonce, bodyHash) {
+  return [
+    String(method || '').toUpperCase(),
+    String(pathAndQuery || ''),
+    String(timestamp || ''),
+    String(nonce || ''),
+    String(bodyHash || ''),
+  ].join('\n');
+}
+
+function injectInternalSignHeaders(headers, method, urlObj, bodyText) {
+  if (!INTERNAL_SIGN_SECRET) {
+    return {
+      enabled: false,
+      appId: INTERNAL_APP_ID || '',
+      signVersion: INTERNAL_SIGN_VERSION || 'v1',
+    };
+  }
+  const timestamp = String(Date.now());
+  const nonce = randomNonce();
+  const pathAndQuery = `${urlObj.pathname}${urlObj.search || ''}`;
+  const bodyHash = sha256Hex(bodyText || '');
+  const signBase = buildSignatureBase(method, pathAndQuery, timestamp, nonce, bodyHash);
+  const signature = hmacSha256Hex(INTERNAL_SIGN_SECRET, signBase);
+
+  headers[INTERNAL_HEADER_APP_ID] = INTERNAL_APP_ID || 'smart_code_ark';
+  headers[INTERNAL_HEADER_TIMESTAMP] = timestamp;
+  headers[INTERNAL_HEADER_NONCE] = nonce;
+  headers[INTERNAL_HEADER_BODY_SHA256] = bodyHash;
+  headers[INTERNAL_HEADER_SIGNATURE] = signature;
+  headers[INTERNAL_HEADER_SIGN_VERSION] = INTERNAL_SIGN_VERSION || 'v1';
+
+  return {
+    enabled: true,
+    appId: headers[INTERNAL_HEADER_APP_ID],
+    signVersion: headers[INTERNAL_HEADER_SIGN_VERSION],
+    signatureBase: signBase,
+  };
 }
 
 function json(res, statusCode, payload) {
@@ -340,22 +405,28 @@ async function callCodegenCandidate(auth, candidate) {
   }
 
   let body = undefined;
+  let bodyText = '';
   if (candidate.method !== 'GET' && candidate.method !== 'HEAD') {
     if (candidate.contentType === 'application/x-www-form-urlencoded') {
       headers['Content-Type'] = 'application/x-www-form-urlencoded';
-      body = objectToFormData(candidate.body || {});
+      bodyText = objectToFormData(candidate.body || {});
+      body = bodyText;
     } else if (candidate.contentType && candidate.contentType !== 'application/json') {
       headers['Content-Type'] = candidate.contentType;
       if (typeof candidate.body === 'string') {
-        body = candidate.body;
+        bodyText = candidate.body;
+        body = bodyText;
       } else {
-        body = JSON.stringify(candidate.body || {});
+        bodyText = JSON.stringify(candidate.body || {});
+        body = bodyText;
       }
     } else {
       headers['Content-Type'] = 'application/json';
-      body = JSON.stringify(candidate.body || {});
+      bodyText = JSON.stringify(candidate.body || {});
+      body = bodyText;
     }
   }
+  const signInfo = injectInternalSignHeaders(headers, candidate.method, url, bodyText);
 
   const { response, text } = await fetchWithTimeout(
     url.toString(),
@@ -381,6 +452,7 @@ async function callCodegenCandidate(auth, candidate) {
     ok: isLikelySuccess(response.status, parsed),
     parsed,
     text,
+    signInfo,
   };
 }
 
@@ -514,6 +586,8 @@ async function renderWithJeecg(payload) {
         status: result.status,
         ok: result.ok,
         url: result.url,
+        signEnabled: !!(result.signInfo && result.signInfo.enabled),
+        signVersion: result.signInfo && result.signInfo.signVersion ? result.signInfo.signVersion : null,
         bodyPreview: truncate(result.text, 240),
       });
       if (result.ok) {
@@ -526,6 +600,8 @@ async function renderWithJeecg(payload) {
         status: 0,
         ok: false,
         url: joinUrl(UPSTREAM_BASE_URL, candidate.path),
+        signEnabled: !!INTERNAL_SIGN_SECRET,
+        signVersion: INTERNAL_SIGN_VERSION || 'v1',
         bodyPreview: truncate(String(err && err.message ? err.message : err), 240),
       });
     }
