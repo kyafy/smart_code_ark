@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Service
 public class JeecgCodegenClient {
@@ -143,7 +144,7 @@ public class JeecgCodegenClient {
             TemplateRepoService.TemplateSelection selection
     ) {
         Map<String, Object> hints = new LinkedHashMap<>();
-        JsonNode jeecgNode = spec == null ? null : spec.path("jeecg");
+        JsonNode jeecgNode = resolveJeecgNode(spec);
         if (jeecgNode != null && jeecgNode.isObject()) {
             putIfNotBlank(hints, "id", jeecgNode.path("id").asText(null));
             putIfNotBlank(hints, "formId", jeecgNode.path("formId").asText(null));
@@ -158,6 +159,16 @@ public class JeecgCodegenClient {
             putIfNotBlank(hints, "templateStyle", jeecgNode.path("templateStyle").asText(null));
             putIfNotBlank(hints, "stylePath", jeecgNode.path("stylePath").asText(null));
             putIfNotBlank(hints, "vueStyle", jeecgNode.path("vueStyle").asText(null));
+            putIfNotBlank(hints, "enginePath", jeecgNode.path("enginePath").asText(null));
+            putIfNotBlank(hints, "codegenPath", jeecgNode.path("codegenPath").asText(null));
+            putIfNotBlank(hints, "mode", jeecgNode.path("mode").asText(null));
+
+            if (jeecgNode.path("engine").isObject()) {
+                hints.put("engine", objectMapper.convertValue(jeecgNode.path("engine"), Map.class));
+            }
+            if (jeecgNode.path("engineRequest").isObject()) {
+                hints.put("engineRequest", objectMapper.convertValue(jeecgNode.path("engineRequest"), Map.class));
+            }
             if (jeecgNode.path("request").isObject()) {
                 hints.put("request", objectMapper.convertValue(jeecgNode.path("request"), Map.class));
             }
@@ -167,12 +178,48 @@ public class JeecgCodegenClient {
         }
         if (context != null && context.getTask() != null) {
             putIfNotBlank(hints, "projectPath", context.getWorkspaceDir() == null ? null : context.getWorkspaceDir().toString());
-            putIfNotBlank(hints, "code", context.getTask().getTemplateId());
         }
         if (selection != null) {
             putIfNotBlank(hints, "templateStyle", selection.templateKey());
+            if (selection.metadata() != null && selection.metadata().run() != null) {
+                String preferredMode = selection.metadata().run().get("mode");
+                putIfNotBlank(hints, "mode", preferredMode);
+            }
         }
+        applyDefaultMode(hints);
         return hints;
+    }
+
+    private JsonNode resolveJeecgNode(JsonNode spec) {
+        if (spec == null || spec.isMissingNode() || spec.isNull()) {
+            return null;
+        }
+        JsonNode directNode = spec.path("jeecg");
+        if (directNode != null && directNode.isObject()) {
+            return directNode;
+        }
+        JsonNode nestedNode = spec.path("codegen").path("jeecg");
+        return nestedNode != null && nestedNode.isObject() ? nestedNode : null;
+    }
+
+    private void applyDefaultMode(Map<String, Object> hints) {
+        if (hints == null || hints.isEmpty()) {
+            return;
+        }
+        Object mode = hints.get("mode");
+        if (mode instanceof String modeText && !modeText.isBlank()) {
+            return;
+        }
+        if (Objects.nonNull(hints.get("engine")) || Objects.nonNull(hints.get("engineRequest"))) {
+            hints.put("mode", "engine_direct");
+            return;
+        }
+        if (Objects.nonNull(hints.get("code"))
+                || Objects.nonNull(hints.get("formId"))
+                || Objects.nonNull(hints.get("cgformId"))
+                || Objects.nonNull(hints.get("id"))) {
+            hints.put("mode", "online_compat");
+        }
     }
 
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {

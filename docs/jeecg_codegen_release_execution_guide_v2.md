@@ -157,9 +157,10 @@ Notes:
 - Set `command-execution-enabled=false` for dry-run style validation.
 - Set `registry-prefix` to your real image registry namespace.
 - Default provider order is `local_template,jeecg`: local deterministic rewrite first, sidecar fallback second.
-- Sidecar can forward to Jeecg internal endpoint (recommended) `/internal/codegen/render`.
-- Legacy compatibility endpoint remains `/online/cgform/api/codeGenerate`.
-- Configure sidecar upstream env (`JEECG_UPSTREAM_BASE_URL`, `JEECG_CODEGEN_PATH`, `JEECG_USERNAME`, `JEECG_PASSWORD` or `JEECG_ACCESS_TOKEN`).
+- Sidecar supports engine-direct endpoint (recommended) via `JEECG_ENGINE_PATH` (default `/internal/codegen/engine/render`).
+- Legacy compatibility endpoint remains available through `JEECG_CODEGEN_PATH` (`/internal/codegen/render` or `/online/cgform/api/codeGenerate`).
+- Configure sidecar upstream env (`JEECG_UPSTREAM_BASE_URL`, `JEECG_ENGINE_DIRECT_ENABLED`, `JEECG_ENGINE_PATH`, `JEECG_LEGACY_ONLINE_FALLBACK_ENABLED`, `JEECG_CODEGEN_PATH`, `JEECG_USERNAME`, `JEECG_PASSWORD` or `JEECG_ACCESS_TOKEN`).
+- Gateway now treats `jeecg.engine` / `jeecg.engineRequest` as primary inputs; `jeecg.formId/code` is legacy compatibility.
 - JeecgBoot internal endpoint env uses `JEECG_CODEGEN_INTERNAL_*` (see `docs/jeecg_boot_internal_codegen_endpoint.md`).
 - If startup logs show `NoClassDefFoundError: ... CodeGenerateOne`, verify `org.jeecgframework.boot:codegenerate` is resolved with `-s ../.mvn-settings.xml`.
 

@@ -7,7 +7,10 @@ const PORT = Number(process.env.PORT || 19090);
 const WORKSPACE_ROOT = process.env.JEECG_WORKSPACE_ROOT || '/tmp/smartark';
 const UPSTREAM_BASE_URL = String(process.env.JEECG_UPSTREAM_BASE_URL || '').trim();
 const LOGIN_PATH = process.env.JEECG_LOGIN_PATH || '/sys/login';
-const CODEGEN_PATH = process.env.JEECG_CODEGEN_PATH || '/online/cgform/api/codeGenerate';
+const CODEGEN_PATH = process.env.JEECG_CODEGEN_PATH || '/internal/codegen/render';
+const ENGINE_DIRECT_ENABLED = parseBool(process.env.JEECG_ENGINE_DIRECT_ENABLED, true);
+const ENGINE_PATH = process.env.JEECG_ENGINE_PATH || '/internal/codegen/engine/render';
+const LEGACY_ONLINE_FALLBACK_ENABLED = parseBool(process.env.JEECG_LEGACY_ONLINE_FALLBACK_ENABLED, true);
 const TOKEN_HEADER = process.env.JEECG_TOKEN_HEADER || 'X-Access-Token';
 const TOKEN_JSON_PATH = process.env.JEECG_TOKEN_JSON_PATH || 'result.token';
 const ACCESS_TOKEN = String(process.env.JEECG_ACCESS_TOKEN || '').trim();
@@ -29,6 +32,20 @@ const INTERNAL_HEADER_SIGN_VERSION = process.env.JEECG_INTERNAL_HEADER_SIGN_VERS
 function parseIntSafe(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+function parseBool(value, fallback) {
+  if (value === null || value === undefined || String(value).trim() === '') {
+    return fallback;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  return fallback;
 }
 
 function sha256Hex(content) {
@@ -286,7 +303,7 @@ function extractParams(payload) {
   const params = {
     id: pickString(jeecg.id, jeecg.formId, jeecg.cgformId, jeecg.code),
     formId: pickString(jeecg.formId, jeecg.id, jeecg.cgformId),
-    code: pickString(jeecg.code, jeecg.formId, jeecg.id, payload.templateId),
+    code: pickString(jeecg.code, jeecg.formId, jeecg.id),
     cgformId: pickString(jeecg.cgformId, jeecg.formId, jeecg.id),
     tableName: pickString(jeecg.tableName),
     projectPath: pickString(jeecg.projectPath, payload.workspaceDir),
@@ -312,6 +329,37 @@ function extractParams(payload) {
   return cleaned;
 }
 
+function hasLegacyOnlineIdentity(params) {
+  if (!params || typeof params !== 'object') {
+    return false;
+  }
+  return Boolean(
+    pickString(params.id, params.formId, params.code, params.cgformId)
+  );
+}
+
+function buildEngineDirectRequest(payload, jeecg) {
+  const engine = pickObject(jeecg.engine);
+  const engineRequest = pickObject(jeecg.engineRequest);
+  const engineBody = engineRequest.body === undefined ? engine : engineRequest.body;
+  if (!engineRequest.path && !engineRequest.url && (!engineBody || Object.keys(engineBody).length === 0)) {
+    return null;
+  }
+  return {
+    name: 'engine-direct',
+    method: pickString(engineRequest.method, 'POST').toUpperCase(),
+    path: pickString(engineRequest.path, engineRequest.url, jeecg.enginePath, ENGINE_PATH),
+    contentType: pickString(
+      engineRequest.contentType,
+      engineRequest.headers && engineRequest.headers['Content-Type'],
+      'application/json'
+    ),
+    body: engineBody,
+    headers: pickObject(engineRequest.headers),
+    query: pickObject(engineRequest.query),
+  };
+}
+
 function buildCandidates(payload) {
   const jeecg = pickObject(payload.jeecg);
   const request = pickObject(jeecg.request);
@@ -331,35 +379,44 @@ function buildCandidates(payload) {
     });
   }
 
-  candidates.push({
-    name: 'json',
-    method: 'POST',
-    path: codegenPath,
-    contentType: 'application/json',
-    body: params,
-    headers: {},
-    query: {},
-  });
+  if (ENGINE_DIRECT_ENABLED) {
+    const engineDirect = buildEngineDirectRequest(payload, jeecg);
+    if (engineDirect) {
+      candidates.push(engineDirect);
+    }
+  }
 
-  candidates.push({
-    name: 'form-urlencoded',
-    method: 'POST',
-    path: codegenPath,
-    contentType: 'application/x-www-form-urlencoded',
-    body: params,
-    headers: {},
-    query: {},
-  });
+  if (LEGACY_ONLINE_FALLBACK_ENABLED && hasLegacyOnlineIdentity(params)) {
+    candidates.push({
+      name: 'online-compat-json',
+      method: 'POST',
+      path: codegenPath,
+      contentType: 'application/json',
+      body: params,
+      headers: {},
+      query: {},
+    });
 
-  candidates.push({
-    name: 'query-get',
-    method: 'GET',
-    path: codegenPath,
-    contentType: '',
-    body: null,
-    headers: {},
-    query: params,
-  });
+    candidates.push({
+      name: 'online-compat-form-urlencoded',
+      method: 'POST',
+      path: codegenPath,
+      contentType: 'application/x-www-form-urlencoded',
+      body: params,
+      headers: {},
+      query: {},
+    });
+
+    candidates.push({
+      name: 'online-compat-query-get',
+      method: 'GET',
+      path: codegenPath,
+      contentType: '',
+      body: null,
+      headers: {},
+      query: params,
+    });
+  }
 
   return candidates;
 }
@@ -575,6 +632,9 @@ async function renderWithJeecg(payload) {
   const beforeSnapshot = snapshotWorkspace(workspaceDir);
   const auth = await resolveJeecgAuth();
   const candidates = buildCandidates(payload);
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new Error('no executable Jeecg request found: provide jeecg.engine/jeecg.engineRequest (recommended) or legacy jeecg.formId|jeecg.code');
+  }
   const attempts = [];
 
   let successResult = null;
@@ -608,7 +668,7 @@ async function renderWithJeecg(payload) {
   }
 
   if (!successResult) {
-    throw new Error(`all codeGenerate attempts failed: ${JSON.stringify(attempts)}`);
+    throw new Error(`all Jeecg codegen attempts failed: ${JSON.stringify(attempts)}`);
   }
 
   const afterSnapshot = snapshotWorkspace(workspaceDir);
@@ -643,6 +703,9 @@ async function handler(req, res) {
       detail: 'ready',
       upstreamBaseUrl: UPSTREAM_BASE_URL || null,
       codegenPath: CODEGEN_PATH,
+      engineDirectEnabled: ENGINE_DIRECT_ENABLED,
+      enginePath: ENGINE_PATH,
+      legacyOnlineFallbackEnabled: LEGACY_ONLINE_FALLBACK_ENABLED,
     });
     return;
   }
@@ -676,5 +739,7 @@ http.createServer(handler).listen(PORT, '0.0.0.0', () => {
     console.warn('JEECG_UPSTREAM_BASE_URL is empty, render requests will fail');
   } else {
     console.log(`jeecg upstream: ${UPSTREAM_BASE_URL}`);
+    console.log(`jeecg engine direct: enabled=${ENGINE_DIRECT_ENABLED}, path=${ENGINE_PATH}`);
+    console.log(`jeecg online compat fallback: enabled=${LEGACY_ONLINE_FALLBACK_ENABLED}, path=${CODEGEN_PATH}`);
   }
 });

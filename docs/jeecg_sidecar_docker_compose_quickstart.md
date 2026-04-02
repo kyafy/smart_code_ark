@@ -2,21 +2,24 @@
 
 ## Purpose
 
-`jeecg-sidecar` now calls JeecgBoot upstream API, and can call either:
+`jeecg-sidecar` calls JeecgBoot upstream API with two modes:
 
-- default internal endpoint (recommended): `POST /internal/codegen/render`
-- legacy endpoint: `POST /online/cgform/api/codeGenerate`
+- engine-direct (recommended): `POST /internal/codegen/engine/render`
+- online-compat fallback (optional): `POST /internal/codegen/render` or `/online/cgform/api/codeGenerate`
 - sidecar endpoint for SmartArk: `POST /api/codegen/jeecg/render`
 
 ## Prerequisites
 
-You need a reachable JeecgBoot service with online codegen enabled.
+You need a reachable JeecgBoot service with codegen endpoint enabled.
 
 Recommended env:
 
 ```bash
 JEECG_UPSTREAM_BASE_URL=http://localhost:8080/jeecg-boot
 JEECG_LOGIN_PATH=/sys/login
+JEECG_ENGINE_DIRECT_ENABLED=true
+JEECG_ENGINE_PATH=/internal/codegen/engine/render
+JEECG_LEGACY_ONLINE_FALLBACK_ENABLED=true
 JEECG_CODEGEN_PATH=/internal/codegen/render
 JEECG_INTERNAL_APP_ID=smart_code_ark
 JEECG_INTERNAL_SIGN_SECRET=replace_with_shared_secret
@@ -35,14 +38,15 @@ JEECG_CODEGEN_INTERNAL_APP_ID=smart_code_ark
 JEECG_CODEGEN_INTERNAL_SIGN_SECRET=replace_with_shared_secret
 JEECG_CODEGEN_INTERNAL_SIGN_VERSION=v1
 JEECG_CODEGEN_INTERNAL_TIMESTAMP_WINDOW_SECONDS=300
-JEECG_CODEGEN_INTERNAL_UPSTREAM_PATH=/online/cgform/api/codeGenerate
+JEECG_CODEGEN_INTERNAL_UPSTREAM_PATH=/online/cgform/api/codeGenerate  # legacy fallback
 JEECG_CODEGEN_INTERNAL_SERVICE_USERNAME=admin
 JEECG_CODEGEN_INTERNAL_SERVICE_CLIENT_TYPE=pc
 ```
 
-If you have not implemented internal endpoint yet, use:
+If your JeecgBoot only exposes legacy online endpoint:
 
 ```bash
+JEECG_ENGINE_DIRECT_ENABLED=false
 JEECG_CODEGEN_PATH=/online/cgform/api/codeGenerate
 ```
 
@@ -96,10 +100,20 @@ curl http://localhost:19090/health
 Response includes upstream info:
 
 ```json
-{"status":"ok","detail":"ready","upstreamBaseUrl":"http://...","codegenPath":"/internal/codegen/render"}
+{
+  "status":"ok",
+  "detail":"ready",
+  "upstreamBaseUrl":"http://...",
+  "codegenPath":"/internal/codegen/render",
+  "engineDirectEnabled":true,
+  "enginePath":"/internal/codegen/engine/render",
+  "legacyOnlineFallbackEnabled":true
+}
 ```
 
 ## Render API Smoke
+
+Recommended (engine-direct):
 
 ```bash
 curl -X POST http://localhost:19090/api/codegen/jeecg/render \
@@ -108,18 +122,39 @@ curl -X POST http://localhost:19090/api/codegen/jeecg/render \
     "taskId":"t1",
     "projectId":"p1",
     "workspaceDir":"/tmp/smartark/t1",
-    "templateId":"05a3a30dada7411c9109306aa4117068",
     "jeecg":{
-      "code":"05a3a30dada7411c9109306aa4117068",
-      "projectPath":"/tmp/smartark/t1"
+      "mode":"engine_direct",
+      "engine":{
+        "moduleName":"demo",
+        "packageName":"com.smartark.demo",
+        "tableName":"demo_order",
+        "entityName":"DemoOrder",
+        "outputDir":"/tmp/smartark/t1"
+      }
     },
     "stack":{"backend":"springboot","frontend":"vue3","db":"mysql"}
   }'
 ```
 
+Legacy fallback (only when upstream still requires online identity):
+
+```bash
+curl -X POST http://localhost:19090/api/codegen/jeecg/render \
+  -H "Content-Type: application/json" \
+  -d '{
+    "taskId":"t1",
+    "projectId":"p1",
+    "workspaceDir":"/tmp/smartark/t1",
+    "jeecg":{
+      "code":"05a3a30dada7411c9109306aa4117068"
+    }
+  }'
+```
+
 Notes:
 
-- `jeecg.code` / `jeecg.formId` is the online form id/code used by Jeecg engine.
+- `jeecg.engine` / `jeecg.engineRequest` is now the primary request shape.
+- `jeecg.code` / `jeecg.formId` is legacy online compatibility only.
 - when `JEECG_INTERNAL_SIGN_SECRET` is set, sidecar will send:
   - `X-SmartArk-AppId`
   - `X-SmartArk-Timestamp`
@@ -127,7 +162,7 @@ Notes:
   - `X-SmartArk-Body-SHA256`
   - `X-SmartArk-Signature`
   - `X-SmartArk-Sign-Version`
-- sidecar tries multiple request shapes (`json`, `form-urlencoded`, `query`) against Jeecg API.
+- sidecar request order: `explicit request` -> `engine-direct` -> `online-compat fallback`.
 - if Jeecg returns success without explicit file list, sidecar falls back to template file list for SmartArk pipeline continuity.
 
 ## Local Dev Scripts

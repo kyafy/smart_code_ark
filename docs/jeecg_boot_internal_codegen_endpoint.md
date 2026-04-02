@@ -5,6 +5,7 @@
 JeecgBoot side now supports a dedicated intranet endpoint:
 
 - `POST /internal/codegen/render`
+- `POST /internal/codegen/engine/render` (recommended target for pure codegen-engine mode)
 - method annotated with `@IgnoreAuth` (JWT login bypass for sidecar)
 - protections:
   - IP whitelist
@@ -13,6 +14,9 @@ JeecgBoot side now supports a dedicated intranet endpoint:
   - body hash check
 - delegates to Jeecg native endpoint:
   - `/online/cgform/api/codeGenerate`
+
+For historical reasons, `/internal/codegen/render` is online-compat style.  
+Pure codegen-engine integration should expose `/internal/codegen/engine/render` and accept engine params directly.
 
 ## Code Locations
 
@@ -61,6 +65,9 @@ Sidecar env (already in smart_code_ark):
 
 ```bash
 JEECG_UPSTREAM_BASE_URL=http://localhost:8080/jeecg-boot
+JEECG_ENGINE_DIRECT_ENABLED=true
+JEECG_ENGINE_PATH=/internal/codegen/engine/render
+JEECG_LEGACY_ONLINE_FALLBACK_ENABLED=true
 JEECG_CODEGEN_PATH=/internal/codegen/render
 JEECG_INTERNAL_APP_ID=smart_code_ark
 JEECG_INTERNAL_SIGN_SECRET=replace_with_shared_secret
@@ -101,11 +108,11 @@ mvn -s ../.mvn-settings.xml -pl jeecg-module-system/jeecg-system-biz -am -DskipT
 ```bash
 curl -X POST http://localhost:19090/api/codegen/jeecg/render \
   -H "Content-Type: application/json" \
-  -d '{"taskId":"t1","projectId":"p1","workspaceDir":"/tmp/smartark/t1","jeecg":{"code":"05a3a30dada7411c9109306aa4117068"}}'
+  -d '{"taskId":"t1","projectId":"p1","workspaceDir":"/tmp/smartark/t1","jeecg":{"mode":"engine_direct","engine":{"moduleName":"demo","packageName":"com.smartark.demo","tableName":"demo_order","entityName":"DemoOrder","outputDir":"/tmp/smartark/t1"}}}'
 ```
 
 Expected:
 
 - sidecar returns 200
-- JeecgBoot receives `/internal/codegen/render`
-- upstream `/online/cgform/api/codeGenerate` is called with service token
+- JeecgBoot receives `/internal/codegen/engine/render` (recommended)
+- if engine endpoint unavailable and fallback enabled, sidecar can still try `/internal/codegen/render`

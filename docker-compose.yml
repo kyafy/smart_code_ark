@@ -41,6 +41,9 @@ services:
       JEECG_WORKSPACE_ROOT: /tmp/smartark
       JEECG_UPSTREAM_BASE_URL: ${JEECG_UPSTREAM_BASE_URL:-http://host.docker.internal:8080/jeecg-boot}
       JEECG_LOGIN_PATH: ${JEECG_LOGIN_PATH:-/sys/login}
+      JEECG_ENGINE_DIRECT_ENABLED: ${JEECG_ENGINE_DIRECT_ENABLED:-true}
+      JEECG_ENGINE_PATH: ${JEECG_ENGINE_PATH:-/internal/codegen/engine/render}
+      JEECG_LEGACY_ONLINE_FALLBACK_ENABLED: ${JEECG_LEGACY_ONLINE_FALLBACK_ENABLED:-true}
       JEECG_CODEGEN_PATH: ${JEECG_CODEGEN_PATH:-/internal/codegen/render}
       JEECG_TOKEN_HEADER: ${JEECG_TOKEN_HEADER:-X-Access-Token}
       JEECG_TOKEN_JSON_PATH: ${JEECG_TOKEN_JSON_PATH:-result.token}
