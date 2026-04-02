@@ -14,10 +14,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -44,6 +46,15 @@ public class ReleaseDeployService {
 
     @Value("${smartark.release.verify-health-url:}")
     private String verifyHealthUrl;
+
+    @Value("${smartark.release.k8s.namespace:}")
+    private String releaseK8sNamespace;
+
+    @Value("${smartark.release.k8s.rollback-enabled:true}")
+    private boolean releaseK8sRollbackEnabled;
+
+    @Value("${smartark.release.k8s.rollback-kinds:deployment,statefulset,daemonset}")
+    private String releaseK8sRollbackKinds;
 
     public ReleaseDeployService(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -299,7 +310,30 @@ public class ReleaseDeployService {
                     issues
             ));
         } else if ("k8s".equals(mode)) {
-            warnings.add("k8s rollback is not automated yet; please run kubectl rollout undo manually");
+            if (!releaseK8sRollbackEnabled) {
+                warnings.add("k8s rollback is disabled by configuration");
+            } else {
+                Path k8sDir = workspaceDir.resolve("k8s");
+                if (!Files.isDirectory(k8sDir)) {
+                    issues.add(new IssueItem("release_rollback_missing_k8s", "k8s directory not found", null));
+                } else {
+                    List<String> targets = detectK8sRollbackTargets(k8sDir);
+                    if (targets.isEmpty()) {
+                        issues.add(new IssueItem("release_rollback_no_k8s_targets",
+                                "no rollback workload found under k8s manifests", null));
+                    } else {
+                        for (String target : targets) {
+                            commands.add(executeCommand(
+                                    "rollback-k8s-undo-" + sanitizeName(target),
+                                    workspaceDir,
+                                    workspaceDir,
+                                    detectK8sRollbackCommand(target),
+                                    issues
+                            ));
+                        }
+                    }
+                }
+            }
         } else {
             warnings.add("deploy mode is none, skip rollback command");
         }
@@ -455,6 +489,126 @@ public class ReleaseDeployService {
             return List.of("cmd", "/c", "kubectl", "get", "pods");
         }
         return List.of("kubectl", "get", "pods");
+    }
+
+    private List<String> detectK8sRollbackCommand(String target) {
+        String namespace = releaseK8sNamespace == null ? "" : releaseK8sNamespace.trim();
+        List<String> parts = new ArrayList<>();
+        if (isWindows()) {
+            parts.add("cmd");
+            parts.add("/c");
+        }
+        parts.add("kubectl");
+        parts.add("rollout");
+        parts.add("undo");
+        parts.add(target);
+        if (!namespace.isBlank()) {
+            parts.add("-n");
+            parts.add(namespace);
+        }
+        return List.copyOf(parts);
+    }
+
+    List<String> detectK8sRollbackTargets(Path k8sDir) throws IOException {
+        if (k8sDir == null || !Files.isDirectory(k8sDir)) {
+            return List.of();
+        }
+        Set<String> kinds = parseRollbackKinds();
+        Set<String> targets = new LinkedHashSet<>();
+        try (var stream = Files.walk(k8sDir)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(path -> {
+                        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+                        return name.endsWith(".yml") || name.endsWith(".yaml");
+                    })
+                    .forEach(path -> targets.addAll(extractRollbackTargetsFromManifest(path, kinds)));
+        }
+        return List.copyOf(targets);
+    }
+
+    private List<String> extractRollbackTargetsFromManifest(Path file, Set<String> kinds) {
+        List<String> targets = new ArrayList<>();
+        try {
+            String kind = null;
+            String name = null;
+            for (String rawLine : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                String line = rawLine == null ? "" : rawLine.trim();
+                if (line.isEmpty() || line.startsWith("#")) {
+                    continue;
+                }
+                if ("---".equals(line)) {
+                    appendRollbackTarget(targets, kinds, kind, name);
+                    kind = null;
+                    name = null;
+                    continue;
+                }
+                if (line.startsWith("kind:")) {
+                    kind = parseYamlValue(line);
+                    continue;
+                }
+                if (line.startsWith("name:") && name == null) {
+                    name = parseYamlValue(line);
+                }
+            }
+            appendRollbackTarget(targets, kinds, kind, name);
+        } catch (Exception ignored) {
+            return List.of();
+        }
+        return targets;
+    }
+
+    private void appendRollbackTarget(List<String> targets, Set<String> kinds, String kind, String name) {
+        if (kind == null || kind.isBlank() || name == null || name.isBlank()) {
+            return;
+        }
+        String resourceKind = normalizeK8sKind(kind);
+        if (!kinds.contains(resourceKind)) {
+            return;
+        }
+        targets.add(resourceKind + "/" + name.trim());
+    }
+
+    private String parseYamlValue(String line) {
+        if (line == null) {
+            return "";
+        }
+        int index = line.indexOf(':');
+        if (index < 0 || index == line.length() - 1) {
+            return "";
+        }
+        String value = line.substring(index + 1).trim();
+        if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+            return value.substring(1, value.length() - 1).trim();
+        }
+        return value;
+    }
+
+    private Set<String> parseRollbackKinds() {
+        String raw = releaseK8sRollbackKinds == null ? "" : releaseK8sRollbackKinds;
+        Set<String> kinds = new LinkedHashSet<>();
+        for (String item : raw.split(",")) {
+            String kind = normalizeK8sKind(item);
+            if (!kind.isBlank()) {
+                kinds.add(kind);
+            }
+        }
+        if (kinds.isEmpty()) {
+            kinds.add("deployment");
+            kinds.add("statefulset");
+            kinds.add("daemonset");
+        }
+        return kinds;
+    }
+
+    private String normalizeK8sKind(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if (normalized.endsWith("s")) {
+            return normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private CommandResult executeCommand(

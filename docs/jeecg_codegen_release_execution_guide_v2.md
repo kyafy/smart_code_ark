@@ -4,7 +4,7 @@
 This guide provides an executable rollout for these goals:
 
 1. Migrate JeecgBoot template capability into Smart Code Ark with frontend-selectable options.
-2. Integrate Jeecg rule-based generation into the current generation chain (`llm | jeecg_rule | hybrid`).
+2. Integrate Jeecg rule-based generation into the current generation chain (`llm | jeecg_rule | hybrid | internal_service`).
 3. Complete release pipeline: image build, image push, target deploy, deploy verify, and rollback orchestration.
 
 ## 2. Outcome Mapping
@@ -21,6 +21,7 @@ Status: done with frontend switch.
 
 - `jeecg_rule`: Jeecg rule render only, fail if Jeecg render fails.
 - `hybrid`: Jeecg first, fallback to LLM on failure.
+- `internal_service`: force internal codegen service path (provider-based, configurable).
 - `llm`: existing LLM-only path.
 
 ### 2.3 Auto build and deploy completion
@@ -78,15 +79,18 @@ Added task persistence fields:
 ## 3.4 Jeecg renderer integration
 Files:
 
+- `services/api-gateway-java/src/main/java/com/smartark/gateway/service/codegen/InternalCodegenService.java`
+- `services/api-gateway-java/src/main/java/com/smartark/gateway/service/codegen/JeecgCodegenProvider.java`
 - `services/api-gateway-java/src/main/java/com/smartark/gateway/service/JeecgCodegenClient.java`
 - `services/api-gateway-java/src/main/java/com/smartark/gateway/agent/step/RequirementAnalyzeStep.java`
 - `services/api-gateway-java/src/main/java/com/smartark/gateway/agent/step/AbstractCodegenStep.java`
 
 Behavior:
 
-- Requirement step routes by `codegenEngine`.
-- Jeecg render can be strict (`jeecg_rule`) or fallback (`hybrid`).
-- In Jeecg-only mode, codegen step avoids LLM overwrite and requires rendered files.
+- Requirement step routes by `codegenEngine` through `InternalCodegenService`.
+- `jeecg_rule` and `internal_service` run strict internal render mode.
+- `hybrid` executes internal provider first and falls back to LLM on failure.
+- In strict internal mode, codegen step avoids LLM overwrite and requires rendered files.
 
 ## 3.5 Release pipeline service
 Files:
@@ -121,6 +125,16 @@ File: `services/api-gateway-java/src/main/resources/application.yml`
 ```yaml
 smartark:
   codegen:
+    internal:
+      provider-order: local_template,jeecg
+      hybrid-provider-order: local_template,jeecg
+      strict-provider-order: local_template,jeecg
+    local-template:
+      enabled: true
+      path-rewrite-enabled: true
+      content-rewrite-enabled: true
+      extension-rewrite-enabled: true
+      overwrite-target: true
     jeecg:
       enabled: true
       base-url: http://jeecg-sidecar:19090
@@ -132,19 +146,26 @@ smartark:
     timeout-seconds: 900
     registry-prefix: registry.example.com/team
     verify-health-url: http://your-service/health
+    k8s:
+      namespace: test
+      rollback-enabled: true
+      rollback-kinds: deployment,statefulset,daemonset
 ```
 
 Notes:
 
 - Set `command-execution-enabled=false` for dry-run style validation.
 - Set `registry-prefix` to your real image registry namespace.
+- Default provider order is `local_template,jeecg`: local deterministic rewrite first, sidecar fallback second.
+- Sidecar now forwards to real Jeecg endpoint `/online/cgform/api/codeGenerate`.
+- Configure sidecar upstream env (`JEECG_UPSTREAM_BASE_URL`, `JEECG_USERNAME`, `JEECG_PASSWORD` or `JEECG_ACCESS_TOKEN`).
 
 ## 5. Frontend Operator Flow
 
 1. Open stack confirm page.
 2. Select preset or custom stack.
 3. Configure:
-   - `Codegen Engine = jeecg_rule` or `hybrid`
+   - `Codegen Engine = jeecg_rule` or `hybrid` or `internal_service`
    - `Deploy Mode = compose` or `k8s`
    - toggle `Auto Build / Auto Push / Auto Deploy`
    - optional `Strict Delivery`
@@ -159,7 +180,7 @@ POST /api/generate
   "projectId": "p_xxx",
   "options": {
     "templateId": "springboot-vue3-mysql",
-    "codegenEngine": "hybrid",
+    "codegenEngine": "internal_service",
     "deliveryLevel": "deliverable",
     "deployMode": "k8s",
     "deployEnv": "test",
@@ -196,7 +217,8 @@ Current status: both builds are verified in this rollout.
 1. Runtime host has Docker and Docker Compose for compose mode.
 2. Runtime host has `kubectl` and cluster credentials for k8s mode.
 3. Registry auth (`docker login`) is ready before push.
-4. Jeecg sidecar is reachable and returns `success/files/message` contract.
+4. Jeecg sidecar can reach JeecgBoot upstream and has valid auth config.
+5. For k8s rollback automation, manifests should include workload kinds in `rollback-kinds`.
 
 ## 9. Rollback Rule
 

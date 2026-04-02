@@ -7,10 +7,11 @@ import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.FilePlanItem;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
-import com.smartark.gateway.service.JeecgCodegenClient;
 import com.smartark.gateway.service.ModelService;
 import com.smartark.gateway.service.StepMemoryService;
 import com.smartark.gateway.service.TemplateRepoService;
+import com.smartark.gateway.service.codegen.CodegenRenderResult;
+import com.smartark.gateway.service.codegen.InternalCodegenService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,7 +34,7 @@ public class RequirementAnalyzeStep implements AgentStep {
     private final StepMemoryService stepMemoryService;
     private final TemplateRepoService templateRepoService;
     @Autowired(required = false)
-    private JeecgCodegenClient jeecgCodegenClient;
+    private InternalCodegenService internalCodegenService;
 
     public RequirementAnalyzeStep(ModelService modelService,
                                   ObjectMapper objectMapper,
@@ -63,8 +64,8 @@ public class RequirementAnalyzeStep implements AgentStep {
         String stackDb = reqJson.at("/stack/db").asText("mysql");
         String explicitTemplateId = context.getTask() == null ? null : context.getTask().getTemplateId();
         String codegenEngine = normalizeCodegenEngine(context.getTask() == null ? null : context.getTask().getCodegenEngine());
-        boolean jeecgOnly = "jeecg_rule".equals(codegenEngine);
-        boolean jeecgPreferred = jeecgOnly || "hybrid".equals(codegenEngine);
+        boolean internalOnly = "jeecg_rule".equals(codegenEngine) || "internal_service".equals(codegenEngine);
+        boolean internalPreferred = internalOnly || "hybrid".equals(codegenEngine);
         Optional<TemplateRepoService.TemplateSelection> templateSelection = templateRepoService.resolveTemplate(
                 explicitTemplateId,
                 stackBackend,
@@ -86,33 +87,34 @@ public class RequirementAnalyzeStep implements AgentStep {
                 ? context.getNormalizedInstructions()
                 : context.getInstructions();
 
-        List<String> jeecgFiles = List.of();
-        if (jeecgPreferred && templateSelection.isPresent()) {
-            if (jeecgCodegenClient == null) {
-                String message = "Jeecg codegen client is not configured";
-                if (jeecgOnly) {
+        List<String> internalGeneratedFiles = List.of();
+        if (internalPreferred && templateSelection.isPresent()) {
+            if (internalCodegenService == null) {
+                String message = "internal codegen service is not configured";
+                if (internalOnly) {
                     throw new BusinessException(ErrorCodes.TASK_FAILED, message);
                 }
                 context.logWarn(message + ", fallback to llm");
             } else {
                 templateRepoService.materializeTemplate(context);
-                JeecgCodegenClient.JeecgRenderResult renderResult = jeecgCodegenClient.tryRender(context, templateSelection.get());
-                context.logInfo("Jeecg render invoked=" + renderResult.invoked()
+                CodegenRenderResult renderResult = internalCodegenService.tryRender(codegenEngine, context, templateSelection.get());
+                context.logInfo("Internal codegen invoked=" + renderResult.invoked()
+                        + ", provider=" + renderResult.provider()
                         + ", success=" + renderResult.success()
                         + ", files=" + renderResult.files().size()
                         + ", message=" + renderResult.message());
                 if (renderResult.success() && !renderResult.files().isEmpty()) {
-                    jeecgFiles = renderResult.files();
-                } else if (jeecgOnly) {
-                    throw new BusinessException(ErrorCodes.TASK_FAILED, "jeecg rule render failed: " + renderResult.message());
+                    internalGeneratedFiles = renderResult.files();
+                } else if (internalOnly) {
+                    throw new BusinessException(ErrorCodes.TASK_FAILED, "internal codegen render failed: " + renderResult.message());
                 }
             }
         }
 
         List<String> generatedFiles;
-        if (!jeecgFiles.isEmpty()) {
-            generatedFiles = jeecgFiles;
-        } else if (jeecgOnly) {
+        if (!internalGeneratedFiles.isEmpty()) {
+            generatedFiles = internalGeneratedFiles;
+        } else if (internalOnly) {
             generatedFiles = templateFiles;
         } else {
             try {
@@ -185,7 +187,7 @@ public class RequirementAnalyzeStep implements AgentStep {
         logger.info("Generated {} files in plan.", fileList.size());
         context.logInfo("Step requirement_analyze output: filePlanSize=" + filePlan.size()
                 + ", groups=" + filePlan.stream().map(FilePlanItem::getGroup).distinct().toList());
-        if (templateSelection.isPresent() && jeecgFiles.isEmpty()) {
+        if (templateSelection.isPresent() && internalGeneratedFiles.isEmpty()) {
             templateRepoService.materializeTemplate(context);
         }
 
@@ -559,7 +561,7 @@ public class RequirementAnalyzeStep implements AgentStep {
         }
         String normalized = value.trim().toLowerCase();
         return switch (normalized) {
-            case "llm", "jeecg_rule", "hybrid" -> normalized;
+            case "llm", "jeecg_rule", "hybrid", "internal_service" -> normalized;
             default -> "llm";
         };
     }

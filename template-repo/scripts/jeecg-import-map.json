@@ -1,0 +1,76 @@
+{
+  "version": "0.1.0",
+  "profiles": [
+    {
+      "id": "default-one",
+      "source": "default/one",
+      "name": "Jeecg Online Default One",
+      "category": "jeecg-online",
+      "description": "Imported from Jeecg online code-template-online/default/one.",
+      "paths": {
+        "app": "upstream"
+      }
+    },
+    {
+      "id": "default-onetomany",
+      "source": "default/onetomany",
+      "name": "Jeecg Online Default OneToMany",
+      "category": "jeecg-online",
+      "description": "Imported from Jeecg online code-template-online/default/onetomany.",
+      "paths": {
+        "app": "upstream"
+      }
+    },
+    {
+      "id": "default-tree",
+      "source": "default/tree",
+      "name": "Jeecg Online Default Tree",
+      "category": "jeecg-online",
+      "description": "Imported from Jeecg online code-template-online/default/tree.",
+      "paths": {
+        "app": "upstream"
+      }
+    },
+    {
+      "id": "erp-onetomany",
+      "source": "erp/onetomany",
+      "name": "Jeecg Online ERP OneToMany",
+      "category": "jeecg-online",
+      "description": "Imported from Jeecg online code-template-online/erp/onetomany.",
+      "paths": {
+        "app": "upstream"
+      }
+    },
+    {
+      "id": "inner-table-onetomany",
+      "source": "inner-table/onetomany",
+      "name": "Jeecg Online InnerTable OneToMany",
+      "category": "jeecg-online",
+      "description": "Imported from Jeecg online code-template-online/inner-table/onetomany.",
+      "paths": {
+        "app": "upstream"
+      }
+    },
+    {
+      "id": "jvxe-onetomany",
+      "source": "jvxe/onetomany",
+      "name": "Jeecg Online JVXE OneToMany",
+      "category": "jeecg-online",
+      "description": "Imported from Jeecg online code-template-online/jvxe/onetomany.",
+      "paths": {
+        "app": "upstream"
+      }
+    },
+    {
+      "id": "tab-onetomany",
+      "source": "tab/onetomany",
+      "name": "Jeecg Online Tab OneToMany",
+      "category": "jeecg-online",
+      "description": "Imported from Jeecg online code-template-online/tab/onetomany.",
+      "paths": {
+        "app": "upstream"
+      }
+    }
+  ]
+}
+

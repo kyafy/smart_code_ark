@@ -200,6 +200,12 @@ const advanceTask = (task: Task) => {
     const engine = (task.options?.codegenEngine ?? 'llm').toLowerCase()
     if (engine === 'jeecg_rule') {
       task.logs.push({ level: 'info', content: 'Requirement analyzed. Using Jeecg rule renderer.', ts: Date.now() })
+    } else if (engine === 'internal_service') {
+      task.logs.push({
+        level: 'info',
+        content: 'Requirement analyzed. Using internal codegen service.',
+        ts: Date.now(),
+      })
     } else if (engine === 'hybrid') {
       task.logs.push({ level: 'info', content: 'Requirement analyzed. Using hybrid mode (Jeecg first, LLM fallback).', ts: Date.now() })
     } else {

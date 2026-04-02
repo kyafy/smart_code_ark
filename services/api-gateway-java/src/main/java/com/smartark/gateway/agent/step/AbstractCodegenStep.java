@@ -37,7 +37,7 @@ public abstract class AbstractCodegenStep implements AgentStep {
         List<FilePlanItem> filePlan = context.getFilePlan();
         String instructions = context.getNormalizedInstructions() != null ? context.getNormalizedInstructions() : context.getInstructions();
         String codegenEngine = context.getTask() == null ? "llm" : normalizeCodegenEngine(context.getTask().getCodegenEngine());
-        boolean jeecgRuleMode = "jeecg_rule".equals(codegenEngine);
+        boolean ruleMode = "jeecg_rule".equals(codegenEngine) || "internal_service".equals(codegenEngine);
         String groupStructure = buildGroupStructure(filePlan, groups);
 
         if (filePlan == null || filePlan.isEmpty()) {
@@ -72,13 +72,13 @@ public abstract class AbstractCodegenStep implements AgentStep {
                 successCount++;
                 continue;
             }
-            if (jeecgRuleMode) {
+            if (ruleMode) {
                 if (templateFileAlreadyPresent(context, filePath)) {
-                    context.logInfo("Codegen skip in jeecg_rule mode, file already exists: " + filePath);
+                    context.logInfo("Codegen skip in internal rule mode, file already exists: " + filePath);
                     successCount++;
                 } else {
                     failCount++;
-                    context.logWarn("Codegen missing required file in jeecg_rule mode: " + filePath);
+                    context.logWarn("Codegen missing required file in internal rule mode: " + filePath);
                 }
                 continue;
             }
@@ -317,7 +317,7 @@ public abstract class AbstractCodegenStep implements AgentStep {
         }
         String normalized = value.trim().toLowerCase();
         return switch (normalized) {
-            case "llm", "jeecg_rule", "hybrid" -> normalized;
+            case "llm", "jeecg_rule", "hybrid", "internal_service" -> normalized;
             default -> "llm";
         };
     }

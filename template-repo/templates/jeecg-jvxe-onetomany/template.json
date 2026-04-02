@@ -1,0 +1,21 @@
+{
+  "key": "jeecg-jvxe-onetomany",
+  "name": "Jeecg Online JVXE OneToMany",
+  "stack": {
+    "backend": "jeecg-online",
+    "frontend": "jeecg-online",
+    "db": "mysql"
+  },
+  "run": {
+    "importMode": "jeecg-template-importer",
+    "renderHint": "Use internal_service provider with Jeecg-compatible params"
+  },
+  "exampleFiles": {},
+  "source": {
+    "type": "jeecg",
+    "profileId": "jvxe-onetomany",
+    "sourceRelativePath": "jvxe/onetomany",
+    "importedAt": "2026-04-02T01:41:20.788Z",
+    "importerVersion": "0.1.0"
+  }
+}

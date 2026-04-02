@@ -33,6 +33,40 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  jeecg-sidecar:
+    build:
+      context: ./services/jeecg-codegen-sidecar
+    environment:
+      PORT: 19090
+      JEECG_WORKSPACE_ROOT: /tmp/smartark
+      JEECG_UPSTREAM_BASE_URL: ${JEECG_UPSTREAM_BASE_URL:-http://host.docker.internal:8080/jeecg-boot}
+      JEECG_LOGIN_PATH: ${JEECG_LOGIN_PATH:-/sys/login}
+      JEECG_CODEGEN_PATH: ${JEECG_CODEGEN_PATH:-/online/cgform/api/codeGenerate}
+      JEECG_TOKEN_HEADER: ${JEECG_TOKEN_HEADER:-X-Access-Token}
+      JEECG_TOKEN_JSON_PATH: ${JEECG_TOKEN_JSON_PATH:-result.token}
+      JEECG_ACCESS_TOKEN: ${JEECG_ACCESS_TOKEN:-}
+      JEECG_USERNAME: ${JEECG_USERNAME:-}
+      JEECG_PASSWORD: ${JEECG_PASSWORD:-}
+      JEECG_REQUEST_TIMEOUT_MS: ${JEECG_REQUEST_TIMEOUT_MS:-45000}
+      TZ: UTC
+    ports:
+      - "19090:19090"
+    volumes:
+      - /tmp/smartark:/tmp/smartark
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:19090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   api-gateway:
     build:
       context: ./services/api-gateway-java
@@ -57,6 +91,26 @@ services:
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-aicfu71@gmail.com}
       PREVIEW_ENABLED: ${PREVIEW_ENABLED:-true}
       PREVIEW_DOCKER_HOST: unix:///var/run/docker.sock
+      CODEGEN_JEECG_ENABLED: ${CODEGEN_JEECG_ENABLED:-true}
+      CODEGEN_JEECG_BASE_URL: ${CODEGEN_JEECG_BASE_URL:-http://jeecg-sidecar:19090}
+      CODEGEN_JEECG_RENDER_PATH: ${CODEGEN_JEECG_RENDER_PATH:-/api/codegen/jeecg/render}
+      CODEGEN_JEECG_TIMEOUT_MS: ${CODEGEN_JEECG_TIMEOUT_MS:-8000}
+      CODEGEN_INTERNAL_PROVIDER_ORDER: ${CODEGEN_INTERNAL_PROVIDER_ORDER:-local_template,jeecg}
+      CODEGEN_INTERNAL_HYBRID_PROVIDER_ORDER: ${CODEGEN_INTERNAL_HYBRID_PROVIDER_ORDER:-local_template,jeecg}
+      CODEGEN_INTERNAL_STRICT_PROVIDER_ORDER: ${CODEGEN_INTERNAL_STRICT_PROVIDER_ORDER:-local_template,jeecg}
+      CODEGEN_LOCAL_TEMPLATE_ENABLED: ${CODEGEN_LOCAL_TEMPLATE_ENABLED:-true}
+      CODEGEN_LOCAL_TEMPLATE_PATH_REWRITE_ENABLED: ${CODEGEN_LOCAL_TEMPLATE_PATH_REWRITE_ENABLED:-true}
+      CODEGEN_LOCAL_TEMPLATE_CONTENT_REWRITE_ENABLED: ${CODEGEN_LOCAL_TEMPLATE_CONTENT_REWRITE_ENABLED:-true}
+      CODEGEN_LOCAL_TEMPLATE_EXTENSION_REWRITE_ENABLED: ${CODEGEN_LOCAL_TEMPLATE_EXTENSION_REWRITE_ENABLED:-true}
+      CODEGEN_LOCAL_TEMPLATE_OVERWRITE_TARGET: ${CODEGEN_LOCAL_TEMPLATE_OVERWRITE_TARGET:-true}
+      RELEASE_ENABLED: ${RELEASE_ENABLED:-true}
+      RELEASE_COMMAND_EXECUTION_ENABLED: ${RELEASE_COMMAND_EXECUTION_ENABLED:-true}
+      RELEASE_TIMEOUT_SECONDS: ${RELEASE_TIMEOUT_SECONDS:-900}
+      RELEASE_REGISTRY_PREFIX: ${RELEASE_REGISTRY_PREFIX:-}
+      RELEASE_VERIFY_HEALTH_URL: ${RELEASE_VERIFY_HEALTH_URL:-}
+      RELEASE_K8S_NAMESPACE: ${RELEASE_K8S_NAMESPACE:-}
+      RELEASE_K8S_ROLLBACK_ENABLED: ${RELEASE_K8S_ROLLBACK_ENABLED:-true}
+      RELEASE_K8S_ROLLBACK_KINDS: ${RELEASE_K8S_ROLLBACK_KINDS:-deployment,statefulset,daemonset}
       TZ: UTC
     ports:
       - "8080:8080"
@@ -76,6 +130,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      jeecg-sidecar:
+        condition: service_healthy
 
   frontend:
     build:

@@ -63,6 +63,7 @@ public class JeecgCodegenClient {
                     "db", spec.at("/stack/db").asText("mysql")
             ));
             payload.put("templateFiles", selection.metadata() == null ? Map.of() : selection.metadata().exampleFiles());
+            payload.put("jeecg", buildJeecgHints(spec, context, selection));
 
             String url = buildUrl(jeecgBaseUrl, jeecgRenderPath);
             HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
@@ -134,6 +135,51 @@ public class JeecgCodegenClient {
             return value;
         }
         return value.substring(0, maxLen);
+    }
+
+    private Map<String, Object> buildJeecgHints(
+            JsonNode spec,
+            AgentExecutionContext context,
+            TemplateRepoService.TemplateSelection selection
+    ) {
+        Map<String, Object> hints = new LinkedHashMap<>();
+        JsonNode jeecgNode = spec == null ? null : spec.path("jeecg");
+        if (jeecgNode != null && jeecgNode.isObject()) {
+            putIfNotBlank(hints, "id", jeecgNode.path("id").asText(null));
+            putIfNotBlank(hints, "formId", jeecgNode.path("formId").asText(null));
+            putIfNotBlank(hints, "code", jeecgNode.path("code").asText(null));
+            putIfNotBlank(hints, "cgformId", jeecgNode.path("cgformId").asText(null));
+            putIfNotBlank(hints, "tableName", jeecgNode.path("tableName").asText(null));
+            putIfNotBlank(hints, "projectPath", jeecgNode.path("projectPath").asText(null));
+            putIfNotBlank(hints, "packageName", jeecgNode.path("packageName").asText(null));
+            putIfNotBlank(hints, "entityPackage", jeecgNode.path("entityPackage").asText(null));
+            putIfNotBlank(hints, "bussiPackage", jeecgNode.path("bussiPackage").asText(null));
+            putIfNotBlank(hints, "moduleName", jeecgNode.path("moduleName").asText(null));
+            putIfNotBlank(hints, "templateStyle", jeecgNode.path("templateStyle").asText(null));
+            putIfNotBlank(hints, "stylePath", jeecgNode.path("stylePath").asText(null));
+            putIfNotBlank(hints, "vueStyle", jeecgNode.path("vueStyle").asText(null));
+            if (jeecgNode.path("request").isObject()) {
+                hints.put("request", objectMapper.convertValue(jeecgNode.path("request"), Map.class));
+            }
+            if (jeecgNode.path("extraParams").isObject()) {
+                hints.put("extraParams", objectMapper.convertValue(jeecgNode.path("extraParams"), Map.class));
+            }
+        }
+        if (context != null && context.getTask() != null) {
+            putIfNotBlank(hints, "projectPath", context.getWorkspaceDir() == null ? null : context.getWorkspaceDir().toString());
+            putIfNotBlank(hints, "code", context.getTask().getTemplateId());
+        }
+        if (selection != null) {
+            putIfNotBlank(hints, "templateStyle", selection.templateKey());
+        }
+        return hints;
+    }
+
+    private void putIfNotBlank(Map<String, Object> target, String key, String value) {
+        if (target == null || key == null || key.isBlank() || value == null || value.isBlank()) {
+            return;
+        }
+        target.putIfAbsent(key, value.trim());
     }
 
     public record JeecgRenderResult(

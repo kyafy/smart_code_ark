@@ -113,7 +113,7 @@ const presets: StackPreset[] = [
 
 const selectedPreset = ref<StackPresetKey>('springboot-vue3-mysql')
 const form = ref<StackConfig>({ ...presets[0].stack })
-const codegenEngine = ref<'llm' | 'jeecg_rule' | 'hybrid'>('llm')
+const codegenEngine = ref<'llm' | 'jeecg_rule' | 'hybrid' | 'internal_service'>('llm')
 const deliveryLevel = ref<'draft' | 'validated' | 'deliverable'>('draft')
 const deployMode = ref<'none' | 'compose' | 'k8s'>('none')
 const deployEnv = ref<'local' | 'test' | 'staging' | 'prod'>('test')
@@ -126,6 +126,7 @@ const engineOptions = [
   { label: 'LLM Generation', value: 'llm' },
   { label: 'Jeecg Rule Render', value: 'jeecg_rule' },
   { label: 'Hybrid (Jeecg first, LLM fallback)', value: 'hybrid' },
+  { label: 'Internal Codegen Service', value: 'internal_service' },
 ]
 
 const deliveryOptions = [
@@ -383,7 +384,7 @@ const onConfirmAndGenerate = async () => {
               <el-option v-for="option in engineOptions" :key="option.value" :label="option.label" :value="option.value" />
             </el-select>
             <p class="mt-2 text-xs text-slate-500">
-              Jeecg Rule and Hybrid modes require template compatibility and Jeecg render service availability.
+              Jeecg Rule / Hybrid / Internal Service modes require template compatibility and internal codegen provider availability.
             </p>
           </div>
 

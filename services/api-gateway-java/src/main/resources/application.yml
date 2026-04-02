@@ -59,6 +59,16 @@ smartark:
     health-check-interval-ms: ${RUNTIME_SMOKE_HEALTH_CHECK_INTERVAL:3000}
     keep-runtime-for-preview-enabled: ${RUNTIME_SMOKE_KEEP_RUNTIME_FOR_PREVIEW_ENABLED:true}
   codegen:
+    internal:
+      provider-order: ${CODEGEN_INTERNAL_PROVIDER_ORDER:local_template,jeecg}
+      hybrid-provider-order: ${CODEGEN_INTERNAL_HYBRID_PROVIDER_ORDER:local_template,jeecg}
+      strict-provider-order: ${CODEGEN_INTERNAL_STRICT_PROVIDER_ORDER:local_template,jeecg}
+    local-template:
+      enabled: ${CODEGEN_LOCAL_TEMPLATE_ENABLED:true}
+      path-rewrite-enabled: ${CODEGEN_LOCAL_TEMPLATE_PATH_REWRITE_ENABLED:true}
+      content-rewrite-enabled: ${CODEGEN_LOCAL_TEMPLATE_CONTENT_REWRITE_ENABLED:true}
+      extension-rewrite-enabled: ${CODEGEN_LOCAL_TEMPLATE_EXTENSION_REWRITE_ENABLED:true}
+      overwrite-target: ${CODEGEN_LOCAL_TEMPLATE_OVERWRITE_TARGET:true}
     jeecg:
       enabled: ${CODEGEN_JEECG_ENABLED:false}
       base-url: ${CODEGEN_JEECG_BASE_URL:http://localhost:19090}
@@ -70,6 +80,10 @@ smartark:
     timeout-seconds: ${RELEASE_TIMEOUT_SECONDS:900}
     registry-prefix: ${RELEASE_REGISTRY_PREFIX:}
     verify-health-url: ${RELEASE_VERIFY_HEALTH_URL:}
+    k8s:
+      namespace: ${RELEASE_K8S_NAMESPACE:}
+      rollback-enabled: ${RELEASE_K8S_ROLLBACK_ENABLED:true}
+      rollback-kinds: ${RELEASE_K8S_ROLLBACK_KINDS:deployment,statefulset,daemonset}
   memory:
     short-term:
       top-k: ${MEMORY_SHORT_TERM_TOP_K:8}

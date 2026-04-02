@@ -1,0 +1,21 @@
+{
+  "key": "jeecg-default-tree",
+  "name": "Jeecg Online Default Tree",
+  "stack": {
+    "backend": "jeecg-online",
+    "frontend": "jeecg-online",
+    "db": "mysql"
+  },
+  "run": {
+    "importMode": "jeecg-template-importer",
+    "renderHint": "Use internal_service provider with Jeecg-compatible params"
+  },
+  "exampleFiles": {},
+  "source": {
+    "type": "jeecg",
+    "profileId": "default-tree",
+    "sourceRelativePath": "default/tree",
+    "importedAt": "2026-04-02T01:41:20.735Z",
+    "importerVersion": "0.1.0"
+  }
+}

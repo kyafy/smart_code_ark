@@ -76,7 +76,7 @@ public record GenerateOptions(
         }
         String normalized = value.trim().toLowerCase();
         return switch (normalized) {
-            case "llm", "jeecg_rule", "hybrid" -> normalized;
+            case "llm", "jeecg_rule", "hybrid", "internal_service" -> normalized;
             default -> "llm";
         };
     }

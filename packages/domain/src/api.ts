@@ -135,7 +135,7 @@ export type GenerateResult = {
 export type GenerateOptions = {
   deliveryLevel?: 'draft' | 'validated' | 'deliverable' | string
   templateId?: string | null
-  codegenEngine?: 'llm' | 'jeecg_rule' | 'hybrid' | string
+  codegenEngine?: 'llm' | 'jeecg_rule' | 'hybrid' | 'internal_service' | string
   deployMode?: 'none' | 'compose' | 'k8s' | string
   deployEnv?: 'local' | 'test' | 'staging' | 'prod' | string
   strictDelivery?: boolean

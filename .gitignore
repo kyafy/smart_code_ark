@@ -37,3 +37,4 @@ pnpm-debug.log*
 
 .claude/
 .trae/
+template-repo/scripts/jeecg-import-report.json
