@@ -80,6 +80,16 @@ smartark:
     workspace-root: /tmp/smartark/
     max-retries: 2
     retryable-step-codes: requirement_analyze,codegen_backend,codegen_frontend,sql_generate,artifact_contract_validate,rag_index_enrich,rag_retrieve_rerank
+    executor-mode: ${AGENT_EXECUTOR_MODE:legacy}
+    executor-ab-ratio: ${AGENT_EXECUTOR_AB_RATIO:0}
+    internal-token: ${AGENT_INTERNAL_TOKEN:smartark-internal}
+    preview:
+      skip-when-deepagent: ${AGENT_PREVIEW_SKIP_WHEN_DEEPAGENT:true}
+    deepagent:
+      supported-task-types: ${AGENT_DEEPAGENT_SUPPORTED_TASK_TYPES:generate,modify}
+      codegen-path: ${AGENT_DEEPAGENT_CODEGEN_PATH:/v1/agent/codegen/run}
+      callback-base-url: ${AGENT_DEEPAGENT_CALLBACK_BASE_URL:http://localhost:8080}
+      callback-token: ${AGENT_DEEPAGENT_CALLBACK_TOKEN:${AGENT_INTERNAL_TOKEN:smartark-internal}}
   preview:
     enabled: ${PREVIEW_ENABLED:false}
     auto-deploy-on-finish: ${PREVIEW_AUTO_DEPLOY_ON_FINISH:true}

@@ -16,6 +16,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -57,5 +58,17 @@ class AuthInterceptorTest {
         BusinessException ex = assertThrows(BusinessException.class, () -> interceptor.preHandle(request, response, new Object()));
 
         assertEquals(ErrorCodes.FORBIDDEN, ex.getCode());
+    }
+
+    @Test
+    void preHandle_shouldAllowInternalCallbackWithoutBearer() {
+        AuthInterceptor interceptor = new AuthInterceptor(tokenService, userRepository);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/internal/task/t1/step-update");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        boolean allowed = interceptor.preHandle(request, response, new Object());
+
+        assertTrue(allowed);
+        verifyNoInteractions(tokenService, userRepository);
     }
 }

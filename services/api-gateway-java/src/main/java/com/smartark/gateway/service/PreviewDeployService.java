@@ -52,6 +52,8 @@ public class PreviewDeployService {
     private FrontendRuntimePlanService frontendRuntimePlanService;
     @Autowired(required = false)
     private ObjectMapper objectMapper;
+    @Autowired(required = false)
+    private TaskExecutionModeResolver taskExecutionModeResolver;
 
     @Autowired
     private PreviewSseRegistry previewSseRegistry;
@@ -74,6 +76,8 @@ public class PreviewDeployService {
     private String previewLogDir;
     @Value("${smartark.preview.gateway.enabled:false}")
     private boolean previewGatewayEnabled;
+    @Value("${smartark.agent.preview.skip-when-deepagent:true}")
+    private boolean skipPreviewWhenDeepAgent;
 
     public PreviewDeployService(TaskPreviewRepository taskPreviewRepository,
                                 TaskRepository taskRepository,
@@ -93,6 +97,10 @@ public class PreviewDeployService {
                 return;
             }
             TaskEntity task = taskOptional.get();
+            if (shouldSkipBecauseDeepAgent(task)) {
+                appendTaskLog(taskId, "info", "Preview deployment skipped: deepagent mode selected");
+                return;
+            }
             if (!shouldTriggerDeploy(task)) {
                 return;
             }
@@ -344,6 +352,15 @@ public class PreviewDeployService {
                 && autoDeployOnFinish
                 && "finished".equals(task.getStatus())
                 && ("generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType()));
+    }
+
+    private boolean shouldSkipBecauseDeepAgent(TaskEntity task) {
+        if (!skipPreviewWhenDeepAgent || taskExecutionModeResolver == null || task == null) {
+            return false;
+        }
+        TaskExecutionModeResolver.TaskExecutionDecision decision =
+                taskExecutionModeResolver.resolve(task.getId(), task.getTaskType());
+        return decision.isDeepAgentSelected();
     }
 
     private String buildStaticPreviewUrl(String taskId) {

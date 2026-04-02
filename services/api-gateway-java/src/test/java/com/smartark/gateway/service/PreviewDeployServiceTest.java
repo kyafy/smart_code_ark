@@ -50,6 +50,8 @@ class PreviewDeployServiceTest {
     private PreviewSseRegistry previewSseRegistry;
     @Mock
     private PreviewGatewayService previewGatewayService;
+    @Mock
+    private TaskExecutionModeResolver taskExecutionModeResolver;
 
     private PreviewDeployService previewDeployService;
 
@@ -73,6 +75,7 @@ class PreviewDeployServiceTest {
         ReflectionTestUtils.setField(previewDeployService, "healthCheckTimeoutSeconds", 60);
         ReflectionTestUtils.setField(previewDeployService, "healthCheckIntervalMs", 3000);
         ReflectionTestUtils.setField(previewDeployService, "previewGatewayEnabled", false);
+        ReflectionTestUtils.setField(previewDeployService, "skipPreviewWhenDeepAgent", true);
         ReflectionTestUtils.setField(previewDeployService, "frontendRuntimePlanService",
                 new FrontendRuntimePlanService(new ObjectMapper(), null));
         ReflectionTestUtils.setField(previewDeployService, "objectMapper", new ObjectMapper());
@@ -203,6 +206,26 @@ class PreviewDeployServiceTest {
         previewDeployService.deployPreviewAsync("t7");
 
         verify(taskPreviewRepository, never()).save(any(TaskPreviewEntity.class));
+    }
+
+    @Test
+    void deployPreviewAsync_shouldSkipWhenDeepagentSelected() {
+        ReflectionTestUtils.setField(previewDeployService, "taskExecutionModeResolver", taskExecutionModeResolver);
+        TaskEntity task = buildTask("tda", "generate", "finished");
+        when(taskRepository.findById("tda")).thenReturn(Optional.of(task));
+        when(taskExecutionModeResolver.resolve("tda", "generate")).thenReturn(
+                new TaskExecutionModeResolver.TaskExecutionDecision(
+                        "tda", "generate", "deepagent", "deepagent", "forced_deepagent", 0, 100, true
+                )
+        );
+        when(taskLogRepository.save(any(TaskLogEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        previewDeployService.deployPreviewAsync("tda");
+
+        verify(taskPreviewRepository, never()).save(any(TaskPreviewEntity.class));
+        ArgumentCaptor<TaskLogEntity> logCaptor = ArgumentCaptor.forClass(TaskLogEntity.class);
+        verify(taskLogRepository).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().getContent()).contains("deepagent mode selected");
     }
 
     // ===== Quota Tests =====
