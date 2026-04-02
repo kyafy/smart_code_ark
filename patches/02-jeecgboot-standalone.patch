@@ -1,0 +1,62 @@
+diff --git a/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-dev.yml b/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-dev.yml
+index 8722baac..dad49f97 100644
+--- a/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-dev.yml
++++ b/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-dev.yml
+@@ -151,7 +151,7 @@ spring:
+           slow-sql-millis: 5000
+       datasource:
+         master:
+-          url: jdbc:mysql://127.0.0.1:3306/jeecg-boot?characterEncoding=UTF-8&useUnicode=true&useSSL=false&tinyInt1isBit=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
++          url: jdbc:mysql://127.0.0.1:3306/jeecgai?characterEncoding=UTF-8&useUnicode=true&useSSL=false&tinyInt1isBit=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+           username: root
+           password: root
+           driver-class-name: com.mysql.cj.jdbc.Driver
+diff --git a/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-docker.yml b/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-docker.yml
+index 858fd0a5..d8247395 100644
+--- a/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-docker.yml
++++ b/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-docker.yml
+@@ -145,7 +145,7 @@ spring:
+           slow-sql-millis: 5000
+       datasource:
+         master:
+-          url: jdbc:mysql://jeecg-boot-mysql:3306/jeecg-boot?characterEncoding=UTF-8&useUnicode=true&useSSL=false&tinyInt1isBit=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
++          url: jdbc:mysql://jeecg-boot-mysql:3306/jeecgai?characterEncoding=UTF-8&useUnicode=true&useSSL=false&tinyInt1isBit=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+           username: root
+           password: root
+           driver-class-name: com.mysql.cj.jdbc.Driver
+diff --git a/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-prod.yml b/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-prod.yml
+index e77658e2..982496bd 100644
+--- a/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-prod.yml
++++ b/jeecg-boot/jeecg-module-system/jeecg-system-start/src/main/resources/application-prod.yml
+@@ -144,7 +144,7 @@ spring:
+           slow-sql-millis: 5000
+       datasource:
+         master:
+-          url: jdbc:mysql://127.0.0.1:3306/jeecg-boot?characterEncoding=UTF-8&useUnicode=true&useSSL=false&tinyInt1isBit=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
++          url: jdbc:mysql://127.0.0.1:3306/jeecgai?characterEncoding=UTF-8&useUnicode=true&useSSL=false&tinyInt1isBit=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+           username: root
+           password: root
+           driver-class-name: com.mysql.cj.jdbc.Driver
+diff --git a/jeecg-boot/pom.xml b/jeecg-boot/pom.xml
+index f820f646..755b4449 100644
+--- a/jeecg-boot/pom.xml
++++ b/jeecg-boot/pom.xml
+@@ -734,17 +734,5 @@
+ 				<config.password></config.password>
+             </properties>
+         </profile>
+-		<!-- SpringCloud运行环境 -->
+-		<profile>
+-			<id>SpringCloud</id>
+-			<activation>
+-				<!--默认激活配置-->
+-				<activeByDefault>true</activeByDefault>
+-			</activation>
+-			<modules>
+-				<!-- 微服务模块 -->
+-				<module>jeecg-server-cloud</module>
+-			</modules>
+-		</profile>
+     </profiles>
+ </project>
+\ No newline at end of file
