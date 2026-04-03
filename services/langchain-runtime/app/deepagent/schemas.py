@@ -18,6 +18,22 @@ class StackConfig(BaseModel):
     db: str = "mysql"
 
 
+class LLMConfigOverride(BaseModel):
+    """Per-request LLM configuration override.
+
+    Java dispatches this when a task needs a non-default model
+    (e.g. a large project requiring a higher-context model).
+    All fields are optional; unset fields inherit from the runtime environment.
+    """
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    codegen_timeout: Optional[int] = None    # seconds per file, overrides DEEPAGENT_LLM_CODEGEN_TIMEOUT
+    codegen_concurrency: Optional[int] = None  # overrides DEEPAGENT_LLM_CONCURRENCY
+
+
 class CodegenRunRequest(BaseModel):
     task_id: str
     project_id: str
@@ -30,6 +46,7 @@ class CodegenRunRequest(BaseModel):
     callback_base_url: str = "http://localhost:8080"
     callback_api_key: str = "smartark-internal"
     sandbox_config: Optional[Dict[str, Any]] = None
+    llm_config: Optional[LLMConfigOverride] = None  # Phase 3: per-task model override
 
 
 class CodegenRunResponse(BaseModel):

@@ -14,7 +14,6 @@ import com.smartark.gateway.db.repo.PaperSourceRepository;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.service.ArxivService;
 import com.smartark.gateway.service.CrossrefService;
-import com.smartark.gateway.service.ModelService;
 import com.smartark.gateway.service.QualityGateService;
 import com.smartark.gateway.service.RagService;
 import com.smartark.gateway.service.SemanticScholarService;
@@ -47,7 +46,6 @@ import java.util.Optional;
 @RequestMapping({"/internal", "/api/internal"})
 @Tag(name = "Internal Capability", description = "Internal capability endpoints for DeepAgent runtime callbacks")
 public class InternalCapabilityController {
-    private final ModelService modelService;
     private final TemplateRepoService templateRepoService;
     private final SemanticScholarService semanticScholarService;
     private final CrossrefService crossrefService;
@@ -64,8 +62,7 @@ public class InternalCapabilityController {
     @Value("${smartark.agent.workspace-root:/tmp/smartark/}")
     private String workspaceRoot;
 
-    public InternalCapabilityController(ModelService modelService,
-                                        TemplateRepoService templateRepoService,
+    public InternalCapabilityController(TemplateRepoService templateRepoService,
                                         SemanticScholarService semanticScholarService,
                                         CrossrefService crossrefService,
                                         ArxivService arxivService,
@@ -75,7 +72,6 @@ public class InternalCapabilityController {
                                         PaperTopicSessionRepository paperTopicSessionRepository,
                                         PaperOutlineVersionRepository paperOutlineVersionRepository,
                                         ObjectMapper objectMapper) {
-        this.modelService = modelService;
         this.templateRepoService = templateRepoService;
         this.semanticScholarService = semanticScholarService;
         this.crossrefService = crossrefService;
@@ -88,51 +84,10 @@ public class InternalCapabilityController {
         this.objectMapper = objectMapper;
     }
 
-    @PostMapping("/model/structure")
-    @Operation(summary = "Generate project file structure")
-    public ResponseEntity<?> generateStructure(
-            @RequestHeader(value = "X-Internal-Token", required = false) String token,
-            @RequestBody(required = false) ModelStructureRequest request) {
-        if (!isAuthorized(token)) {
-            return unauthorized();
-        }
-        String prd = request == null ? "" : defaultText(request.prd());
-        String instructions = request == null ? "" : defaultText(request.instructions());
-        Map<String, String> stack = request == null ? Map.of() : safeMap(request.stack());
-
-        List<String> files = modelService.generateProjectStructure(
-                prd,
-                stackValue(stack, "backend"),
-                stackValue(stack, "frontend"),
-                stackValue(stack, "db"),
-                instructions
-        );
-        return ResponseEntity.ok(Map.of("files", files == null ? List.of() : files));
-    }
-
-    @PostMapping("/model/generate-file")
-    @Operation(summary = "Generate single file content")
-    public ResponseEntity<?> generateFile(
-            @RequestHeader(value = "X-Internal-Token", required = false) String token,
-            @RequestBody(required = false) ModelGenerateFileRequest request) {
-        if (!isAuthorized(token)) {
-            return unauthorized();
-        }
-        if (request == null || request.filePath() == null || request.filePath().isBlank()) {
-            return badRequest("file_path is required");
-        }
-
-        String content = modelService.generateFileContent(
-                null,
-                null,
-                defaultText(request.prd()),
-                request.filePath().trim(),
-                defaultText(request.techStack()),
-                defaultText(request.instructions()),
-                defaultText(request.projectStructure())
-        );
-        return ResponseEntity.ok(Map.of("content", content == null ? "" : content));
-    }
+    // Endpoints /model/structure and /model/generate-file removed in Phase 3.
+    // DeepAgent calls the LLM directly (DEEPAGENT_LLM_DIRECT_ENABLED=true).
+    // DTOs ModelStructureRequest and ModelGenerateFileRequest are retained for
+    // one additional sprint in case of emergency rollback; they can be deleted after.
 
     @PostMapping("/template/resolve")
     @Operation(summary = "Resolve template by stack or template id")

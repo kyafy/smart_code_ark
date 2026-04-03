@@ -31,8 +31,9 @@ class JavaApiError(RuntimeError):
 class JavaApiClient:
     """Async HTTP client for Java API Gateway internal endpoints."""
 
-    def __init__(self, config: Optional[CallbackConfig] = None) -> None:
+    def __init__(self, config: Optional[CallbackConfig] = None, run_id: Optional[str] = None) -> None:
         self._config = config or CallbackConfig()
+        self._run_id = run_id  # propagated to step-update payloads for retry tracing
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _ensure_client(self) -> httpx.AsyncClient:
@@ -105,6 +106,7 @@ class JavaApiClient:
         output: Optional[Dict[str, Any]] = None,
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> None:
         """POST /api/internal/task/{taskId}/step-update"""
         payload: Dict[str, Any] = {
@@ -119,6 +121,10 @@ class JavaApiClient:
             payload["error_code"] = error_code
         if error_message:
             payload["error_message"] = error_message
+        # run_id: explicit arg wins, then fall back to the instance-level run_id
+        effective_run_id = run_id or self._run_id
+        if effective_run_id:
+            payload["run_id"] = effective_run_id
 
         await self._post_json(f"/api/internal/task/{task_id}/step-update", payload)
         logger.debug("Step update sent: task=%s step=%s status=%s", task_id, step_code, status)
@@ -322,6 +328,21 @@ class JavaApiClient:
                 "chapter_evidence_map": chapter_evidence_map or {},
             },
         )
+
+    # ------------------------------------------------------------------
+    # Node-level observability (Phase 2)
+    # ------------------------------------------------------------------
+
+    async def post_node_metrics(self, task_id: str, metrics: Dict[str, Any]) -> None:
+        """POST /api/internal/task/{taskId}/node-metrics
+
+        Non-fatal: metric delivery failure must not block the main pipeline.
+        """
+        try:
+            await self._post_json(f"/api/internal/task/{task_id}/node-metrics", metrics)
+            logger.debug("node_metrics sent: task=%s node=%s", task_id, metrics.get("node"))
+        except Exception as exc:
+            logger.warning("node_metrics callback failed (non-fatal): %s", exc)
 
     async def persist_paper_manuscript(
         self,

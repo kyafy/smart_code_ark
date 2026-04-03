@@ -15,7 +15,10 @@ public record DeepAgentCodegenRunRequest(
         @JsonProperty("workspace_dir") String workspaceDir,
         @JsonProperty("callback_base_url") String callbackBaseUrl,
         @JsonProperty("callback_api_key") String callbackApiKey,
-        @JsonProperty("sandbox_config") Map<String, Object> sandboxConfig
+        @JsonProperty("sandbox_config") Map<String, Object> sandboxConfig,
+        // Phase 3: optional per-task LLM override forwarded to DeepAgent runtime.
+        // Null means "use runtime defaults". Fields match LLMConfigOverride in schemas.py.
+        @JsonProperty("llm_config") Map<String, Object> llmConfig
 ) {
     public record StackConfig(
             String backend,

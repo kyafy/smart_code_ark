@@ -1,18 +1,33 @@
-"""Code generation StateGraph with sandbox back-chain.
+"""Code generation StateGraph with parallel domains and sandbox back-chain.
 
-Graph topology:
-    requirement_analyze → sql_generate → codegen_backend → codegen_frontend
-        → sandbox_init → sandbox_build_verify
-        ←→ sandbox_build_fix  (conditional loop, max 3 rounds)
-        → sandbox_smoke_test
-        ←→ sandbox_build_fix  (conditional loop for runtime issues)
-        → sandbox_preview_deploy → END
+Graph topology (Phase 2):
+
+    requirement_analyze
+           ↓
+    plan_validate  (rule-based pre-flight check, no LLM)
+    ┌──────┴─────────┬──────────────────┐
+sql_generate   codegen_backend   codegen_frontend   ← parallel via Send API
+    └──────┬─────────┴──────────────────┘
+    artifact_contract_validate  (cross-domain consistency check)
+           ↓
+    sandbox_init → build_verify
+                       ↓ (conditional)
+                   build_fix  ←→  build_verify  (loop, max 3 rounds)
+                       ↓
+                   smoke_test
+                       ↓ (conditional)
+                   build_fix  ←→  smoke_test    (loop, max 2 rounds)
+                       ↓
+                   preview_deploy → END
 """
 
 from __future__ import annotations
 
+import logging
+
 from langgraph.graph import END, StateGraph
 
+from ..nodes.artifact_contract_validate_node import artifact_contract_validate
 from ..nodes.codegen_nodes import (
     codegen_backend,
     codegen_frontend,
@@ -26,7 +41,29 @@ from ..nodes.codegen_nodes import (
     should_fix_smoke,
     sql_generate,
 )
+from ..nodes.plan_validate_node import plan_validate, route_to_parallel_codegen
 from ..state.codegen_state import CodegenState
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Optional: LangGraph RetryPolicy (requires langgraph >= 0.2)
+# ---------------------------------------------------------------------------
+try:
+    from langgraph.pregel import RetryPolicy as _RetryPolicy
+    import httpx as _httpx
+
+    _CODEGEN_RETRY = _RetryPolicy(
+        max_attempts=2,
+        retry_on=(_httpx.TimeoutException, _httpx.NetworkError),
+        wait=1.0,
+        wait_factor=2.0,
+        wait_max=10.0,
+    )
+    logger.info("codegen_graph: LangGraph RetryPolicy enabled for generation nodes")
+except Exception:
+    _CODEGEN_RETRY = None  # type: ignore[assignment]
+    logger.info("codegen_graph: RetryPolicy not available, skipping node-level retry")
 
 
 def build_codegen_graph() -> StateGraph:
@@ -36,30 +73,49 @@ def build_codegen_graph() -> StateGraph:
     """
     graph = StateGraph(CodegenState)
 
-    # --- Front-chain: requirement analysis → code generation ---
-    graph.add_node("requirement_analyze", requirement_analyze)
-    graph.add_node("sql_generate", sql_generate)
-    graph.add_node("codegen_backend", codegen_backend)
-    graph.add_node("codegen_frontend", codegen_frontend)
+    # --- Front-chain ---
+    _add = lambda name, fn, retry=None: (  # noqa: E731
+        graph.add_node(name, fn, retry=retry) if retry is not None
+        else graph.add_node(name, fn)
+    )
 
-    # --- Sandbox back-chain: build → fix → test → preview ---
-    graph.add_node("sandbox_init", sandbox_init)
-    graph.add_node("build_verify", sandbox_build_verify)
-    graph.add_node("build_fix", sandbox_build_fix)
-    graph.add_node("smoke_test", sandbox_smoke_test)
-    graph.add_node("preview_deploy", sandbox_preview_deploy)
+    _add("requirement_analyze", requirement_analyze)
+    _add("plan_validate", plan_validate)
 
-    # --- Edges: front-chain (sequential) ---
+    # Parallel generation nodes — retry on transient LLM / network errors
+    _add("sql_generate", sql_generate, retry=_CODEGEN_RETRY)
+    _add("codegen_backend", codegen_backend, retry=_CODEGEN_RETRY)
+    _add("codegen_frontend", codegen_frontend, retry=_CODEGEN_RETRY)
+
+    _add("artifact_contract_validate", artifact_contract_validate)
+
+    # --- Sandbox back-chain ---
+    _add("sandbox_init", sandbox_init)
+    _add("build_verify", sandbox_build_verify)
+    _add("build_fix", sandbox_build_fix)
+    _add("smoke_test", sandbox_smoke_test)
+    _add("preview_deploy", sandbox_preview_deploy)
+
+    # --- Edges: front-chain ---
     graph.set_entry_point("requirement_analyze")
-    graph.add_edge("requirement_analyze", "sql_generate")
-    graph.add_edge("sql_generate", "codegen_backend")
-    graph.add_edge("codegen_backend", "codegen_frontend")
-    graph.add_edge("codegen_frontend", "sandbox_init")
+    graph.add_edge("requirement_analyze", "plan_validate")
+
+    # Fan-out: plan_validate → [sql_generate, codegen_backend, codegen_frontend] in parallel
+    graph.add_conditional_edges(
+        "plan_validate",
+        route_to_parallel_codegen,
+    )
+
+    # Fan-in: all three parallel nodes → artifact_contract_validate
+    graph.add_edge("sql_generate", "artifact_contract_validate")
+    graph.add_edge("codegen_backend", "artifact_contract_validate")
+    graph.add_edge("codegen_frontend", "artifact_contract_validate")
+
+    graph.add_edge("artifact_contract_validate", "sandbox_init")
 
     # --- Edges: sandbox chain ---
     graph.add_edge("sandbox_init", "build_verify")
 
-    # After build_verify: conditional → fix or smoke_test
     graph.add_conditional_edges(
         "build_verify",
         should_fix_build,
@@ -69,10 +125,8 @@ def build_codegen_graph() -> StateGraph:
         },
     )
 
-    # After build_fix: always re-verify
     graph.add_edge("build_fix", "build_verify")
 
-    # After smoke_test: conditional → fix or preview
     graph.add_conditional_edges(
         "smoke_test",
         should_fix_smoke,
@@ -82,7 +136,6 @@ def build_codegen_graph() -> StateGraph:
         },
     )
 
-    # Preview deploy → END
     graph.add_edge("preview_deploy", END)
 
     return graph.compile()

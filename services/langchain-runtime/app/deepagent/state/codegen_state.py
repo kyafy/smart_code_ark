@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import operator
+from typing import Any, Annotated, Dict, List, Optional
 from typing_extensions import TypedDict
+
+
+def _merge_dicts(a: Dict[str, str], b: Dict[str, str]) -> Dict[str, str]:
+    """Reducer for parallel nodes that each produce a subset of generated_files."""
+    return {**a, **b}
 
 
 class CodegenState(TypedDict, total=False):
@@ -13,6 +19,13 @@ class CodegenState(TypedDict, total=False):
     task_id: str
     project_id: str
     user_id: int
+
+    # --- run tracking (Phase 2) ---
+    run_id: str                        # unique per pipeline execution, used in metrics & logs
+    node_metrics: Optional[Dict[str, Any]]  # latest node metrics snapshot
+
+    # --- per-task LLM override (Phase 3) ---
+    llm_config_override: Optional[Dict[str, Any]]  # forwarded from CodegenRunRequest.llm_config
 
     # --- inputs ---
     instructions: str
@@ -28,7 +41,11 @@ class CodegenState(TypedDict, total=False):
 
     # --- workspace ---
     workspace_dir: str
-    generated_files: Dict[str, str]  # path -> content
+    # Annotated with _merge_dicts so parallel codegen nodes can write concurrently
+    generated_files: Annotated[Dict[str, str], _merge_dicts]
+
+    # --- contract validation (Phase 2) ---
+    contract_violations: List[str]
 
     # --- sandbox ---
     sandbox_id: Optional[str]  # Docker container ID
@@ -38,7 +55,6 @@ class CodegenState(TypedDict, total=False):
     build_status: str  # pending | passed | failed
     build_log: str
     build_fix_round: int
-    contract_violations: List[str]
 
     # --- smoke test ---
     smoke_status: str  # pending | passed | failed

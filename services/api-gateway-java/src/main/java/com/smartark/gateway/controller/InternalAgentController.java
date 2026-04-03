@@ -10,6 +10,7 @@ import com.smartark.gateway.db.repo.TaskStepRepository;
 import com.smartark.gateway.dto.InternalTaskDispatchResult;
 import com.smartark.gateway.dto.InternalTaskLogRequest;
 import com.smartark.gateway.dto.InternalTaskStepUpdateRequest;
+import com.smartark.gateway.dto.NodeMetricsPayload;
 import com.smartark.gateway.service.TaskExecutionModeResolver;
 import com.smartark.gateway.service.TaskExecutorService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -172,6 +173,48 @@ public class InternalAgentController {
 
         String level = request.level() == null || request.level().isBlank() ? "info" : request.level();
         appendTaskLog(taskId, level, "[deepagent] " + request.content());
+        return ApiResponse.success(null);
+    }
+
+    @PostMapping("/{taskId}/node-metrics")
+    @Operation(summary = "Receive node metrics", description = "DeepAgent callback for per-node execution metrics (Phase 2 observability).")
+    public ApiResponse<Void> receiveNodeMetrics(
+            @Parameter(description = "Task ID", required = true) @PathVariable("taskId") String taskId,
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestBody NodeMetricsPayload payload) {
+        if (!internalToken.equals(token)) {
+            return ApiResponse.fail(401, "Invalid internal token");
+        }
+        if (payload == null) {
+            return ApiResponse.fail(400, "payload is required");
+        }
+        if (taskRepository.findById(taskId).isEmpty()) {
+            return ApiResponse.fail(404, "Task not found");
+        }
+
+        // Store metrics as a structured task log so they're queryable via existing log APIs.
+        String summary = String.format(
+                "[node-metrics] node=%s run_id=%s status=%s duration_ms=%d model_calls=%d degrade=%b",
+                payload.node(),
+                payload.runId() != null ? payload.runId() : "",
+                payload.status(),
+                payload.durationMs() != null ? payload.durationMs() : 0L,
+                payload.modelCalls() != null ? payload.modelCalls() : 0,
+                Boolean.TRUE.equals(payload.degrade())
+        );
+        appendTaskLog(taskId, "info", summary);
+
+        // Persist metrics snapshot to the corresponding task step output_summary for quick access.
+        taskStepRepository.findByTaskIdOrderByStepOrderAsc(taskId).stream()
+                .filter(s -> payload.node().equals(s.getStepCode()))
+                .findFirst()
+                .ifPresent(step -> {
+                    step.setUpdatedAt(java.time.LocalDateTime.now());
+                    taskStepRepository.save(step);
+                });
+
+        logger.info("node-metrics received: taskId={}, node={}, run_id={}, status={}, duration_ms={}",
+                taskId, payload.node(), payload.runId(), payload.status(), payload.durationMs());
         return ApiResponse.success(null);
     }
 

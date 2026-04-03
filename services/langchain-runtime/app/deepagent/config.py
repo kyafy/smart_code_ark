@@ -15,6 +15,10 @@ class LLMConfig:
     model: str = "qwen-plus"
     temperature: float = 0.2
     max_tokens: int = 8192
+    # Phase 1: direct codegen settings
+    direct_enabled: bool = False   # DEEPAGENT_LLM_DIRECT_ENABLED
+    codegen_timeout: int = 90      # DEEPAGENT_LLM_CODEGEN_TIMEOUT (seconds per file)
+    codegen_concurrency: int = 5   # DEEPAGENT_LLM_CONCURRENCY (max parallel files)
 
     @classmethod
     def from_env(cls) -> LLMConfig:
@@ -24,6 +28,9 @@ class LLMConfig:
             model=os.getenv("LANGCHAIN_MODEL_NAME", "qwen-plus"),
             temperature=float(os.getenv("LANGCHAIN_MODEL_TEMPERATURE", "0.2")),
             max_tokens=int(os.getenv("LANGCHAIN_MODEL_MAX_TOKENS", "8192")),
+            direct_enabled=os.getenv("DEEPAGENT_LLM_DIRECT_ENABLED", "false").lower() == "true",
+            codegen_timeout=int(os.getenv("DEEPAGENT_LLM_CODEGEN_TIMEOUT", "90")),
+            codegen_concurrency=int(os.getenv("DEEPAGENT_LLM_CONCURRENCY", "5")),
         )
 
 

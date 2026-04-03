@@ -1,4 +1,8 @@
-"""LangChain tool wrappers for LLM code/structure generation via Java API."""
+"""LangChain tool wrappers for code/structure generation.
+
+Prefers direct LLM calls (LLMCodegenClient) when DEEPAGENT_LLM_DIRECT_ENABLED=true,
+falls back to the Java model proxy for backward compatibility.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,7 @@ from langchain_core.tools import tool
 
 from .java_api_client import JavaApiClient
 
-# Module-level client instance, initialized by the graph builder.
+# Module-level Java client instance, initialized by the graph builder.
 _client: JavaApiClient | None = None
 
 
@@ -35,8 +39,15 @@ async def generate_project_structure(
 
     Returns a dict with 'files' (list of file paths) and 'structure' metadata.
     """
-    client = _get_client()
-    return await client.generate_project_structure(
+    from .llm_codegen_client import LLMCodegenClient
+    llm = LLMCodegenClient.from_env()
+    if llm is not None:
+        return await llm.generate_project_structure(
+            prd=prd,
+            stack={"backend": stack_backend, "frontend": stack_frontend, "db": stack_db},
+            instructions=instructions,
+        )
+    return await _get_client().generate_project_structure(
         prd=prd,
         stack={"backend": stack_backend, "frontend": stack_frontend, "db": stack_db},
         instructions=instructions,
@@ -56,8 +67,18 @@ async def generate_file_content(
 
     Returns the raw file content string (no markdown fences).
     """
-    client = _get_client()
-    return await client.generate_file_content(
+    from .llm_codegen_client import LLMCodegenClient
+    llm = LLMCodegenClient.from_env()
+    if llm is not None:
+        return await llm.generate_file_content(
+            file_path=file_path,
+            prd=prd,
+            tech_stack=tech_stack,
+            project_structure=project_structure,
+            group=group,
+            instructions=instructions,
+        )
+    return await _get_client().generate_file_content(
         file_path=file_path,
         prd=prd,
         tech_stack=tech_stack,
@@ -78,8 +99,7 @@ async def resolve_template(
 
     Returns template metadata including example files and paths.
     """
-    client = _get_client()
-    return await client.template_resolve(
+    return await _get_client().template_resolve(
         stack={"backend": stack_backend, "frontend": stack_frontend, "db": stack_db},
         template_id=template_id,
     )

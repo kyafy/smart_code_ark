@@ -56,7 +56,7 @@ public class DeepAgentExecutorService {
                                     ProjectRepository projectRepository,
                                     ProjectSpecRepository projectSpecRepository,
                                     ObjectMapper objectMapper,
-                                    @Value("${smartark.langchain.runtime.timeout-ms:45000}") int timeoutMs) {
+                                    @Value("${smartark.langchain.runtime.timeout-ms:600000}") int timeoutMs) {
         this.taskRepository = taskRepository;
         this.taskLogRepository = taskLogRepository;
         this.projectRepository = projectRepository;
@@ -126,6 +126,10 @@ public class DeepAgentExecutorService {
         DeepAgentCodegenRunRequest.StackConfig stackConfig =
                 new DeepAgentCodegenRunRequest.StackConfig(stackBackend, stackFrontend, stackDb);
 
+        // llm_config: null means DeepAgent uses its runtime defaults.
+        // Extend this map when task-level model routing is needed (e.g. large-context tasks).
+        Map<String, Object> llmConfig = null;
+
         return new DeepAgentCodegenRunRequest(
                 task.getId(),
                 task.getProjectId(),
@@ -137,7 +141,8 @@ public class DeepAgentExecutorService {
                 Paths.get(workspaceRoot, task.getId()).toAbsolutePath().toString(),
                 callbackBaseUrl,
                 callbackToken,
-                Map.of()
+                Map.of(),
+                llmConfig
         );
     }
 

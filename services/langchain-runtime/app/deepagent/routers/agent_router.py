@@ -69,6 +69,7 @@ async def _execute_codegen(run_id: str, request: CodegenRunRequest) -> None:
 
         initial_state = {
             "task_id": task_id,
+            "run_id": run_id,          # Phase 2: propagated to all nodes for metrics & retry tracing
             "project_id": request.project_id,
             "user_id": request.user_id or 0,
             "instructions": request.instructions,
@@ -96,6 +97,8 @@ async def _execute_codegen(run_id: str, request: CodegenRunRequest) -> None:
             "error": None,
             "callback_base_url": request.callback_base_url,
             "callback_api_key": request.callback_api_key,
+            # Phase 3: per-task LLM override (None when not provided by dispatcher)
+            "llm_config_override": request.llm_config.model_dump(exclude_none=True) if request.llm_config else None,
         }
 
         result = await graph.ainvoke(initial_state)

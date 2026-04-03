@@ -45,7 +45,7 @@ smartark:
     runtime:
       model-enabled: ${LANGCHAIN_RUNTIME_MODEL_ENABLED:false}
       base-url: ${LANGCHAIN_RUNTIME_BASE_URL:http://localhost:18080}
-      timeout-ms: ${LANGCHAIN_RUNTIME_TIMEOUT_MS:45000}
+      timeout-ms: ${LANGCHAIN_RUNTIME_TIMEOUT_MS:600000}
       codegen-graph-enabled: ${LANGCHAIN_RUNTIME_CODEGEN_GRAPH_ENABLED:false}
       paper-graph-enabled: ${LANGCHAIN_RUNTIME_PAPER_GRAPH_ENABLED:false}
   delivery:
