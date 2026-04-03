@@ -107,6 +107,11 @@ async def _execute_codegen(run_id: str, request: CodegenRunRequest) -> None:
             "callback_api_key": request.callback_api_key,
             # Phase 3: per-task LLM override (None when not provided by dispatcher)
             "llm_config_override": request.llm_config.model_dump(exclude_none=True) if request.llm_config else None,
+            # Phase 4: memory fields
+            "short_term_memories": [],
+            "long_term_memories": [],
+            "memory_context": "",
+            "fix_history": [],
         }
 
         result = await graph.ainvoke(initial_state)
@@ -227,6 +232,10 @@ async def _execute_paper(run_id: str, request: PaperRunRequest) -> None:
             "error": None,
             "callback_base_url": request.callback_base_url,
             "callback_api_key": request.callback_api_key,
+            # Phase 4: memory fields
+            "short_term_memories": [],
+            "long_term_memories": [],
+            "memory_context": "",
         }
 
         result = await graph.ainvoke(initial_state)

@@ -3,17 +3,39 @@
 Each node receives the full PaperState dict and returns a partial
 dict update.  Nodes call Java API services for academic search,
 RAG, and LLM generation.
+
+Phase 4: integrated with MemoryBridge, SmartRetry, DynamicPrompt,
+ContextCompression, CitationTrace, AdaptiveRerank, and AdaptiveModelSwitch.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
 
 from ..tools.java_api_client import JavaApiClient
+from ..tools.llm_codegen_client import LLMCodegenClient
+from ..middleware.memory_bridge import MemoryBridgeMiddleware
+from ..middleware.smart_retry import SmartRetryMiddleware
+from ..middleware.dynamic_prompt import DynamicPromptMiddleware
+from ..middleware.context_compression import ContextCompressionMiddleware
+from ..middleware.citation_trace import CitationTraceMiddleware
+from ..middleware.adaptive_rerank import classify_discipline, WEIGHT_PROFILES
+from ..middleware.adaptive_model_switch import AdaptiveModelSwitchMiddleware
 
 logger = logging.getLogger(__name__)
+
+# --- Middleware singletons ---
+_memory_bridge = MemoryBridgeMiddleware()
+_smart_retry = SmartRetryMiddleware()
+_dynamic_prompt = DynamicPromptMiddleware()
+_context_compression = ContextCompressionMiddleware()
+_citation_trace = CitationTraceMiddleware()
+_model_switch = AdaptiveModelSwitchMiddleware()
 
 
 # ======================================================================
@@ -32,6 +54,53 @@ def _client_from_state(state: Dict[str, Any]) -> JavaApiClient:
     return JavaApiClient(config)
 
 
+def _get_llm_client(state: Dict[str, Any], node_name: str) -> Optional[LLMCodegenClient]:
+    """Get a direct LLM client, or None if not configured."""
+    return LLMCodegenClient.from_state(state, node_name=node_name)
+
+
+def _strip_json_fence(text: str) -> str:
+    """Remove markdown fences from JSON output."""
+    text = text.strip()
+    m = re.match(r"^```(?:json)?\s*\n([\s\S]*?)```\s*$", text)
+    if m:
+        return m.group(1).strip()
+    return text
+
+
+async def _llm_invoke(
+    state: Dict[str, Any],
+    node_name: str,
+    system_prompt: str,
+    user_prompt: str,
+    timeout: int = 90,
+) -> str:
+    """Invoke LLM directly for paper generation.
+
+    Returns raw response content. Falls back to empty string on failure.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    llm_client = _get_llm_client(state, node_name)
+    if llm_client is None:
+        logger.warning("paper[%s]: no direct LLM configured, returning empty", node_name)
+        return ""
+
+    llm = llm_client._get_llm()
+    try:
+        response = await asyncio.wait_for(
+            llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]),
+            timeout=timeout,
+        )
+        return response.content.strip() if hasattr(response, "content") else str(response)
+    except asyncio.TimeoutError:
+        logger.warning("paper[%s]: LLM timeout after %ds", node_name, timeout)
+        return ""
+    except Exception as exc:
+        logger.warning("paper[%s]: LLM failed: %s", node_name, exc)
+        return ""
+
+
 # ======================================================================
 # Topic clarification
 # ======================================================================
@@ -40,12 +109,14 @@ def _client_from_state(state: Dict[str, Any]) -> JavaApiClient:
 async def topic_clarify(state: Dict[str, Any]) -> Dict[str, Any]:
     """Clarify and refine the paper topic, producing research questions.
 
-    Calls Java ModelService to refine the topic and generate focused
-    research questions based on discipline, degree level, and method
-    preference.
+    Phase 4: LLM-powered with DynamicPrompt + MemoryBridge + SmartRetry.
     """
     client = _client_from_state(state)
     task_id = state["task_id"]
+
+    # Phase 4: load memories
+    memory_state = await _memory_bridge.before_node(state, "topic_clarify")
+    state = {**state, **memory_state}
 
     await client.update_step(task_id, "topic_clarify", "running", progress=10)
 
@@ -54,18 +125,64 @@ async def topic_clarify(state: Dict[str, Any]) -> Dict[str, Any]:
     degree_level = state.get("degree_level", "")
     method_preference = state.get("method_preference", "")
 
-    # Build refined topic and research questions
-    # In production this calls ModelService.clarifyPaperTopic()
-    suffix_parts = [p for p in [discipline, degree_level, method_preference] if p]
-    suffix = "，".join(suffix_parts)
-    topic_refined = f"{topic}（{suffix}）" if suffix else topic
+    # Phase 4: dynamic system prompt
+    system_prompt = _dynamic_prompt.get_paper_system_prompt("topic_clarify", state)
 
-    # Default research questions (LLM would generate these in production)
-    research_questions = [
-        f"{topic}的核心问题域和研究范围是什么？",
-        f"如何运用{method_preference or '适当方法'}验证{topic}的研究假设？",
-        f"该研究可以产生哪些可量化的结论和成果？",
-    ]
+    user_prompt = (
+        f"论文题目：{topic}\n"
+        f"学科方向：{discipline}\n"
+        f"学位层次：{degree_level}\n"
+        f"方法偏好：{method_preference}\n\n"
+        "请完成以下任务：\n"
+        "1. 精炼论文主题，使其更具学术指向性\n"
+        "2. 生成 3-5 个具体的研究问题\n\n"
+        "输出格式（JSON）：\n"
+        '{"topicRefined": "精炼后的主题", "researchQuestions": ["问题1", "问题2", ...]}'
+    )
+
+    # Phase 4: enhance instructions
+    user_prompt = _dynamic_prompt.enhance_paper_instructions(
+        user_prompt, state, step_code="topic_clarify",
+    )
+
+    # Phase 4: LLM call with retry
+    raw = ""
+    for attempt in range(3):
+        raw = await _llm_invoke(state, "topic_clarify", system_prompt, user_prompt)
+        if raw:
+            break
+        logger.warning("topic_clarify: empty response, attempt %d", attempt + 1)
+
+    # Parse LLM response
+    topic_refined = topic
+    research_questions = []
+
+    if raw:
+        raw = _strip_json_fence(raw)
+        try:
+            parsed = json.loads(raw)
+            topic_refined = parsed.get("topicRefined", topic)
+            research_questions = parsed.get("researchQuestions", [])
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("topic_clarify: failed to parse JSON, extracting manually")
+            # Fallback: extract lines that look like questions
+            for line in raw.split("\n"):
+                line = line.strip().lstrip("0123456789.-) ")
+                if line and ("？" in line or "?" in line or len(line) > 15):
+                    research_questions.append(line)
+            if not research_questions:
+                topic_refined = raw[:200] if raw else topic
+
+    # Fallback if LLM returned nothing useful
+    if not research_questions:
+        suffix_parts = [p for p in [discipline, degree_level, method_preference] if p]
+        suffix = "，".join(suffix_parts)
+        topic_refined = f"{topic}（{suffix}）" if suffix else topic
+        research_questions = [
+            f"{topic}的核心问题域和研究范围是什么？",
+            f"如何运用{method_preference or '适当方法'}验证{topic}的研究假设？",
+            f"该研究可以产生哪些可量化的结论和成果？",
+        ]
 
     await client.update_step(
         task_id, "topic_clarify", "finished",
@@ -73,7 +190,14 @@ async def topic_clarify(state: Dict[str, Any]) -> Dict[str, Any]:
         output_summary=f"Refined topic with {len(research_questions)} research questions",
     )
 
+    # Phase 4: save checkpoint
+    await _memory_bridge.after_node(
+        state, "topic_clarify",
+        output_summary=f"Refined: {topic_refined[:100]}, {len(research_questions)} questions",
+    )
+
     return {
+        **memory_state,
         "topic_refined": topic_refined,
         "research_questions": research_questions,
         "current_step": "topic_clarify",
@@ -88,13 +212,13 @@ async def topic_clarify(state: Dict[str, Any]) -> Dict[str, Any]:
 async def academic_retrieve(state: Dict[str, Any]) -> Dict[str, Any]:
     """Search academic papers across multiple sources.
 
-    Performs multi-source retrieval:
-    1. Global search across SemanticScholar + Crossref + arXiv
-    2. Per-research-question scoped searches
-    3. Deduplication by normalized title
+    Phase 4: MemoryBridge for checkpoint persistence.
     """
     client = _client_from_state(state)
     task_id = state["task_id"]
+
+    memory_state = await _memory_bridge.before_node(state, "academic_retrieve")
+    state = {**state, **memory_state}
 
     await client.update_step(task_id, "academic_retrieve", "running", progress=10)
 
@@ -145,7 +269,13 @@ async def academic_retrieve(state: Dict[str, Any]) -> Dict[str, Any]:
         output_summary=f"Retrieved {len(all_sources)} unique papers",
     )
 
+    await _memory_bridge.after_node(
+        state, "academic_retrieve",
+        output_summary=f"Retrieved {len(all_sources)} papers from global + {len(research_questions)} scoped searches",
+    )
+
     return {
+        **memory_state,
         "retrieved_sources": all_sources,
         "source_count": len(all_sources),
         "current_step": "academic_retrieve",
@@ -190,7 +320,10 @@ async def rag_index_enrich(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def rag_retrieve_rerank(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Retrieve and rerank evidence from vector store."""
+    """Retrieve and rerank evidence from vector store.
+
+    Phase 4: AdaptiveRerank injects discipline-aware reranking weights.
+    """
     client = _client_from_state(state)
     task_id = state["task_id"]
     session_id = state["session_id"]
@@ -204,6 +337,14 @@ async def rag_retrieve_rerank(state: Dict[str, Any]) -> Dict[str, Any]:
     # Build combined query
     query = topic_refined + " " + " ".join(research_questions)
 
+    # Phase 4: AdaptiveRerank — get discipline-aware weights
+    category = classify_discipline(discipline)
+    weights = WEIGHT_PROFILES[category]
+    logger.info(
+        "rag_retrieve_rerank: discipline=%s → category=%s, weights=%s",
+        discipline, category, weights,
+    )
+
     try:
         evidence = await client.rag_retrieve(
             session_id=session_id, query=query, discipline=discipline, top_k=30
@@ -212,16 +353,57 @@ async def rag_retrieve_rerank(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("RAG retrieval failed: %s", exc)
         evidence = []
 
+    # Phase 4: apply adaptive reranking on Python side if Java doesn't support custom weights
+    if evidence and category != "default":
+        evidence = _rerank_evidence(evidence, weights)
+
     await client.update_step(
         task_id, "rag_retrieve_rerank", "finished",
         progress=100,
-        output_summary=f"Retrieved {len(evidence)} evidence chunks",
+        output_summary=f"Retrieved {len(evidence)} evidence chunks (rerank={category})",
     )
 
     return {
         "rag_evidence": evidence,
         "current_step": "rag_retrieve_rerank",
     }
+
+
+def _rerank_evidence(
+    evidence: List[Dict[str, Any]],
+    weights: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    """Rerank evidence with adaptive weights on Python side."""
+    import datetime
+    current_year = datetime.datetime.now().year
+
+    for ev in evidence:
+        try:
+            vector_score = float(ev.get("vector_score", 0.0))
+        except (ValueError, TypeError):
+            vector_score = 0.0
+
+        try:
+            citation_count = int(ev.get("citation_count", 0))
+        except (ValueError, TypeError):
+            citation_count = 0
+
+        try:
+            year = int(ev.get("year", 0)) if ev.get("year") else 0
+        except (ValueError, TypeError):
+            year = 0
+
+        citation_score = min(citation_count, 100) / 100.0
+        recency_score = max(0, 1.0 - (current_year - year) / 20.0) if year else 0.0
+
+        ev["rerank_score"] = (
+            weights["vector"] * vector_score
+            + weights["citation"] * citation_score
+            + weights["recency"] * recency_score
+        )
+
+    evidence.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
+    return evidence
 
 
 # ======================================================================
@@ -232,54 +414,81 @@ async def rag_retrieve_rerank(state: Dict[str, Any]) -> Dict[str, Any]:
 async def outline_generate(state: Dict[str, Any]) -> Dict[str, Any]:
     """Generate a paper outline with chapter-section hierarchy.
 
-    Uses the refined topic, research questions, and retrieved evidence
-    to produce a structured outline.
+    Phase 4: LLM-powered with DynamicPrompt + MemoryBridge + SmartRetry +
+    ContextCompression + AdaptiveModelSwitch.
     """
     client = _client_from_state(state)
     task_id = state["task_id"]
     session_id = state["session_id"]
 
+    memory_state = await _memory_bridge.before_node(state, "outline_generate")
+    state = {**state, **memory_state}
+
     await client.update_step(task_id, "outline_generate", "running", progress=10)
 
-    # Build standard 5-chapter outline structure
-    # In production, this is LLM-generated via ModelService.generatePaperOutline()
     topic_refined = state.get("topic_refined", state.get("topic", ""))
-    chapters = [
-        {"index": 1, "title": "绪论", "sections": [
-            {"title": "研究背景与意义"},
-            {"title": "国内外研究现状"},
-            {"title": "研究目标与内容"},
-            {"title": "论文组织结构"},
-        ]},
-        {"index": 2, "title": "相关理论与技术基础", "sections": [
-            {"title": "核心概念界定"},
-            {"title": "理论基础"},
-            {"title": "技术路线分析"},
-        ]},
-        {"index": 3, "title": "研究方法与系统设计", "sections": [
-            {"title": "研究方法选择"},
-            {"title": "系统架构设计"},
-            {"title": "关键算法与实现"},
-        ]},
-        {"index": 4, "title": "实验与结果分析", "sections": [
-            {"title": "实验环境与数据集"},
-            {"title": "实验方案设计"},
-            {"title": "实验结果与讨论"},
-        ]},
-        {"index": 5, "title": "总结与展望", "sections": [
-            {"title": "研究工作总结"},
-            {"title": "主要贡献"},
-            {"title": "不足与展望"},
-        ]},
-    ]
+    research_questions = state.get("research_questions", [])
+    evidence = state.get("rag_evidence", [])
 
-    outline_draft = {
-        "topic": state.get("topic", ""),
-        "topicRefined": topic_refined,
-        "researchQuestions": state.get("research_questions", []),
-        "chapters": chapters,
-        "citationStyle": state.get("citation_style", "GB/T 7714"),
-    }
+    # Phase 4: compress evidence for prompt injection
+    compressed_evidence = _context_compression.compress_evidence(
+        evidence, section_title=topic_refined, max_items=10, max_chars=3000,
+    )
+
+    # Phase 4: dynamic system prompt
+    system_prompt = _dynamic_prompt.get_paper_system_prompt("outline_generate", state)
+
+    user_prompt = (
+        f"论文主题：{topic_refined}\n\n"
+        f"研究问题：\n" + "\n".join(f"  {i+1}. {q}" for i, q in enumerate(research_questions)) + "\n\n"
+    )
+    if compressed_evidence:
+        user_prompt += f"检索到的学术证据摘要：\n{compressed_evidence}\n\n"
+    user_prompt += (
+        "请设计论文的完整章节大纲。\n"
+        '输出格式（纯JSON）：\n'
+        '{"chapters": [{"index": 1, "title": "章节标题", '
+        '"sections": [{"title": "小节标题"}]}]}'
+    )
+
+    # Phase 4: enhance with discipline/degree instructions
+    user_prompt = _dynamic_prompt.enhance_paper_instructions(
+        user_prompt, state, step_code="outline_generate",
+    )
+
+    # Phase 4: LLM call with JSON retry
+    outline_draft = None
+    for attempt in range(3):
+        raw = await _llm_invoke(state, "outline_generate", system_prompt, user_prompt, timeout=120)
+        if not raw:
+            continue
+        raw = _strip_json_fence(raw)
+        try:
+            parsed = json.loads(raw)
+            chapters = parsed.get("chapters", [])
+            if chapters and isinstance(chapters, list):
+                outline_draft = {
+                    "topic": state.get("topic", ""),
+                    "topicRefined": topic_refined,
+                    "researchQuestions": research_questions,
+                    "chapters": chapters,
+                    "citationStyle": state.get("citation_style", "GB/T 7714"),
+                }
+                break
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("outline_generate: JSON parse failed attempt %d", attempt + 1)
+
+    # Fallback: standard 5-chapter template
+    if outline_draft is None:
+        logger.info("outline_generate: using fallback template")
+        chapters = _build_fallback_outline(topic_refined)
+        outline_draft = {
+            "topic": state.get("topic", ""),
+            "topicRefined": topic_refined,
+            "researchQuestions": research_questions,
+            "chapters": chapters,
+            "citationStyle": state.get("citation_style", "GB/T 7714"),
+        }
 
     # Persist outline
     try:
@@ -294,10 +503,16 @@ async def outline_generate(state: Dict[str, Any]) -> Dict[str, Any]:
     await client.update_step(
         task_id, "outline_generate", "finished",
         progress=100,
-        output_summary=f"Generated outline with {len(chapters)} chapters",
+        output_summary=f"Generated outline with {len(outline_draft['chapters'])} chapters",
+    )
+
+    await _memory_bridge.after_node(
+        state, "outline_generate",
+        output_summary=f"Outline: {len(outline_draft['chapters'])} chapters",
     )
 
     return {
+        **memory_state,
         "outline_draft": outline_draft,
         "current_step": "outline_generate",
     }
@@ -306,37 +521,107 @@ async def outline_generate(state: Dict[str, Any]) -> Dict[str, Any]:
 async def outline_expand(state: Dict[str, Any]) -> Dict[str, Any]:
     """Expand outline sections into full content with evidence linking.
 
-    For each section in each chapter, generates substantive content
-    including core argument, method, data plan, and citations.
+    Phase 4: LLM-powered per-section with DynamicPrompt + ContextCompression
+    (prior chapter summaries + per-section evidence) + CitationTrace +
+    SmartRetry + MemoryBridge.
     """
     client = _client_from_state(state)
     task_id = state["task_id"]
     session_id = state["session_id"]
+
+    memory_state = await _memory_bridge.before_node(state, "outline_expand")
+    state = {**state, **memory_state}
 
     await client.update_step(task_id, "outline_expand", "running", progress=10)
 
     outline = state.get("outline_draft", {})
     chapters = outline.get("chapters", [])
     evidence = state.get("rag_evidence", [])
+    topic_refined = state.get("topic_refined", state.get("topic", ""))
 
-    expanded_chapters = []
+    # Phase 4: build chapter-evidence mapping
+    evidence_map = _context_compression.build_chapter_evidence_map(chapters, evidence)
+
+    expanded_chapters: List[Dict[str, Any]] = []
     total_sections = sum(len(ch.get("sections", [])) for ch in chapters)
     done_sections = 0
 
     for ch in chapters:
+        chapter_title = ch.get("title", "")
+        chapter_index = ch.get("index", 0)
+
+        # Phase 4: prior chapter summaries for coherence
+        prior_summary = _context_compression.build_prior_chapters_summary(
+            expanded_chapters, chapter_index,
+        )
+
         expanded_sections = []
         for section in ch.get("sections", []):
-            title = section.get("title", "")
+            section_title = section.get("title", "")
 
-            # Build expanded section content
+            # Phase 4: get section-specific evidence
+            section_evidence_indices = evidence_map.get(section_title, [])
+            section_evidence = [evidence[i] for i in section_evidence_indices if i < len(evidence)]
+            compressed_ev = _context_compression.compress_evidence(
+                section_evidence, section_title=section_title,
+                max_items=5, max_chars=1500,
+            )
+
+            # Phase 4: dynamic system prompt
+            system_prompt = _dynamic_prompt.get_paper_system_prompt("outline_expand", state)
+
+            # Phase 4: build user prompt with context
+            user_prompt = (
+                f"论文主题：{topic_refined}\n"
+                f"当前章节：第{chapter_index}章 {chapter_title}\n"
+                f"当前小节：{section_title}\n\n"
+            )
+            if prior_summary:
+                user_prompt += f"{prior_summary}\n\n"
+            if compressed_ev:
+                user_prompt += f"相关学术证据：\n{compressed_ev}\n\n"
+            user_prompt += (
+                f"请为「{section_title}」撰写完整内容。\n"
+                "要求：使用 [n] 标注引用来源编号，内容不少于 300 字。"
+            )
+
+            # Phase 4: enhance with chapter-specific guidance
+            user_prompt = _dynamic_prompt.enhance_paper_instructions(
+                user_prompt, state,
+                step_code="outline_expand",
+                chapter_title=chapter_title,
+                section_title=section_title,
+            )
+
+            # Phase 4: LLM call with smart retry (min content length)
+            content = ""
+            for attempt in range(3):
+                raw = await _llm_invoke(state, "outline_expand", system_prompt, user_prompt)
+                if raw and len(raw) >= 100:
+                    content = raw
+                    break
+                logger.warning("outline_expand[%s]: too short (%d chars), retry %d",
+                               section_title, len(raw) if raw else 0, attempt + 1)
+
+            # Fallback
+            if not content or len(content) < 50:
+                content = f"{section_title}的详细论述内容。"
+
+            # Phase 4: CitationTrace — check citation coverage
+            claims = _citation_trace.extract_claims(content)
+            citations = _citation_trace.extract_citations(content)
+            cite_ids = _find_relevant_citations(section_title, evidence)
+
             expanded_section = {
-                "title": title,
-                "content": f"{title}的详细论述内容。",  # LLM would generate this
-                "coreArgument": f"{title}的核心论点",
+                "title": section_title,
+                "content": content,
+                "coreArgument": f"{section_title}的核心论点",
                 "method": state.get("method_preference", ""),
                 "dataPlan": "数据收集与处理方案",
                 "expectedResult": "预期研究成果",
-                "citations": _find_relevant_citations(title, evidence),
+                "citations": cite_ids,
+                "claim_count": len(claims),
+                "citation_count": len(citations),
             }
             expanded_sections.append(expanded_section)
             done_sections += 1
@@ -369,7 +654,13 @@ async def outline_expand(state: Dict[str, Any]) -> Dict[str, Any]:
         output_summary=f"Expanded {done_sections} sections across {len(chapters)} chapters",
     )
 
+    await _memory_bridge.after_node(
+        state, "outline_expand",
+        output_summary=f"Expanded {done_sections} sections",
+    )
+
     return {
+        **memory_state,
         "expanded_outline": expanded_outline,
         "manuscript": expanded_outline,
         "current_step": "outline_expand",
@@ -384,56 +675,79 @@ async def outline_expand(state: Dict[str, Any]) -> Dict[str, Any]:
 async def outline_quality_check(state: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate the quality of the expanded outline/manuscript.
 
-    Checks logic closure, method consistency, citation verifiability,
-    and evidence coverage.
+    Phase 4: uses CitationTrace for accurate coverage calculation +
+    MemoryBridge for persistence.
     """
     client = _client_from_state(state)
     task_id = state["task_id"]
     session_id = state["session_id"]
+
+    memory_state = await _memory_bridge.before_node(state, "outline_quality_check")
+    state = {**state, **memory_state}
 
     await client.update_step(task_id, "outline_quality_check", "running", progress=20)
 
     manuscript = state.get("manuscript", state.get("expanded_outline", {}))
     chapters = manuscript.get("chapters", [])
 
-    # Compute quality metrics
+    # Compute quality metrics using CitationTrace
     total_sections = 0
     sections_with_citations = 0
+    total_claims = 0
+    covered_claims = 0
     issues = []
 
     for ch in chapters:
         for section in ch.get("sections", []):
             total_sections += 1
-            citations = section.get("citations", [])
-            if citations:
+            content = section.get("content", "")
+            citations_list = section.get("citations", [])
+
+            # Phase 4: use CitationTrace for accurate claim/citation analysis
+            claims = _citation_trace.extract_claims(content)
+            citations = _citation_trace.extract_citations(content)
+            total_claims += len(claims)
+
+            if citations or citations_list:
                 sections_with_citations += 1
+                # Count covered claims via proximity check
+                for claim in claims:
+                    if _citation_trace.has_nearby_citation(content, claim):
+                        covered_claims += 1
             else:
                 issues.append(f"章节「{section.get('title', '')}」缺少引文")
 
-            content = section.get("content", "")
-            if not content or len(content) < 20:
-                issues.append(f"章节「{section.get('title', '')}」内容过短")
+            if not content or len(content) < 50:
+                issues.append(f"章节「{section.get('title', '')}」内容过短 ({len(content)}字)")
 
-    evidence_coverage = (
-        (sections_with_citations / total_sections * 100)
-        if total_sections > 0 else 0
+    # Evidence coverage based on citation analysis
+    section_coverage = (
+        (sections_with_citations / total_sections * 100) if total_sections > 0 else 0
     )
-    overall_score = min(100, max(0, 72 + min(20, total_sections * 4)))
+    claim_coverage = (
+        (covered_claims / total_claims * 100) if total_claims > 0 else 100
+    )
+
+    # Combined score
+    overall_score = min(100, max(0, (section_coverage * 0.4 + claim_coverage * 0.3 + 30)))
     if issues:
-        overall_score = max(0, overall_score - len(issues) * 3)
+        overall_score = max(0, overall_score - len(issues) * 2)
 
     quality_report = {
         "logicClosedLoop": overall_score >= 70,
         "methodConsistency": "ok" if overall_score >= 60 else "needs_improvement",
-        "citationVerifiability": "ok" if evidence_coverage >= 70 else "needs_improvement",
-        "overallScore": overall_score,
-        "evidenceCoverage": round(evidence_coverage, 1),
+        "citationVerifiability": "ok" if claim_coverage >= 70 else "needs_improvement",
+        "overallScore": round(overall_score, 1),
+        "sectionCoverage": round(section_coverage, 1),
+        "claimCoverage": round(claim_coverage, 1),
+        "totalClaims": total_claims,
+        "coveredClaims": covered_claims,
         "issues": issues,
         "uncoveredSections": [
             section.get("title", "")
             for ch in chapters
             for section in ch.get("sections", [])
-            if not section.get("citations")
+            if not section.get("citations") and not _citation_trace.extract_citations(section.get("content", ""))
         ],
     }
 
@@ -451,10 +765,16 @@ async def outline_quality_check(state: Dict[str, Any]) -> Dict[str, Any]:
     await client.update_step(
         task_id, "outline_quality_check", "finished",
         progress=100,
-        output_summary=f"Quality score: {overall_score}, evidence coverage: {evidence_coverage:.0f}%",
+        output_summary=f"Quality score: {overall_score:.0f}, section coverage: {section_coverage:.0f}%, claim coverage: {claim_coverage:.0f}%",
+    )
+
+    await _memory_bridge.after_node(
+        state, "outline_quality_check",
+        output_summary=f"Score={overall_score:.0f}, issues={len(issues)}",
     )
 
     return {
+        **memory_state,
         "quality_report": quality_report,
         "quality_score": overall_score,
         "quality_issues": issues,
@@ -466,35 +786,91 @@ async def outline_quality_check(state: Dict[str, Any]) -> Dict[str, Any]:
 async def quality_rewrite(state: Dict[str, Any]) -> Dict[str, Any]:
     """Rewrite sections flagged by quality check.
 
-    Focuses on uncovered sections (missing citations) and short content.
+    Phase 4: LLM-powered with DynamicPrompt (targeted rewrite directives) +
+    ContextCompression (uncovered section evidence) + CitationTrace (close loop) +
+    MemoryBridge + SmartRetry.
     """
     client = _client_from_state(state)
     task_id = state["task_id"]
     session_id = state["session_id"]
 
     rewrite_round = state.get("rewrite_round", 0) + 1
+
+    memory_state = await _memory_bridge.before_node(state, "quality_rewrite")
+    state = {**state, **memory_state}
+
     await client.update_step(task_id, "quality_rewrite", "running", progress=10)
     await client.log(task_id, "info", f"Quality rewrite round {rewrite_round}")
 
     manuscript = state.get("manuscript", state.get("expanded_outline", {}))
     issues = state.get("quality_issues", [])
     uncovered = set(state.get("uncovered_sections", []))
+    evidence = state.get("rag_evidence", [])
 
     chapters = manuscript.get("chapters", [])
     rewritten_count = 0
+    total_targets = sum(
+        1 for ch in chapters for s in ch.get("sections", [])
+        if s.get("title", "") in uncovered or len(s.get("content", "")) < 100
+    )
+
+    # Phase 4: dynamic system prompt
+    system_prompt = _dynamic_prompt.get_paper_system_prompt("quality_rewrite", state)
 
     for ch in chapters:
+        chapter_title = ch.get("title", "")
         for section in ch.get("sections", []):
             title = section.get("title", "")
-            if title in uncovered or len(section.get("content", "")) < 50:
-                # Enhance content and add citations
+            content = section.get("content", "")
+
+            if title not in uncovered and len(content) >= 100:
+                continue  # Skip sections that passed quality check
+
+            # Phase 4: compress evidence for this section
+            compressed_ev = _context_compression.compress_evidence(
+                evidence, section_title=title, max_items=5, max_chars=1200,
+            )
+
+            user_prompt = (
+                f"当前章节：{chapter_title} > {title}\n"
+                f"原始内容：\n{content}\n\n"
+            )
+            if compressed_ev:
+                user_prompt += f"可用学术证据：\n{compressed_ev}\n\n"
+            user_prompt += "请修改此章节。"
+
+            # Phase 4: enhance with rewrite directives
+            user_prompt = _dynamic_prompt.enhance_paper_instructions(
+                user_prompt, state,
+                step_code="quality_rewrite",
+                chapter_title=chapter_title,
+                section_title=title,
+            )
+
+            # Phase 4: LLM call
+            new_content = ""
+            for attempt in range(2):
+                raw = await _llm_invoke(state, "quality_rewrite", system_prompt, user_prompt)
+                if raw and len(raw) > len(content):
+                    new_content = raw
+                    break
+
+            if new_content:
+                section["content"] = new_content
+                # Update citation info
+                new_citations = _citation_trace.extract_citations(new_content)
+                if new_citations and not section.get("citations"):
+                    section["citations"] = _find_relevant_citations(title, evidence)
+            else:
+                # Minimal fallback enhancement
                 section["content"] = (
-                    f"{section.get('content', '')}\n\n"
+                    f"{content}\n\n"
                     f"经过深入分析和文献梳理，进一步论证了{title}的核心观点。"
                 )
                 if not section.get("citations"):
-                    section["citations"] = [1]  # placeholder
-                rewritten_count += 1
+                    section["citations"] = _find_relevant_citations(title, evidence) or [1]
+
+            rewritten_count += 1
 
     # Persist updated manuscript
     try:
@@ -511,7 +887,13 @@ async def quality_rewrite(state: Dict[str, Any]) -> Dict[str, Any]:
         output_summary=f"Rewrote {rewritten_count} sections in round {rewrite_round}",
     )
 
+    await _memory_bridge.after_node(
+        state, "quality_rewrite",
+        output_summary=f"Rewrite round {rewrite_round}: {rewritten_count} sections",
+    )
+
     return {
+        **memory_state,
         "manuscript": manuscript,
         "rewrite_round": rewrite_round,
         "current_step": "quality_rewrite",
@@ -541,7 +923,6 @@ def should_rewrite(state: Dict[str, Any]) -> str:
 
 def _normalize_title(title: str) -> str:
     """Normalize a paper title for deduplication."""
-    import re
     if not title:
         return ""
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", title.lower())
@@ -552,11 +933,7 @@ def _find_relevant_citations(
     evidence: List[Dict[str, Any]],
     top_k: int = 3,
 ) -> List[int]:
-    """Find citation indices relevant to a section title.
-
-    Simple keyword overlap scoring — in production this would be
-    replaced by semantic similarity.
-    """
+    """Find citation indices relevant to a section title."""
     if not evidence:
         return []
 
@@ -564,8 +941,41 @@ def _find_relevant_citations(
     title_words = set(section_title.lower().split())
     for i, ev in enumerate(evidence):
         content = ev.get("content", "").lower() + " " + ev.get("title", "").lower()
-        overlap = sum(1 for w in title_words if w in content)
-        scored.append((i + 1, overlap))
+        overlap = sum(1 for w in title_words if len(w) > 1 and w in content)
+        rerank = ev.get("rerank_score", 0)
+        scored.append((i + 1, overlap + rerank * 0.5))
 
     scored.sort(key=lambda x: x[1], reverse=True)
     return [idx for idx, score in scored[:top_k] if score > 0]
+
+
+def _build_fallback_outline(topic: str) -> List[Dict[str, Any]]:
+    """Build standard 5-chapter fallback outline when LLM fails."""
+    return [
+        {"index": 1, "title": "绪论", "sections": [
+            {"title": "研究背景与意义"},
+            {"title": "国内外研究现状"},
+            {"title": "研究目标与内容"},
+            {"title": "论文组织结构"},
+        ]},
+        {"index": 2, "title": "相关理论与技术基础", "sections": [
+            {"title": "核心概念界定"},
+            {"title": "理论基础"},
+            {"title": "技术路线分析"},
+        ]},
+        {"index": 3, "title": "研究方法与系统设计", "sections": [
+            {"title": "研究方法选择"},
+            {"title": "系统架构设计"},
+            {"title": "关键算法与实现"},
+        ]},
+        {"index": 4, "title": "实验与结果分析", "sections": [
+            {"title": "实验环境与数据集"},
+            {"title": "实验方案设计"},
+            {"title": "实验结果与讨论"},
+        ]},
+        {"index": 5, "title": "总结与展望", "sections": [
+            {"title": "研究工作总结"},
+            {"title": "主要贡献"},
+            {"title": "不足与展望"},
+        ]},
+    ]

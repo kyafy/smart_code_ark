@@ -47,6 +47,11 @@ class PaperState(TypedDict, total=False):
     # --- manuscript ---
     manuscript: Dict[str, Any]
 
+    # --- memory (Phase 4) ---
+    short_term_memories: List[str]
+    long_term_memories: List[str]
+    memory_context: str
+
     # --- control ---
     current_step: str
     error: Optional[str]

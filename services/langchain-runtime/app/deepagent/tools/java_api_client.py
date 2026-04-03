@@ -8,6 +8,7 @@ timeouts, and error mapping.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional
 
 import httpx
@@ -35,6 +36,17 @@ class JavaApiClient:
         self._config = config or CallbackConfig()
         self._run_id = run_id  # propagated to step-update payloads for retry tracing
         self._client: Optional[httpx.AsyncClient] = None
+
+    @classmethod
+    def from_state(cls, state: Dict[str, Any]) -> "JavaApiClient":
+        """Build a JavaApiClient from graph state (codegen or paper)."""
+        timeout = int(os.getenv("DEEPAGENT_CALLBACK_TIMEOUT", "120"))
+        config = CallbackConfig(
+            base_url=state.get("callback_base_url", "http://localhost:8080"),
+            api_key=state.get("callback_api_key", "smartark-internal"),
+            timeout=timeout,
+        )
+        return cls(config, run_id=state.get("run_id"))
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -328,6 +340,147 @@ class JavaApiClient:
                 "chapter_evidence_map": chapter_evidence_map or {},
             },
         )
+
+    # ------------------------------------------------------------------
+    # Memory bridge (Phase 4)
+    # ------------------------------------------------------------------
+
+    async def load_checkpoint(
+        self,
+        task_id: str,
+        limit: int = 8,
+    ) -> list[str]:
+        """POST /api/internal/task/{taskId}/memory/checkpoint/load
+
+        Returns the most recent checkpoint summaries for short-term memory.
+        """
+        try:
+            data = await self._post_json(
+                f"/api/internal/task/{task_id}/memory/checkpoint/load",
+                {"limit": limit},
+            )
+            if isinstance(data, list):
+                return [str(item) for item in data]
+            payload = self._ensure_dict(data)
+            entries = payload.get("entries", [])
+            return [str(e) for e in entries] if isinstance(entries, list) else []
+        except Exception as exc:
+            logger.warning("load_checkpoint failed (non-fatal): %s", exc)
+            return []
+
+    async def save_checkpoint(
+        self,
+        task_id: str,
+        step_code: str,
+        sequence: int,
+        prompt_summary: str = "",
+        output_summary: str = "",
+        failure_reason: str = "",
+        fixed_actions: list[str] | None = None,
+    ) -> None:
+        """POST /api/internal/task/{taskId}/memory/checkpoint/save"""
+        try:
+            await self._post_json(
+                f"/api/internal/task/{task_id}/memory/checkpoint/save",
+                {
+                    "step_code": step_code,
+                    "sequence": sequence,
+                    "prompt_summary": prompt_summary,
+                    "output_summary": output_summary,
+                    "failure_reason": failure_reason,
+                    "fixed_actions": fixed_actions or [],
+                },
+            )
+        except Exception as exc:
+            logger.warning("save_checkpoint failed (non-fatal): %s", exc)
+
+    async def load_longterm_memory(
+        self,
+        project_id: str,
+        user_id: int,
+        stack_signature: str,
+        limit: int = 8,
+    ) -> list[str]:
+        """POST /api/internal/memory/longterm/load
+
+        Returns top-K long-term patterns (success/failure) for this stack signature.
+        """
+        try:
+            data = await self._post_json(
+                "/api/internal/memory/longterm/load",
+                {
+                    "project_id": project_id,
+                    "user_id": user_id,
+                    "stack_signature": stack_signature,
+                    "limit": limit,
+                },
+            )
+            if isinstance(data, list):
+                return [str(item) for item in data]
+            payload = self._ensure_dict(data)
+            entries = payload.get("entries", [])
+            return [str(e) for e in entries] if isinstance(entries, list) else []
+        except Exception as exc:
+            logger.warning("load_longterm_memory failed (non-fatal): %s", exc)
+            return []
+
+    async def save_longterm_memory(
+        self,
+        project_id: str,
+        user_id: int,
+        stack_signature: str,
+        memory_type: str,
+        content: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        """POST /api/internal/memory/longterm/save
+
+        memory_type: 'success_pattern' | 'failure_pattern'
+        """
+        try:
+            await self._post_json(
+                "/api/internal/memory/longterm/save",
+                {
+                    "project_id": project_id,
+                    "user_id": user_id,
+                    "stack_signature": stack_signature,
+                    "memory_type": memory_type,
+                    "content": content,
+                    "metadata": metadata or {},
+                },
+            )
+        except Exception as exc:
+            logger.warning("save_longterm_memory failed (non-fatal): %s", exc)
+
+    async def assemble_context(
+        self,
+        step_code: str,
+        prd: str,
+        base_instructions: str,
+        short_term_memories: list[str] | None = None,
+        long_term_memories: list[str] | None = None,
+        max_chars: int = 4000,
+    ) -> Dict[str, Any]:
+        """POST /api/internal/memory/context/assemble
+
+        Delegates to Java ContextAssembler. Returns assembled context pack.
+        """
+        try:
+            data = await self._post_json(
+                "/api/internal/memory/context/assemble",
+                {
+                    "step_code": step_code,
+                    "prd": prd,
+                    "base_instructions": base_instructions,
+                    "short_term_memories": short_term_memories or [],
+                    "long_term_memories": long_term_memories or [],
+                    "max_chars": max_chars,
+                },
+            )
+            return self._ensure_dict(data)
+        except Exception as exc:
+            logger.warning("assemble_context failed (non-fatal): %s", exc)
+            return {"context_pack": "", "truncated": False}
 
     # ------------------------------------------------------------------
     # Node-level observability (Phase 2)

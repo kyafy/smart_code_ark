@@ -68,8 +68,8 @@ class CitationTraceMiddleware:
         if not content or len(content) < 100:
             return result
 
-        claims = self._extract_claims(content)
-        citations = self._extract_citations(content)
+        claims = self.extract_claims(content)
+        citations = self.extract_citations(content)
 
         if not claims:
             return result  # no claims to check
@@ -79,7 +79,7 @@ class CitationTraceMiddleware:
         coverage = covered / len(claims) if claims else 1.0
 
         if coverage < self._min_coverage:
-            uncovered = [c for c in claims if not self._has_nearby_citation(content, c)]
+            uncovered = [c for c in claims if not self.has_nearby_citation(content, c)]
             logger.warning(
                 "Citation coverage %.0f%% < %.0f%% for %s (%d/%d claims covered)",
                 coverage * 100, self._min_coverage * 100, path, covered, len(claims),
@@ -98,7 +98,7 @@ class CitationTraceMiddleware:
 
         return result
 
-    def _extract_claims(self, content: str) -> List[str]:
+    def extract_claims(self, content: str) -> List[str]:
         """Find sentences that make claims requiring citation."""
         claims = []
         sentences = re.split(r"[。.!！?？\n]", content)
@@ -110,7 +110,7 @@ class CitationTraceMiddleware:
                 claims.append(sent)
         return claims
 
-    def _extract_citations(self, content: str) -> List[str]:
+    def extract_citations(self, content: str) -> List[str]:
         """Find all citation markers in the content."""
         citations = []
         for pattern in _CITATION_PATTERNS:
@@ -121,9 +121,9 @@ class CitationTraceMiddleware:
         self, content: str, claims: List[str], citations: List[str]
     ) -> int:
         """Count claims that have a citation within proximity."""
-        return sum(1 for c in claims if self._has_nearby_citation(content, c))
+        return sum(1 for c in claims if self.has_nearby_citation(content, c))
 
-    def _has_nearby_citation(self, content: str, claim: str) -> bool:
+    def has_nearby_citation(self, content: str, claim: str) -> bool:
         """Check if a claim has a citation within ~200 chars."""
         idx = content.find(claim[:30])
         if idx < 0:

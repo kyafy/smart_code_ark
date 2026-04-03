@@ -35,8 +35,8 @@ _MEDICAL_KEYWORDS = {
     "public health", "epidemiology",
 }
 
-# Reranking weight profiles per discipline category
-_WEIGHT_PROFILES: Dict[str, Dict[str, float]] = {
+# Reranking weight profiles per discipline category (public for paper_nodes access)
+WEIGHT_PROFILES: Dict[str, Dict[str, float]] = {
     "humanities": {"vector": 0.80, "citation": 0.05, "recency": 0.15},
     "stem": {"vector": 0.60, "citation": 0.15, "recency": 0.25},
     "medical": {"vector": 0.55, "citation": 0.20, "recency": 0.25},
@@ -77,7 +77,7 @@ class AdaptiveRerankMiddleware:
 
         # Classify discipline and inject weights
         category = classify_discipline(discipline)
-        weights = _WEIGHT_PROFILES[category]
+        weights = WEIGHT_PROFILES[category]
 
         # Inject weights into the request args
         if hasattr(request, "args") and isinstance(request.args, dict):

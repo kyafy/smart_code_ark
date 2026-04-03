@@ -69,6 +69,12 @@ class CodegenState(TypedDict, total=False):
     quality_score: float
     quality_issues: List[str]
 
+    # --- memory (Phase 4) ---
+    short_term_memories: List[str]       # recent checkpoint summaries for this task
+    long_term_memories: List[str]        # cross-task success/failure patterns
+    memory_context: str                  # assembled context pack injected into prompts
+    fix_history: List[Dict[str, Any]]    # per-task fix records: [{file, error, fix, round}, ...]
+
     # --- control ---
     current_step: str
     error: Optional[str]

@@ -133,6 +133,13 @@ class DeepAgentConfig:
     max_quality_rewrite_rounds: int = 2
     quality_score_threshold: float = 0.66
     citation_coverage_threshold: float = 0.70
+    # --- memory settings (Phase 4) ---
+    memory_short_term_limit: int = 8   # max checkpoint entries to load
+    memory_long_term_limit: int = 8    # max long-term patterns to load
+    memory_context_max_chars: int = 4000  # max assembled context size
+    # --- smart retry settings (Phase 4) ---
+    smart_retry_max_retries: int = 2
+    smart_retry_backoff_base: float = 1.0
 
     def fix_limits(self, file_count: int) -> tuple:
         """Return (max_build, max_smoke, max_total) based on task complexity.
@@ -164,4 +171,9 @@ class DeepAgentConfig:
             max_quality_rewrite_rounds=int(os.getenv("DEEPAGENT_MAX_QUALITY_REWRITE_ROUNDS", "2")),
             quality_score_threshold=float(os.getenv("DEEPAGENT_QUALITY_THRESHOLD", "0.66")),
             citation_coverage_threshold=float(os.getenv("DEEPAGENT_CITATION_THRESHOLD", "0.70")),
+            memory_short_term_limit=int(os.getenv("DEEPAGENT_MEMORY_SHORT_TERM_LIMIT", "8")),
+            memory_long_term_limit=int(os.getenv("DEEPAGENT_MEMORY_LONG_TERM_LIMIT", "8")),
+            memory_context_max_chars=int(os.getenv("DEEPAGENT_MEMORY_CONTEXT_MAX_CHARS", "4000")),
+            smart_retry_max_retries=int(os.getenv("DEEPAGENT_SMART_RETRY_MAX", "2")),
+            smart_retry_backoff_base=float(os.getenv("DEEPAGENT_SMART_RETRY_BACKOFF", "1.0")),
         )

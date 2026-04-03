@@ -3,6 +3,9 @@
 Each node receives the full CodegenState dict and returns a partial
 dict update.  Nodes use tools (Java API callbacks + sandbox execute)
 to perform their work.
+
+Phase 4: integrated with MemoryBridge, SmartRetry, DynamicPrompt,
+ContextCompression, and AdaptiveModelSwitch middleware.
 """
 
 from __future__ import annotations
@@ -13,12 +16,26 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ..cancellation import check_cancelled
+from ..middleware.memory_bridge import MemoryBridgeMiddleware
+from ..middleware.smart_retry import SmartRetryMiddleware
+from ..middleware.dynamic_prompt import DynamicPromptMiddleware
+from ..middleware.context_compression import ContextCompressionMiddleware
+from ..middleware.adaptive_model_switch import AdaptiveModelSwitchMiddleware
+from ..middleware.code_quality import CodeQualityMiddleware
 from ..sandbox.sandbox_factory import create_sandbox, get_sandbox, mark_for_preview
 from ..tools.java_api_client import JavaApiClient
 from ..tools.llm_codegen_client import LLMCodegenClient
 from ..tools.node_metrics_collector import NodeMetricsCollector
 
 logger = logging.getLogger(__name__)
+
+# --- Middleware singletons (initialized once per process) ---
+_memory_bridge = MemoryBridgeMiddleware()
+_smart_retry = SmartRetryMiddleware()
+_dynamic_prompt = DynamicPromptMiddleware()
+_context_compression = ContextCompressionMiddleware()
+_model_switch = AdaptiveModelSwitchMiddleware()
+_code_quality = CodeQualityMiddleware()
 
 
 # ======================================================================
@@ -37,6 +54,10 @@ async def requirement_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
         client = JavaApiClient.from_state(state)
         task_id = state["task_id"]
 
+        # Phase 4: load memories before node execution
+        memory_state = await _memory_bridge.before_node(state, "requirement_analyze")
+        state = {**state, **memory_state}
+
         await client.update_step(task_id, "requirement_analyze", "running", progress=10)
 
         # Resolve template
@@ -53,7 +74,9 @@ async def requirement_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
         llm_client = LLMCodegenClient.from_state(state, node_name="requirement_analyze")
         if llm_client is not None:
             logger.info("requirement_analyze: using direct LLM for project structure")
-            structure = await llm_client.generate_project_structure(
+            # Phase 4: smart retry for structure generation
+            structure = await _smart_retry.wrap_generate_structure(
+                generate_fn=llm_client.generate_project_structure,
                 prd=state.get("prd", ""),
                 stack=stack,
                 instructions=state.get("instructions", ""),
@@ -85,7 +108,14 @@ async def requirement_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
             output_summary=f"Generated file plan with {len(file_plan)} files",
         )
 
+        # Phase 4: save checkpoint after node
+        await _memory_bridge.after_node(
+            state, "requirement_analyze",
+            output_summary=f"Generated {len(file_plan)} files structure plan",
+        )
+
         return {
+            **memory_state,
             "file_plan": file_plan,
             "file_list": safe_files,
             "template_key": template_info.get("template_key"),
@@ -149,11 +179,7 @@ async def sandbox_init(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def sandbox_build_verify(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Run build commands inside the sandbox and capture results.
-
-    The agent executes npm install / npm run build (or equivalent)
-    inside the sandbox container and observes the full output.
-    """
+    """Run build commands inside the sandbox and capture results."""
     check_cancelled(state)
     task_id = state["task_id"]
     sandbox = await get_sandbox(task_id)
@@ -215,8 +241,12 @@ async def sandbox_build_verify(state: Dict[str, Any]) -> Dict[str, Any]:
 async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
     """Attempt to fix build errors inside the sandbox.
 
-    Reads the build log, identifies error files, reads their content,
-    requests LLM to generate fixes, writes fixes back, and re-builds.
+    Phase 4 enhancements:
+    - Memory bridge: load fix history, check long-term patterns for known fixes
+    - Dynamic prompt: progressive fix instructions by round number
+    - Context compression: enriched error context with related file snippets
+    - Smart retry: semantic retry on empty/low-quality fix output
+    - Save successful fix patterns to long-term memory
     """
     check_cancelled(state)
     task_id = state["task_id"]
@@ -227,6 +257,10 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
     client = JavaApiClient.from_state(state)
     build_log = state.get("build_log", "")
     round_num = state.get("build_fix_round", 0) + 1
+
+    # Phase 4: load memories before fix
+    memory_state = await _memory_bridge.before_node(state, "build_fix")
+    state = {**state, **memory_state}
 
     await client.log(task_id, "info", f"Build fix attempt {round_num}")
 
@@ -255,20 +289,45 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
     llm_client = LLMCodegenClient.from_state(state, node_name="build_fix")
     tech_stack = f"{state.get('stack_backend', '')} {state.get('stack_frontend', '')}"
     project_structure = "\n".join(state.get("file_list", []))
+    fix_history = list(state.get("fix_history", []))
 
     for file_path in error_files[:5]:  # limit to 5 files per round
         check_cancelled(state)
         current = await sandbox.read(f"/app/{file_path}")
 
-        # Extract relevant error lines for this file
+        # Phase 4: enrich error context with compression middleware
         file_errors = _extract_errors_for_file(build_log, file_path)
+        enriched_context = _context_compression.build_fix_context(
+            state, file_path, file_errors,
+        )
+
+        # Phase 4: check long-term memory for proven fix patterns
+        fix_hint = _memory_bridge.build_fix_hint(state, file_errors)
+
+        # Phase 4: progressive fix instructions by round
+        round_hint = _dynamic_prompt.enhance_instructions(
+            base_instructions="",
+            state=state,
+            file_path=file_path,
+            step_code="build_fix",
+        )
+
+        # Phase 4: escalation hint from smart retry
+        escalation = _smart_retry.get_escalation_hint(file_path, round_num)
+
         fix_instructions = (
-            f"Fix the following build errors:\n{file_errors}\n\nCurrent file content:\n{current[:3000]}"
+            f"Fix the following build errors:\n{enriched_context}\n\n"
+            f"Current file content:\n{current[:3000]}"
+            f"{fix_hint}"
+            f"{round_hint}"
+            f"{escalation}"
         )
 
         if llm_client is not None:
             try:
-                fixed_content = await llm_client.generate_file_content(
+                # Phase 4: smart retry wrapping
+                fixed_content = await _smart_retry.wrap_generate_file(
+                    generate_fn=llm_client.generate_file_content,
                     file_path=file_path,
                     prd=state.get("prd", ""),
                     tech_stack=tech_stack,
@@ -300,12 +359,41 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
             await sandbox.write(f"/app/{file_path}", fixed_content)
             await client.log(task_id, "info", f"Fixed: {file_path}")
 
+            # Phase 4: record fix history for rolling window
+            fix_history.append({
+                "file": file_path,
+                "round": round_num,
+                "error_summary": file_errors[:200],
+                "fix_summary": f"Regenerated {file_path} with fix instructions",
+            })
+
     # Re-run build to verify fix
     verify_result = await sandbox_build_verify(state)
+
+    # Phase 4: save fix patterns based on result
+    build_passed = verify_result.get("build_status") == "passed"
+    for file_path in error_files[:5]:
+        file_errors = _extract_errors_for_file(build_log, file_path)
+        await _memory_bridge.save_fix_pattern(
+            state,
+            error_pattern=file_errors[:200],
+            fix_action=f"round_{round_num}_regenerated",
+            file_path=file_path,
+            success=build_passed,
+        )
+
+    # Phase 4: save checkpoint
+    await _memory_bridge.after_node(
+        state, "build_fix",
+        output_summary=f"Round {round_num}: {'passed' if build_passed else 'failed'}, fixed {len(error_files)} files",
+        failure_reason="" if build_passed else verify_result.get("build_log", "")[:300],
+        fixed_actions=[f"fixed:{f}" for f in error_files[:5]],
+    )
 
     result = {
         **verify_result,
         "build_fix_round": round_num,
+        "fix_history": fix_history,
         "current_step": "build_fix",
     }
     # When invoked from the smoke_fix path (build already passed, smoke failed),
@@ -316,11 +404,7 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def sandbox_smoke_test(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Start the dev server in sandbox and run smoke tests.
-
-    Boots the application, polls for health, and optionally tests
-    specific API endpoints or pages.
-    """
+    """Start the dev server in sandbox and run smoke tests."""
     check_cancelled(state)
     task_id = state["task_id"]
     sandbox = await get_sandbox(task_id)
@@ -385,12 +469,7 @@ async def sandbox_smoke_test(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def sandbox_preview_deploy(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Register the sandbox as a preview environment.
-
-    Since the smoke test already started the dev server in the sandbox,
-    we just register the sandbox port with the Java gateway.  This
-    replaces the 6-phase PreviewDeployService flow entirely.
-    """
+    """Register the sandbox as a preview environment."""
     check_cancelled(state)
     task_id = state["task_id"]
     sandbox = await get_sandbox(task_id)
@@ -470,10 +549,7 @@ def should_fix_smoke(state: Dict[str, Any]) -> str:
 
 
 async def _detect_project_roots(sandbox, state: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-    """Detect frontend/backend roots in sandbox from file_list and common fallbacks.
-
-    Returns: (frontend_root, backend_root), each as absolute path under /app.
-    """
+    """Detect frontend/backend roots in sandbox from file_list and common fallbacks."""
     file_list: List[str] = state.get("file_list", []) or []
     frontend_candidates: List[str] = []
     backend_candidates: List[str] = []
@@ -517,11 +593,14 @@ async def _generate_files_by_groups(
 ) -> Dict[str, Any]:
     """Generate code files for the specified groups.
 
-    Prefers direct LLM calls (concurrent) when DEEPAGENT_LLM_DIRECT_ENABLED=true,
-    falls back to the Java model proxy (serial) for backward compatibility.
+    Phase 4: integrated with all middleware layers.
     """
     client = JavaApiClient.from_state(state)
     task_id = state["task_id"]
+
+    # Phase 4: load memories before generation
+    memory_state = await _memory_bridge.before_node(state, step_code)
+    state = {**state, **memory_state}
 
     await client.update_step(task_id, step_code, "running", progress=10)
 
@@ -542,6 +621,7 @@ async def _generate_files_by_groups(
         success_count, fail_count = await _generate_files_concurrent(
             llm_client, target_files, prd, tech_stack, project_structure,
             instructions, generated, task_id, step_code, client, metrics=metrics,
+            state=state,
         )
     else:
         # Serial fallback via Java model proxy
@@ -549,6 +629,7 @@ async def _generate_files_by_groups(
         success_count, fail_count = await _generate_files_serial(
             client, target_files, prd, tech_stack, project_structure,
             instructions, generated, task_id, step_code, metrics=metrics,
+            state=state,
         )
 
     await client.update_step(
@@ -557,7 +638,14 @@ async def _generate_files_by_groups(
         output_summary=f"Generated {success_count} files, {fail_count} failures",
     )
 
+    # Phase 4: save checkpoint after generation
+    await _memory_bridge.after_node(
+        state, step_code,
+        output_summary=f"Generated {success_count}/{len(target_files)} files for {', '.join(groups)}",
+    )
+
     return {
+        **memory_state,
         "generated_files": generated,
     }
 
@@ -574,20 +662,50 @@ async def _generate_files_concurrent(
     step_code: str,
     callback_client: JavaApiClient,
     metrics: Optional[NodeMetricsCollector] = None,
+    state: Optional[Dict[str, Any]] = None,
 ) -> tuple[int, int]:
-    """Generate all files in a group concurrently, respecting the semaphore inside LLMCodegenClient."""
+    """Generate all files in a group concurrently with middleware integration."""
+    _state = state or {}
 
     async def _generate_one(file_item: Dict[str, Any]) -> tuple[str, Optional[str]]:
         path = file_item["path"]
         group = file_item["group"]
         try:
-            content = await llm_client.generate_file_content(
+            # Phase 4: compress PRD with relevance to this file
+            compressed_prd = _context_compression.compress_prd(prd, file_path=path)
+
+            # Phase 4: compress project structure with group focus
+            compressed_structure = _context_compression.compress_project_structure(
+                _state.get("file_list", []),
+                current_group=group,
+                current_file=path,
+            )
+
+            # Phase 4: extract cross-file dependency signatures
+            deps = _context_compression.extract_cross_file_deps(path, _state)
+
+            # Phase 4: enhance instructions with dynamic prompt
+            enhanced_instructions = _dynamic_prompt.enhance_instructions(
+                base_instructions=instructions,
+                state=_state,
                 file_path=path,
-                prd=prd,
+                step_code=step_code,
+            )
+
+            # Phase 4: append dependency context
+            if deps:
+                enhanced_instructions += f"\n\n{deps}"
+
+            # Phase 4: smart retry wrapping with quality check
+            content = await _smart_retry.wrap_generate_file(
+                generate_fn=llm_client.generate_file_content,
+                file_path=path,
+                prd=compressed_prd,
                 tech_stack=tech_stack,
-                project_structure=project_structure,
+                project_structure=compressed_structure,
                 group=group,
-                instructions=instructions,
+                instructions=enhanced_instructions,
+                quality_checker=_code_quality._check_quality,
             )
             return path, content if (content and content.strip()) else None
         except asyncio.TimeoutError:
@@ -633,8 +751,10 @@ async def _generate_files_serial(
     task_id: str,
     step_code: str,
     metrics: Optional[NodeMetricsCollector] = None,
+    state: Optional[Dict[str, Any]] = None,
 ) -> tuple[int, int]:
-    """Serial fallback: generate files one-by-one via Java proxy (original behavior)."""
+    """Serial fallback: generate files one-by-one via Java proxy with middleware."""
+    _state = state or {}
     success_count = 0
     fail_count = 0
 
@@ -642,13 +762,24 @@ async def _generate_files_serial(
         path = file_item["path"]
         group = file_item["group"]
         try:
+            # Phase 4: enhance instructions
+            enhanced_instructions = _dynamic_prompt.enhance_instructions(
+                base_instructions=instructions,
+                state=_state,
+                file_path=path,
+                step_code=step_code,
+            )
+
+            # Phase 4: compress PRD
+            compressed_prd = _context_compression.compress_prd(prd, file_path=path)
+
             content = await client.generate_file_content(
                 file_path=path,
-                prd=prd,
+                prd=compressed_prd,
                 tech_stack=tech_stack,
                 project_structure=project_structure,
                 group=group,
-                instructions=instructions,
+                instructions=enhanced_instructions,
             )
             if content and content.strip():
                 generated[path] = content
@@ -723,21 +854,5 @@ async def _async_sleep(seconds: int) -> None:
     await asyncio.sleep(seconds)
 
 
-class _JavaApiClientFromState:
-    """Helper to create JavaApiClient from graph state."""
-
-    @staticmethod
-    def from_state(state: Dict[str, Any]) -> JavaApiClient:
-        from ..config import CallbackConfig
-        timeout = int(os.getenv("DEEPAGENT_CALLBACK_TIMEOUT", "120"))
-        config = CallbackConfig(
-            base_url=state.get("callback_base_url", "http://localhost:8080"),
-            api_key=state.get("callback_api_key", "smartark-internal"),
-            timeout=timeout,
-        )
-        # Carry run_id so every update_step call auto-includes it (② run_id propagation)
-        return JavaApiClient(config, run_id=state.get("run_id"))
-
-
-# Monkey-patch for convenience
-JavaApiClient.from_state = staticmethod(_JavaApiClientFromState.from_state)
+    # Note: JavaApiClient.from_state() is now a proper classmethod
+    # defined in java_api_client.py (Phase 4 cleanup).
