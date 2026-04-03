@@ -230,6 +230,15 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
 
     await client.log(task_id, "info", f"Build fix attempt {round_num}")
 
+    # Fast-path: auto-heal known npm ETARGET issue before LLM-based file fixing.
+    frontend_root, _ = await _detect_project_roots(sandbox, state)
+    if frontend_root and "No matching version found for @types/date-fns@" in build_log:
+        await client.log(task_id, "warn", "Auto-fix npm ETARGET: removing @types/date-fns from package.json")
+        await sandbox.execute(
+            f"cd {frontend_root} && npm pkg delete devDependencies.@types/date-fns && npm pkg delete dependencies.@types/date-fns",
+            timeout=20,
+        )
+
     # Extract error file paths from build log (common patterns)
     error_files = _extract_error_files(build_log)
 

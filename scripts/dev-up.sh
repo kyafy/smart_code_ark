@@ -84,7 +84,7 @@ else
       echo "ERROR: neither ./mvnw nor mvn found on PATH" >&2
       exit 1
     fi
-    nohup $MVN_CMD -Dmaven.repo.local="${MAVEN_REPO_LOCAL}" spring-boot:run -DskipTests >"$ROOT_DIR/.logs/backend.log" 2>&1 &
+    nohup $MVN_CMD -Dmaven.repo.local="${MAVEN_REPO_LOCAL}" -Dmaven.test.skip=true spring-boot:run >"$ROOT_DIR/.logs/backend.log" 2>&1 &
     echo $! >"$ROOT_DIR/.pids/backend.pid"
   )
 fi
