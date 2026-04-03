@@ -15,6 +15,13 @@ from typing import Dict
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
+from ..cancellation import (
+    TaskCancelled,
+    cancel_by_task_id,
+    check_cancelled,
+    register_token,
+    remove_token,
+)
 from ..config import DeepAgentConfig
 from ..graphs.codegen_graph import build_codegen_graph
 from ..graphs.paper_graph import build_paper_graph
@@ -60,6 +67,7 @@ async def run_codegen(
 async def _execute_codegen(run_id: str, request: CodegenRunRequest) -> None:
     """Background task executing the codegen graph."""
     task_id = request.task_id
+    token = register_token(run_id)
 
     try:
         _run_status[run_id]["status"] = "running"
@@ -112,6 +120,14 @@ async def _execute_codegen(run_id: str, request: CodegenRunRequest) -> None:
         }
         logger.info("Codegen pipeline completed for task %s", task_id)
 
+    except TaskCancelled:
+        logger.info("Codegen pipeline cancelled for task %s (run %s)", task_id, run_id)
+        _run_status[run_id]["status"] = "cancelled"
+        try:
+            await destroy_sandbox(task_id)
+        except Exception:
+            pass
+
     except Exception as exc:
         logger.exception("Codegen pipeline failed for task %s: %s", task_id, exc)
         _run_status[run_id]["status"] = "failed"
@@ -122,6 +138,28 @@ async def _execute_codegen(run_id: str, request: CodegenRunRequest) -> None:
             await destroy_sandbox(task_id)
         except Exception:
             pass
+
+    finally:
+        remove_token(run_id)
+
+
+# ------------------------------------------------------------------
+# Cancellation
+# ------------------------------------------------------------------
+
+
+@router.post("/codegen/cancel/{task_id}")
+async def cancel_codegen(task_id: str) -> Dict:
+    """Cancel a running codegen pipeline by task_id.
+
+    Called by the Java API Gateway when the user clicks "Cancel".
+    Sets the cancellation flag so the next node check-point raises
+    ``TaskCancelled`` for a graceful exit.
+    """
+    found = cancel_by_task_id(task_id, _run_status)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"No active run for task {task_id}")
+    return {"task_id": task_id, "status": "cancelling"}
 
 
 # ------------------------------------------------------------------

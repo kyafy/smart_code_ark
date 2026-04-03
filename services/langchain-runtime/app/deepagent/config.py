@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -87,16 +88,65 @@ class CallbackConfig:
 
 
 @dataclass(frozen=True)
+class NodeModelConfig:
+    """Per-node LLM model overrides via DEEPAGENT_NODE_MODEL_{NODE_NAME} env vars.
+
+    Example:
+        DEEPAGENT_NODE_MODEL_BUILD_FIX=gml-5
+        DEEPAGENT_NODE_MODEL_REQUIREMENT_ANALYZE=qwen3-max
+    """
+
+    overrides: Dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_env(cls) -> NodeModelConfig:
+        prefix = "DEEPAGENT_NODE_MODEL_"
+        overrides: Dict[str, str] = {}
+        for key, val in os.environ.items():
+            if key.startswith(prefix) and val.strip():
+                node_name = key[len(prefix):].lower()
+                overrides[node_name] = val.strip()
+        return cls(overrides=overrides)
+
+    def get_model(self, node_name: str) -> Optional[str]:
+        """Return the model override for a node, or None to use the default."""
+        return self.overrides.get(node_name)
+
+
+@dataclass(frozen=True)
 class DeepAgentConfig:
     """Root configuration aggregating all sub-configs."""
 
     llm: LLMConfig = field(default_factory=LLMConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     callback: CallbackConfig = field(default_factory=CallbackConfig)
+    # --- simple task fix limits (file_count <= complexity_file_threshold) ---
     max_build_fix_rounds: int = 3
+    max_smoke_fix_rounds: int = 2
+    max_total_fix_rounds: int = 4       # combined cap for build_fix + smoke_fix
+    # --- complex task fix limits (file_count > complexity_file_threshold) ---
+    max_build_fix_rounds_complex: int = 5
+    max_smoke_fix_rounds_complex: int = 3
+    max_total_fix_rounds_complex: int = 7
+    # --- threshold to distinguish simple vs complex ---
+    complexity_file_threshold: int = 50  # file_plan count above this = complex
     max_quality_rewrite_rounds: int = 2
     quality_score_threshold: float = 0.66
     citation_coverage_threshold: float = 0.70
+
+    def fix_limits(self, file_count: int) -> tuple:
+        """Return (max_build, max_smoke, max_total) based on task complexity.
+
+        If file_count > complexity_file_threshold, use the complex tier;
+        otherwise use the simple tier.
+        """
+        if file_count > self.complexity_file_threshold:
+            return (self.max_build_fix_rounds_complex,
+                    self.max_smoke_fix_rounds_complex,
+                    self.max_total_fix_rounds_complex)
+        return (self.max_build_fix_rounds,
+                self.max_smoke_fix_rounds,
+                self.max_total_fix_rounds)
 
     @classmethod
     def from_env(cls) -> DeepAgentConfig:
@@ -105,6 +155,12 @@ class DeepAgentConfig:
             sandbox=SandboxConfig.from_env(),
             callback=CallbackConfig.from_env(),
             max_build_fix_rounds=int(os.getenv("DEEPAGENT_MAX_BUILD_FIX_ROUNDS", "3")),
+            max_smoke_fix_rounds=int(os.getenv("DEEPAGENT_MAX_SMOKE_FIX_ROUNDS", "2")),
+            max_total_fix_rounds=int(os.getenv("DEEPAGENT_MAX_TOTAL_FIX_ROUNDS", "4")),
+            max_build_fix_rounds_complex=int(os.getenv("DEEPAGENT_MAX_BUILD_FIX_ROUNDS_COMPLEX", "5")),
+            max_smoke_fix_rounds_complex=int(os.getenv("DEEPAGENT_MAX_SMOKE_FIX_ROUNDS_COMPLEX", "3")),
+            max_total_fix_rounds_complex=int(os.getenv("DEEPAGENT_MAX_TOTAL_FIX_ROUNDS_COMPLEX", "7")),
+            complexity_file_threshold=int(os.getenv("DEEPAGENT_COMPLEXITY_FILE_THRESHOLD", "50")),
             max_quality_rewrite_rounds=int(os.getenv("DEEPAGENT_MAX_QUALITY_REWRITE_ROUNDS", "2")),
             quality_score_threshold=float(os.getenv("DEEPAGENT_QUALITY_THRESHOLD", "0.66")),
             citation_coverage_threshold=float(os.getenv("DEEPAGENT_CITATION_THRESHOLD", "0.70")),

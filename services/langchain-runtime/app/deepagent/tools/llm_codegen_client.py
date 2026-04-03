@@ -195,22 +195,31 @@ class LLMCodegenClient:
         )
 
     @classmethod
-    def from_state(cls, state: Dict[str, Any]) -> Optional["LLMCodegenClient"]:
-        """Build from graph state, applying per-task llm_config_override on top of env.
+    def from_state(cls, state: Dict[str, Any], node_name: str = "") -> Optional["LLMCodegenClient"]:
+        """Build from graph state, applying per-task and per-node overrides on top of env.
+
+        Model priority (highest wins):
+          1. per-task llm_config_override (from request)
+          2. per-node env var  DEEPAGENT_NODE_MODEL_{NODE_NAME}
+          3. global default    LANGCHAIN_MODEL_NAME
 
         Returns None when direct LLM is disabled or not configured.
         """
-        from ..config import LLMConfig
+        from ..config import LLMConfig, NodeModelConfig
         cfg = LLMConfig.from_env()
         if not cfg.base_url or not cfg.direct_enabled:
             return None
 
         override: Dict[str, Any] = state.get("llm_config_override") or {}
 
+        # Resolve model: per-task override > per-node env > global default
+        node_model = NodeModelConfig.from_env().get_model(node_name) if node_name else None
+        model = str(override.get("model") or node_model or cfg.model)
+
         return cls(
             base_url=str(override.get("base_url") or cfg.base_url),
             api_key=str(override.get("api_key") or cfg.api_key),
-            model=str(override.get("model") or cfg.model),
+            model=model,
             temperature=float(override.get("temperature") if override.get("temperature") is not None else cfg.temperature),
             max_tokens=int(override.get("max_tokens") or cfg.max_tokens),
             codegen_timeout=int(override.get("codegen_timeout") or cfg.codegen_timeout),

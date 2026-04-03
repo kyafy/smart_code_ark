@@ -11,6 +11,7 @@ import logging
 import os
 from typing import Any, Dict, List
 
+from ..cancellation import check_cancelled
 from ..tools.java_api_client import JavaApiClient
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ async def plan_validate(state: Dict[str, Any]) -> Dict[str, Any]:
     - at least one recognised entry-file is present
     - total file count is within safe limits
     """
+    check_cancelled(state)
     client = JavaApiClient.from_state(state)
     task_id = state["task_id"]
 

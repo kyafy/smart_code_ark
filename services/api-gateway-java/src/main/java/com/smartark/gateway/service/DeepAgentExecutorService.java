@@ -158,6 +158,22 @@ public class DeepAgentExecutorService {
         }
     }
 
+    /**
+     * Notify the Python DeepAgent runtime to gracefully cancel a running pipeline.
+     * Best-effort: failure to reach the runtime does not break the cancel flow.
+     */
+    public void cancelRuntime(String taskId) {
+        try {
+            restClient.post()
+                    .uri(buildUrl("/v1/agent/codegen/cancel/" + taskId))
+                    .retrieve()
+                    .toBodilessEntity();
+            logger.info("Sent cancel to deepagent runtime for task {}", taskId);
+        } catch (Exception e) {
+            logger.warn("Failed to notify deepagent cancel for {}: {}", taskId, e.getMessage());
+        }
+    }
+
     private String buildUrl(String path) {
         String baseUrl = nullable(runtimeBaseUrl);
         if (baseUrl.isBlank()) {

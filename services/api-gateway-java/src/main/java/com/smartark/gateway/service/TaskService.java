@@ -85,6 +85,8 @@ public class TaskService {
     private ContainerRuntimeService containerRuntimeService;
     @Autowired(required = false)
     private TemplateRepoService templateRepoService;
+    @Autowired(required = false)
+    private DeepAgentExecutorService deepAgentExecutorService;
 
     private final TaskRepository taskRepository;
     private final TaskStepRepository taskStepRepository;
@@ -208,6 +210,12 @@ public class TaskService {
         task.setUpdatedAt(LocalDateTime.now());
         taskRepository.save(task);
         appendTaskLog(taskId, "warn", "Task cancelled by user");
+
+        // Notify Python DeepAgent runtime to gracefully stop the pipeline
+        if (deepAgentExecutorService != null) {
+            deepAgentExecutorService.cancelRuntime(taskId);
+        }
+
         return new GenerateResult(taskId, "cancelled");
     }
 

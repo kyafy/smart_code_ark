@@ -15,6 +15,7 @@ import logging
 import re
 from typing import Any, Dict, List, Set
 
+from ..cancellation import check_cancelled
 from ..tools.java_api_client import JavaApiClient
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ async def artifact_contract_validate(state: Dict[str, Any]) -> Dict[str, Any]:
 
     Violations are non-fatal: the pipeline continues to the sandbox chain.
     """
+    check_cancelled(state)
     client = JavaApiClient.from_state(state)
     task_id = state["task_id"]
 

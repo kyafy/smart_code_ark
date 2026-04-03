@@ -12,6 +12,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from ..cancellation import check_cancelled
 from ..sandbox.sandbox_factory import create_sandbox, get_sandbox, mark_for_preview
 from ..tools.java_api_client import JavaApiClient
 from ..tools.llm_codegen_client import LLMCodegenClient
@@ -31,6 +32,7 @@ async def requirement_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
     Calls Java ModelService to generate project structure, then sanitizes
     and validates the file list.
     """
+    check_cancelled(state)
     async with NodeMetricsCollector(state, "requirement_analyze") as metrics:
         client = JavaApiClient.from_state(state)
         task_id = state["task_id"]
@@ -48,7 +50,7 @@ async def requirement_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         # Generate project structure — prefer direct LLM, fall back to Java
-        llm_client = LLMCodegenClient.from_state(state)
+        llm_client = LLMCodegenClient.from_state(state, node_name="requirement_analyze")
         if llm_client is not None:
             logger.info("requirement_analyze: using direct LLM for project structure")
             structure = await llm_client.generate_project_structure(
@@ -93,6 +95,7 @@ async def requirement_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def sql_generate(state: Dict[str, Any]) -> Dict[str, Any]:
     """Generate database schema and infrastructure files."""
+    check_cancelled(state)
     async with NodeMetricsCollector(state, "sql_generate") as metrics:
         return await _generate_files_by_groups(
             state, groups={"database", "infra", "docs"}, step_code="sql_generate", metrics=metrics
@@ -101,6 +104,7 @@ async def sql_generate(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def codegen_backend(state: Dict[str, Any]) -> Dict[str, Any]:
     """Generate backend source code files."""
+    check_cancelled(state)
     async with NodeMetricsCollector(state, "codegen_backend") as metrics:
         return await _generate_files_by_groups(
             state, groups={"backend"}, step_code="codegen_backend", metrics=metrics
@@ -109,6 +113,7 @@ async def codegen_backend(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def codegen_frontend(state: Dict[str, Any]) -> Dict[str, Any]:
     """Generate frontend source code files."""
+    check_cancelled(state)
     async with NodeMetricsCollector(state, "codegen_frontend") as metrics:
         return await _generate_files_by_groups(
             state, groups={"frontend"}, step_code="codegen_frontend", metrics=metrics
@@ -122,6 +127,7 @@ async def codegen_frontend(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def sandbox_init(state: Dict[str, Any]) -> Dict[str, Any]:
     """Initialize the sandbox container and write all generated files into it."""
+    check_cancelled(state)
     from ..config import SandboxConfig
 
     task_id = state["task_id"]
@@ -148,6 +154,7 @@ async def sandbox_build_verify(state: Dict[str, Any]) -> Dict[str, Any]:
     The agent executes npm install / npm run build (or equivalent)
     inside the sandbox container and observes the full output.
     """
+    check_cancelled(state)
     task_id = state["task_id"]
     sandbox = await get_sandbox(task_id)
     if sandbox is None:
@@ -211,6 +218,7 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
     Reads the build log, identifies error files, reads their content,
     requests LLM to generate fixes, writes fixes back, and re-builds.
     """
+    check_cancelled(state)
     task_id = state["task_id"]
     sandbox = await get_sandbox(task_id)
     if sandbox is None:
@@ -235,11 +243,12 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # For each error file: read current content, request fix from LLM
-    llm_client = LLMCodegenClient.from_state(state)
+    llm_client = LLMCodegenClient.from_state(state, node_name="build_fix")
     tech_stack = f"{state.get('stack_backend', '')} {state.get('stack_frontend', '')}"
     project_structure = "\n".join(state.get("file_list", []))
 
     for file_path in error_files[:5]:  # limit to 5 files per round
+        check_cancelled(state)
         current = await sandbox.read(f"/app/{file_path}")
 
         # Extract relevant error lines for this file
@@ -285,11 +294,16 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
     # Re-run build to verify fix
     verify_result = await sandbox_build_verify(state)
 
-    return {
+    result = {
         **verify_result,
         "build_fix_round": round_num,
         "current_step": "build_fix",
     }
+    # When invoked from the smoke_fix path (build already passed, smoke failed),
+    # also increment smoke_fix_round so should_fix_smoke() can enforce its limit.
+    if state.get("build_status") == "passed":
+        result["smoke_fix_round"] = state.get("smoke_fix_round", 0) + 1
+    return result
 
 
 async def sandbox_smoke_test(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -298,6 +312,7 @@ async def sandbox_smoke_test(state: Dict[str, Any]) -> Dict[str, Any]:
     Boots the application, polls for health, and optionally tests
     specific API endpoints or pages.
     """
+    check_cancelled(state)
     task_id = state["task_id"]
     sandbox = await get_sandbox(task_id)
     if sandbox is None:
@@ -325,6 +340,7 @@ async def sandbox_smoke_test(state: Dict[str, Any]) -> Dict[str, Any]:
     smoke_log_parts = []
 
     for attempt in range(20):
+        check_cancelled(state)
         await _async_sleep(3)
         result = await sandbox.execute(
             "curl -s -o /dev/null -w '%{http_code}' http://localhost:5173/ 2>/dev/null || echo 000",
@@ -366,6 +382,7 @@ async def sandbox_preview_deploy(state: Dict[str, Any]) -> Dict[str, Any]:
     we just register the sandbox port with the Java gateway.  This
     replaces the 6-phase PreviewDeployService flow entirely.
     """
+    check_cancelled(state)
     task_id = state["task_id"]
     sandbox = await get_sandbox(task_id)
     if sandbox is None:
@@ -408,8 +425,15 @@ def should_fix_build(state: Dict[str, Any]) -> str:
     """Route after build_verify: fix or proceed to smoke test."""
     if state.get("build_status") == "passed":
         return "smoke_test"
-    max_rounds = 3
-    if state.get("build_fix_round", 0) >= max_rounds:
+    from ..config import DeepAgentConfig
+    cfg = DeepAgentConfig.from_env()
+    file_count = len(state.get("file_plan", []))
+    max_build, _, max_total = cfg.fix_limits(file_count)
+    build_rounds = state.get("build_fix_round", 0)
+    total = build_rounds + state.get("smoke_fix_round", 0)
+    if build_rounds >= max_build or total >= max_total:
+        logger.info("Build fix limit reached (build=%d, total=%d, tier=%s), skipping to smoke_test",
+                     build_rounds, total, "complex" if file_count > cfg.complexity_file_threshold else "simple")
         return "smoke_test"  # give up fixing, try smoke test anyway
     return "build_fix"
 
@@ -418,8 +442,15 @@ def should_fix_smoke(state: Dict[str, Any]) -> str:
     """Route after smoke_test: retry fix or proceed to preview."""
     if state.get("smoke_status") == "passed":
         return "preview_deploy"
-    max_rounds = 2
-    if state.get("smoke_fix_round", 0) >= max_rounds:
+    from ..config import DeepAgentConfig
+    cfg = DeepAgentConfig.from_env()
+    file_count = len(state.get("file_plan", []))
+    _, max_smoke, max_total = cfg.fix_limits(file_count)
+    smoke_rounds = state.get("smoke_fix_round", 0)
+    total = state.get("build_fix_round", 0) + smoke_rounds
+    if smoke_rounds >= max_smoke or total >= max_total:
+        logger.info("Smoke fix limit reached (smoke=%d, total=%d, tier=%s), skipping to preview_deploy",
+                     smoke_rounds, total, "complex" if file_count > cfg.complexity_file_threshold else "simple")
         return "preview_deploy"  # deploy anyway with degraded status
     return "build_fix"  # try fixing build issues that cause runtime failure
 
@@ -494,11 +525,11 @@ async def _generate_files_by_groups(
     prd = state.get("prd", "")
     instructions = state.get("instructions", "")
 
-    llm_client = LLMCodegenClient.from_state(state)
+    llm_client = LLMCodegenClient.from_state(state, node_name=step_code)
 
     if llm_client is not None:
         # Concurrent generation via direct LLM calls
-        logger.info("%s: generating %d files concurrently via direct LLM", step_code, len(target_files))
+        logger.info("%s: generating %d files concurrently via direct LLM (model=%s)", step_code, len(target_files), llm_client._model)
         success_count, fail_count = await _generate_files_concurrent(
             llm_client, target_files, prd, tech_stack, project_structure,
             instructions, generated, task_id, step_code, client, metrics=metrics,
