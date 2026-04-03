@@ -8,6 +8,7 @@ RAG, and LLM generation.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List
 
 from ..tools.java_api_client import JavaApiClient
@@ -22,9 +23,11 @@ logger = logging.getLogger(__name__)
 
 def _client_from_state(state: Dict[str, Any]) -> JavaApiClient:
     from ..config import CallbackConfig
+    timeout = int(os.getenv("DEEPAGENT_CALLBACK_TIMEOUT", "120"))
     config = CallbackConfig(
         base_url=state.get("callback_base_url", "http://localhost:8080"),
         api_key=state.get("callback_api_key", "smartark-internal"),
+        timeout=timeout,
     )
     return JavaApiClient(config)
 

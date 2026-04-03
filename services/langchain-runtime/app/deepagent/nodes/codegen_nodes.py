@@ -8,6 +8,7 @@ to perform their work.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict
 
 from ..sandbox.sandbox_factory import create_sandbox, get_sandbox, mark_for_preview
@@ -484,9 +485,11 @@ class _JavaApiClientFromState:
     @staticmethod
     def from_state(state: Dict[str, Any]) -> JavaApiClient:
         from ..config import CallbackConfig
+        timeout = int(os.getenv("DEEPAGENT_CALLBACK_TIMEOUT", "120"))
         config = CallbackConfig(
             base_url=state.get("callback_base_url", "http://localhost:8080"),
             api_key=state.get("callback_api_key", "smartark-internal"),
+            timeout=timeout,
         )
         return JavaApiClient(config)
 

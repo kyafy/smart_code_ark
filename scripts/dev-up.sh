@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 mkdir -p .logs .pids
+mkdir -p .m2repo
 
 if [ -f ".env" ]; then
   set -a
@@ -32,6 +33,7 @@ export QDRANT_GRPC_PORT="${QDRANT_GRPC_PORT:-6334}"
 
 export JWT_SECRET="${JWT_SECRET:-change-me}"
 export JWT_TTL_SECONDS="${JWT_TTL_SECONDS:-604800}"
+export MAVEN_REPO_LOCAL="${MAVEN_REPO_LOCAL:-$ROOT_DIR/.m2repo}"
 
 export MODEL_BASE_URL="${MODEL_BASE_URL:-}"
 export MODEL_API_KEY="${MODEL_API_KEY:-}"
@@ -82,7 +84,7 @@ else
       echo "ERROR: neither ./mvnw nor mvn found on PATH" >&2
       exit 1
     fi
-    nohup $MVN_CMD spring-boot:run -DskipTests >"$ROOT_DIR/.logs/backend.log" 2>&1 &
+    nohup $MVN_CMD -Dmaven.repo.local="${MAVEN_REPO_LOCAL}" spring-boot:run -DskipTests >"$ROOT_DIR/.logs/backend.log" 2>&1 &
     echo $! >"$ROOT_DIR/.pids/backend.pid"
   )
 fi
