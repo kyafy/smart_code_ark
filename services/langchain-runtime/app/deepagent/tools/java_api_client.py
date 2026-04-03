@@ -17,6 +17,17 @@ from ..config import CallbackConfig
 logger = logging.getLogger(__name__)
 
 
+class JavaApiError(RuntimeError):
+    """Raised when Java internal API returns business failure payload."""
+
+    def __init__(self, path: str, code: int, message: str, payload: Any = None) -> None:
+        super().__init__(f"java internal api failed: path={path}, code={code}, message={message}")
+        self.path = path
+        self.code = code
+        self.message = message
+        self.payload = payload
+
+
 class JavaApiClient:
     """Async HTTP client for Java API Gateway internal endpoints."""
 
@@ -40,6 +51,46 @@ class JavaApiClient:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
+    async def _post_json(self, path: str, payload: Dict[str, Any]) -> Any:
+        client = await self._ensure_client()
+        resp = await client.post(path, json=payload)
+        resp.raise_for_status()
+        return self._unwrap_payload(path, resp)
+
+    def _unwrap_payload(self, path: str, resp: httpx.Response) -> Any:
+        if not resp.content:
+            return None
+        try:
+            payload = resp.json()
+        except ValueError:
+            text = (resp.text or "").strip()
+            if text:
+                logger.debug("Non-JSON response from Java API: path=%s, body=%s", path, text[:200])
+                return text
+            return None
+
+        # Compatible with Java ApiResponse envelope:
+        # {"code": 0, "message": "ok", "data": {...}}
+        if isinstance(payload, dict) and "code" in payload and "message" in payload:
+            code_raw = payload.get("code")
+            try:
+                code = int(code_raw)
+            except Exception:
+                code = -1
+            message = str(payload.get("message") or "")
+            if code != 0:
+                raise JavaApiError(path=path, code=code, message=message or "unknown", payload=payload)
+            return payload.get("data")
+
+        # Bare JSON payload mode.
+        return payload
+
+    @staticmethod
+    def _ensure_dict(value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        return {}
+
     # ------------------------------------------------------------------
     # Task step updates
     # ------------------------------------------------------------------
@@ -56,7 +107,6 @@ class JavaApiClient:
         error_message: Optional[str] = None,
     ) -> None:
         """POST /api/internal/task/{taskId}/step-update"""
-        client = await self._ensure_client()
         payload: Dict[str, Any] = {
             "step_code": step_code,
             "status": status,
@@ -70,21 +120,15 @@ class JavaApiClient:
         if error_message:
             payload["error_message"] = error_message
 
-        resp = await client.post(
-            f"/api/internal/task/{task_id}/step-update",
-            json=payload,
-        )
-        resp.raise_for_status()
+        await self._post_json(f"/api/internal/task/{task_id}/step-update", payload)
         logger.debug("Step update sent: task=%s step=%s status=%s", task_id, step_code, status)
 
     async def log(self, task_id: str, level: str, content: str) -> None:
         """POST /api/internal/task/{taskId}/log"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        await self._post_json(
             f"/api/internal/task/{task_id}/log",
-            json={"level": level, "content": content},
+            {"level": level, "content": content},
         )
-        resp.raise_for_status()
 
     # ------------------------------------------------------------------
     # Preview callbacks
@@ -100,17 +144,15 @@ class JavaApiClient:
 
         Returns the preview URL assigned by Java gateway.
         """
-        client = await self._ensure_client()
-        resp = await client.post(
+        data = await self._post_json(
             f"/api/internal/preview/{task_id}/sandbox-ready",
-            json={
+            {
                 "host_port": host_port,
                 "container_id": container_id,
             },
         )
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("preview_url", f"/p/{task_id}/")
+        payload = self._ensure_dict(data)
+        return str(payload.get("preview_url") or f"/p/{task_id}/")
 
     async def notify_hotfix(
         self,
@@ -119,15 +161,13 @@ class JavaApiClient:
         files_changed: list[str] | None = None,
     ) -> None:
         """POST /api/internal/preview/{taskId}/hotfix"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        await self._post_json(
             f"/api/internal/preview/{task_id}/hotfix",
-            json={
+            {
                 "fix_description": fix_description,
                 "files_changed": files_changed or [],
             },
         )
-        resp.raise_for_status()
 
     # ------------------------------------------------------------------
     # Model / generation delegation
@@ -137,13 +177,13 @@ class JavaApiClient:
         self, prd: str, stack: Dict[str, str], instructions: str = ""
     ) -> Dict[str, Any]:
         """POST /api/internal/model/structure"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        data = await self._post_json(
             "/api/internal/model/structure",
-            json={"prd": prd, "stack": stack, "instructions": instructions},
+            {"prd": prd, "stack": stack, "instructions": instructions},
         )
-        resp.raise_for_status()
-        return resp.json()
+        if isinstance(data, list):
+            return {"files": data}
+        return self._ensure_dict(data)
 
     async def generate_file_content(
         self,
@@ -155,10 +195,9 @@ class JavaApiClient:
         instructions: str = "",
     ) -> str:
         """POST /api/internal/model/generate-file"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        data = await self._post_json(
             "/api/internal/model/generate-file",
-            json={
+            {
                 "file_path": file_path,
                 "prd": prd,
                 "tech_stack": tech_stack,
@@ -167,8 +206,10 @@ class JavaApiClient:
                 "instructions": instructions,
             },
         )
-        resp.raise_for_status()
-        return resp.json().get("content", "")
+        if isinstance(data, str):
+            return data
+        payload = self._ensure_dict(data)
+        return str(payload.get("content") or "")
 
     # ------------------------------------------------------------------
     # Academic / RAG
@@ -181,13 +222,17 @@ class JavaApiClient:
         limit: int = 20,
     ) -> list[Dict[str, Any]]:
         """POST /api/internal/academic/search"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        data = await self._post_json(
             "/api/internal/academic/search",
-            json={"query": query, "discipline": discipline, "limit": limit},
+            {"query": query, "discipline": discipline, "limit": limit},
         )
-        resp.raise_for_status()
-        return resp.json().get("results", [])
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        payload = self._ensure_dict(data)
+        results = payload.get("results", [])
+        if isinstance(results, list):
+            return [item for item in results if isinstance(item, dict)]
+        return []
 
     async def rag_index(
         self,
@@ -196,17 +241,15 @@ class JavaApiClient:
         discipline: str = "",
     ) -> Dict[str, Any]:
         """POST /api/internal/rag/index"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        data = await self._post_json(
             "/api/internal/rag/index",
-            json={
+            {
                 "session_id": session_id,
                 "sources": sources,
                 "discipline": discipline,
             },
         )
-        resp.raise_for_status()
-        return resp.json()
+        return self._ensure_dict(data)
 
     async def rag_retrieve(
         self,
@@ -216,18 +259,22 @@ class JavaApiClient:
         top_k: int = 30,
     ) -> list[Dict[str, Any]]:
         """POST /api/internal/rag/retrieve"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        data = await self._post_json(
             "/api/internal/rag/retrieve",
-            json={
+            {
                 "session_id": session_id,
                 "query": query,
                 "discipline": discipline,
                 "top_k": top_k,
             },
         )
-        resp.raise_for_status()
-        return resp.json().get("evidence", [])
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        payload = self._ensure_dict(data)
+        evidence = payload.get("evidence", [])
+        if isinstance(evidence, list):
+            return [item for item in evidence if isinstance(item, dict)]
+        return []
 
     async def quality_evaluate(
         self,
@@ -235,13 +282,11 @@ class JavaApiClient:
         workspace_dir: str = "",
     ) -> Dict[str, Any]:
         """POST /api/internal/quality/evaluate"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        data = await self._post_json(
             "/api/internal/quality/evaluate",
-            json={"task_id": task_id, "workspace_dir": workspace_dir},
+            {"task_id": task_id, "workspace_dir": workspace_dir},
         )
-        resp.raise_for_status()
-        return resp.json()
+        return self._ensure_dict(data)
 
     # ------------------------------------------------------------------
     # Template
@@ -251,13 +296,11 @@ class JavaApiClient:
         self, stack: Dict[str, str], template_id: str = ""
     ) -> Dict[str, Any]:
         """POST /api/internal/template/resolve"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        data = await self._post_json(
             "/api/internal/template/resolve",
-            json={"stack": stack, "template_id": template_id},
+            {"stack": stack, "template_id": template_id},
         )
-        resp.raise_for_status()
-        return resp.json()
+        return self._ensure_dict(data)
 
     # ------------------------------------------------------------------
     # Paper persistence
@@ -271,16 +314,14 @@ class JavaApiClient:
         chapter_evidence_map: Optional[Dict[str, Any]] = None,
     ) -> None:
         """POST /api/internal/paper/{sessionId}/outline"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        await self._post_json(
             f"/api/internal/paper/{session_id}/outline",
-            json={
+            {
                 "outline_json": outline_json,
                 "citation_style": citation_style,
                 "chapter_evidence_map": chapter_evidence_map or {},
             },
         )
-        resp.raise_for_status()
 
     async def persist_paper_manuscript(
         self,
@@ -290,13 +331,11 @@ class JavaApiClient:
         quality_score: float = 0.0,
     ) -> None:
         """POST /api/internal/paper/{sessionId}/manuscript"""
-        client = await self._ensure_client()
-        resp = await client.post(
+        await self._post_json(
             f"/api/internal/paper/{session_id}/manuscript",
-            json={
+            {
                 "manuscript_json": manuscript_json,
                 "quality_report": quality_report or {},
                 "quality_score": quality_score,
             },
         )
-        resp.raise_for_status()
