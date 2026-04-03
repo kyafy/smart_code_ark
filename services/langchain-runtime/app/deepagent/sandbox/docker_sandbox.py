@@ -62,44 +62,57 @@ class DockerSandboxBackend:
         self._task_id = task_id
         self._client = docker.DockerClient(base_url=self._config.docker_host)
 
-        self._host_port = self._find_available_port()
         container_name = f"{self._config.container_name_prefix}-{task_id[:12]}"
 
         # Remove stale container with same name if exists
         self._remove_if_exists(container_name)
 
-        logger.info(
-            "Creating sandbox container %s (image=%s, port=%d->%d)",
-            container_name,
-            self._config.base_image,
-            self._host_port,
-            self._config.internal_port,
-        )
+        # Important: port-availability check must be against the host Docker daemon,
+        # not the runtime container namespace. So we allocate by trying to create the
+        # container and retrying on host-port collision.
+        for port in range(self._config.host_port_start, self._config.host_port_end):
+            try:
+                logger.info(
+                    "Creating sandbox container %s (image=%s, port=%d->%d)",
+                    container_name,
+                    self._config.base_image,
+                    port,
+                    self._config.internal_port,
+                )
+                self._container = self._client.containers.run(
+                    image=self._config.base_image,
+                    name=container_name,
+                    command="tail -f /dev/null",  # keep alive
+                    detach=True,
+                    ports={f"{self._config.internal_port}/tcp": port},
+                    mem_limit=self._config.memory_limit,
+                    nano_cpus=int(self._config.cpu_limit * 1e9),
+                    working_dir=self._config.workspace_mount,
+                    labels={
+                        "smartark.sandbox": "true",
+                        "smartark.task_id": task_id,
+                    },
+                )
+                self._host_port = port
+                logger.info(
+                    "Sandbox %s started (container=%s, host_port=%d)",
+                    container_name,
+                    self._container.short_id,
+                    self._host_port,
+                )
+                return self._host_port
+            except APIError as exc:
+                msg = str(exc).lower()
+                if "port is already allocated" in msg or "bind for 0.0.0.0" in msg:
+                    logger.warning("Sandbox port %d already allocated, retry next port", port)
+                    # If a failed container with same name was left behind, clean it up.
+                    self._remove_if_exists(container_name)
+                    continue
+                raise
 
-        self._container = self._client.containers.run(
-            image=self._config.base_image,
-            name=container_name,
-            command="tail -f /dev/null",  # keep alive
-            detach=True,
-            ports={
-                f"{self._config.internal_port}/tcp": self._host_port,
-            },
-            mem_limit=self._config.memory_limit,
-            nano_cpus=int(self._config.cpu_limit * 1e9),
-            working_dir=self._config.workspace_mount,
-            labels={
-                "smartark.sandbox": "true",
-                "smartark.task_id": task_id,
-            },
+        raise RuntimeError(
+            f"No available sandbox port in range {self._config.host_port_start}-{self._config.host_port_end}"
         )
-
-        logger.info(
-            "Sandbox %s started (container=%s, host_port=%d)",
-            container_name,
-            self._container.short_id,
-            self._host_port,
-        )
-        return self._host_port
 
     async def stop(self) -> None:
         """Stop and remove the sandbox container."""

@@ -156,25 +156,32 @@ async def sandbox_build_verify(state: Dict[str, Any]) -> Dict[str, Any]:
     client = JavaApiClient.from_state(state)
     await client.update_step(task_id, "build_verify", "running", progress=10)
 
-    # Detect project type and run build
-    has_package_json = await sandbox.file_exists("/app/package.json")
-    has_pom = await sandbox.file_exists("/app/pom.xml")
+    # Detect project roots and run build in the correct sub-directory.
+    frontend_root, backend_root = await _detect_project_roots(sandbox, state)
+    has_package_json = frontend_root is not None
+    has_pom = backend_root is not None
 
     build_log_parts = []
 
     if has_package_json:
         # Node.js project
-        result = await sandbox.execute("cd /app && npm install --prefer-offline 2>&1", timeout=120)
+        result = await sandbox.execute(
+            f"cd {frontend_root} && npm install --prefer-offline 2>&1",
+            timeout=120,
+        )
         build_log_parts.append(f"=== npm install (exit={result.exit_code}) ===\n{result.stdout}")
 
         if result.exit_code == 0:
-            result = await sandbox.execute("cd /app && npm run build 2>&1", timeout=180)
+            result = await sandbox.execute(
+                f"cd {frontend_root} && npm run build 2>&1",
+                timeout=180,
+            )
             build_log_parts.append(f"=== npm run build (exit={result.exit_code}) ===\n{result.stdout}")
 
     elif has_pom:
         # Maven project
         result = await sandbox.execute(
-            "cd /app && mvn -q -DskipTests package 2>&1", timeout=300
+            f"cd {backend_root} && mvn -q -DskipTests package 2>&1", timeout=300
         )
         build_log_parts.append(f"=== mvn package (exit={result.exit_code}) ===\n{result.stdout}")
 
@@ -299,9 +306,17 @@ async def sandbox_smoke_test(state: Dict[str, Any]) -> Dict[str, Any]:
     client = JavaApiClient.from_state(state)
     await client.update_step(task_id, "smoke_test", "running", progress=10)
 
-    # Start dev server in background
+    frontend_root, _ = await _detect_project_roots(sandbox, state)
+    if frontend_root is None:
+        smoke_log = "No frontend package.json found. Cannot start dev server."
+        await client.update_step(
+            task_id, "smoke_test", "running", progress=60, output_summary="Smoke test failed"
+        )
+        return {"smoke_status": "failed", "smoke_log": smoke_log, "current_step": "smoke_test"}
+
+    # Start dev server in background from detected frontend root.
     await sandbox.execute(
-        "cd /app && npm run dev -- --host 0.0.0.0 > /tmp/dev-server.log 2>&1 &",
+        f"cd {frontend_root} && npm run dev -- --host 0.0.0.0 > /tmp/dev-server.log 2>&1 &",
         timeout=10,
     )
 
@@ -414,6 +429,46 @@ def should_fix_smoke(state: Dict[str, Any]) -> str:
 # ======================================================================
 
 
+async def _detect_project_roots(sandbox, state: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """Detect frontend/backend roots in sandbox from file_list and common fallbacks.
+
+    Returns: (frontend_root, backend_root), each as absolute path under /app.
+    """
+    file_list: List[str] = state.get("file_list", []) or []
+    frontend_candidates: List[str] = []
+    backend_candidates: List[str] = []
+
+    for p in file_list:
+        if p.lower().endswith("package.json"):
+            d = p.rsplit("/", 1)[0] if "/" in p else ""
+            frontend_candidates.append(f"/app/{d}" if d else "/app")
+        if p.lower().endswith("pom.xml"):
+            d = p.rsplit("/", 1)[0] if "/" in p else ""
+            backend_candidates.append(f"/app/{d}" if d else "/app")
+
+    # Common conventions fallback
+    frontend_candidates.extend(["/app", "/app/frontend", "/app/web", "/app/client"])
+    backend_candidates.extend(["/app", "/app/backend"])
+
+    # Deduplicate while preserving order
+    frontend_candidates = list(dict.fromkeys(frontend_candidates))
+    backend_candidates = list(dict.fromkeys(backend_candidates))
+
+    frontend_root = None
+    for c in frontend_candidates:
+        if await sandbox.file_exists(f"{c}/package.json"):
+            frontend_root = c
+            break
+
+    backend_root = None
+    for c in backend_candidates:
+        if await sandbox.file_exists(f"{c}/pom.xml"):
+            backend_root = c
+            break
+
+    return frontend_root, backend_root
+
+
 async def _generate_files_by_groups(
     state: Dict[str, Any],
     groups: set[str],
@@ -464,7 +519,6 @@ async def _generate_files_by_groups(
 
     return {
         "generated_files": generated,
-        "current_step": step_code,
     }
 
 

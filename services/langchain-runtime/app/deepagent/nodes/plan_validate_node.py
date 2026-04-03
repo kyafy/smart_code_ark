@@ -8,6 +8,7 @@ parallel generation domains via LangGraph Send API.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List
 
 from ..tools.java_api_client import JavaApiClient
@@ -24,7 +25,7 @@ _REQUIRED_ENTRY_FILES = {
     "Cargo.toml",
 }
 
-_ALLOWED_MAX_FILES = 200
+_ALLOWED_MAX_FILES = max(50, int(os.getenv("DEEPAGENT_PLAN_MAX_FILES", "260")))
 
 
 async def plan_validate(state: Dict[str, Any]) -> Dict[str, Any]:

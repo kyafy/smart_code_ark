@@ -50,7 +50,11 @@ services:
       DEEPAGENT_LLM_DIRECT_ENABLED: ${DEEPAGENT_LLM_DIRECT_ENABLED:-false}
       DEEPAGENT_LLM_CODEGEN_TIMEOUT: ${DEEPAGENT_LLM_CODEGEN_TIMEOUT:-90}
       DEEPAGENT_LLM_CONCURRENCY: ${DEEPAGENT_LLM_CONCURRENCY:-5}
+      DEEPAGENT_PLAN_MAX_FILES: ${DEEPAGENT_PLAN_MAX_FILES:-260}
+      DEEPAGENT_DOCKER_HOST: ${DEEPAGENT_DOCKER_HOST:-unix:///var/run/docker.sock}
       TZ: UTC
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "18080:18080"
     healthcheck:
