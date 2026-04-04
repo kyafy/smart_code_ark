@@ -68,15 +68,29 @@ def _strip_json_fence(text: str) -> str:
     return text
 
 
+_PAPER_NODE_TIMEOUTS: Dict[str, int] = {
+    "topic_clarify": 90,
+    "outline_generate": 120,
+    "outline_expand": 180,
+    "quality_rewrite": 180,
+}
+
+_LLM_RETRY_MAX = 3
+_LLM_RETRY_BACKOFF_BASE = 2.0
+
+
 async def _llm_invoke(
     state: Dict[str, Any],
     node_name: str,
     system_prompt: str,
     user_prompt: str,
-    timeout: int = 90,
+    timeout: int = 0,
+    max_retries: int = _LLM_RETRY_MAX,
 ) -> str:
-    """Invoke LLM directly for paper generation.
+    """Invoke LLM directly for paper generation with exponential-backoff retry.
 
+    Timeout defaults are per-node (outline_expand/quality_rewrite get 180s).
+    Retries on timeout and transient errors with exponential backoff.
     Returns raw response content. Falls back to empty string on failure.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -86,19 +100,104 @@ async def _llm_invoke(
         logger.warning("paper[%s]: no direct LLM configured, returning empty", node_name)
         return ""
 
+    effective_timeout = timeout if timeout > 0 else _PAPER_NODE_TIMEOUTS.get(node_name, 120)
     llm = llm_client._get_llm()
-    try:
-        response = await asyncio.wait_for(
-            llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]),
-            timeout=timeout,
+
+    last_error: Optional[Exception] = None
+    for attempt in range(max_retries):
+        try:
+            response = await asyncio.wait_for(
+                llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]),
+                timeout=effective_timeout,
+            )
+            return response.content.strip() if hasattr(response, "content") else str(response)
+        except asyncio.TimeoutError:
+            last_error = asyncio.TimeoutError()
+            logger.warning("paper[%s]: LLM timeout after %ds (attempt %d/%d)",
+                           node_name, effective_timeout, attempt + 1, max_retries)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("paper[%s]: LLM failed (attempt %d/%d): %s",
+                           node_name, attempt + 1, max_retries, exc)
+
+        if attempt < max_retries - 1:
+            backoff = _LLM_RETRY_BACKOFF_BASE ** attempt
+            logger.info("paper[%s]: retrying in %.1fs", node_name, backoff)
+            await asyncio.sleep(backoff)
+
+    logger.error("paper[%s]: all %d LLM attempts exhausted, last error: %s",
+                 node_name, max_retries, last_error)
+    return ""
+
+
+def _check_paper_section_quality(content: str) -> List[str]:
+    """Quality checker for paper sections — validates citation coverage.
+
+    Returns list of issue strings (empty = pass).
+    Used as callback for SmartRetry.wrap_generate_paper_section.
+    """
+    issues = []
+    claims = _citation_trace.extract_claims(content)
+    citations = _citation_trace.extract_citations(content)
+
+    if not claims:
+        return []  # no verifiable claims, skip
+
+    covered = sum(1 for c in claims if _citation_trace.has_nearby_citation(content, c))
+    coverage = covered / len(claims) if claims else 1.0
+
+    if coverage < 0.5:
+        issues.append(
+            f"引文覆盖率仅 {coverage:.0%}（{covered}/{len(claims)} 个断言有引用），"
+            "请为论述性断言补充 [n] 引用标记"
         )
-        return response.content.strip() if hasattr(response, "content") else str(response)
-    except asyncio.TimeoutError:
-        logger.warning("paper[%s]: LLM timeout after %ds", node_name, timeout)
-        return ""
-    except Exception as exc:
-        logger.warning("paper[%s]: LLM failed: %s", node_name, exc)
-        return ""
+
+    if len(content.strip()) < 200:
+        issues.append(f"内容仅 {len(content.strip())} 字，不足 300 字最低要求")
+
+    return issues
+
+
+def _select_paper_model(
+    state: Dict[str, Any],
+    node_name: str,
+    section_title: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Select model tier for a paper node via AdaptiveModelSwitch.
+
+    Routing rules:
+      - outline_generate / quality_rewrite → STRONG (needs reasoning)
+      - outline_expand with complex section keywords → STRONG
+      - outline_expand with simple sections → FAST / default
+      - topic_clarify → default
+    """
+    if not _model_switch.is_configured:
+        return None
+
+    # Nodes that always need strong model
+    if node_name in ("outline_generate", "quality_rewrite"):
+        tier = _model_switch._strong
+        logger.debug("paper_model_switch[%s]: → STRONG (high-reasoning node)", node_name)
+        return _model_switch.get_model_override(tier)
+
+    # For outline_expand: assess section complexity
+    if node_name == "outline_expand" and section_title:
+        complex_keywords = [
+            "研究方法", "实验设计", "模型构建", "算法", "理论框架",
+            "数据分析", "系统架构", "性能评估", "方法论",
+        ]
+        is_complex = any(kw in section_title for kw in complex_keywords)
+        if is_complex:
+            tier = _model_switch._strong
+        else:
+            tier = _model_switch._fast
+        logger.debug(
+            "paper_model_switch[%s/%s]: → %s",
+            node_name, section_title, tier.name if tier else "default",
+        )
+        return _model_switch.get_model_override(tier)
+
+    return None
 
 
 # ======================================================================
@@ -555,9 +654,13 @@ async def outline_expand(state: Dict[str, Any]) -> Dict[str, Any]:
             expanded_chapters, chapter_index,
         )
 
-        expanded_sections = []
-        for section in ch.get("sections", []):
+        # Build all section coroutines for this chapter and run concurrently
+        async def _expand_one_section(section: Dict[str, Any]) -> Dict[str, Any]:
             section_title = section.get("title", "")
+
+            # Phase 5: adaptive model selection per section
+            model_override = _select_paper_model(state, "outline_expand", section_title)
+            effective_state = {**state, **({"llm_config_override": model_override} if model_override else {})}
 
             # Phase 4: get section-specific evidence
             section_evidence_indices = evidence_map.get(section_title, [])
@@ -568,7 +671,7 @@ async def outline_expand(state: Dict[str, Any]) -> Dict[str, Any]:
             )
 
             # Phase 4: dynamic system prompt
-            system_prompt = _dynamic_prompt.get_paper_system_prompt("outline_expand", state)
+            system_prompt = _dynamic_prompt.get_paper_system_prompt("outline_expand", effective_state)
 
             # Phase 4: build user prompt with context
             user_prompt = (
@@ -587,32 +690,36 @@ async def outline_expand(state: Dict[str, Any]) -> Dict[str, Any]:
 
             # Phase 4: enhance with chapter-specific guidance
             user_prompt = _dynamic_prompt.enhance_paper_instructions(
-                user_prompt, state,
+                user_prompt, effective_state,
                 step_code="outline_expand",
                 chapter_title=chapter_title,
                 section_title=section_title,
             )
 
-            # Phase 4: LLM call with smart retry (min content length)
-            content = ""
-            for attempt in range(3):
-                raw = await _llm_invoke(state, "outline_expand", system_prompt, user_prompt)
-                if raw and len(raw) >= 100:
-                    content = raw
-                    break
-                logger.warning("outline_expand[%s]: too short (%d chars), retry %d",
-                               section_title, len(raw) if raw else 0, attempt + 1)
+            # Phase 5: SmartRetry + CitationTrace quality checker
+            async def _generate_fn(sys_prompt: str, usr_prompt: str, timeout: int) -> str:
+                return await _llm_invoke(effective_state, "outline_expand", sys_prompt, usr_prompt, timeout=timeout, max_retries=1)
+
+            content = await _smart_retry.wrap_generate_paper_section(
+                generate_fn=_generate_fn,
+                section_title=section_title,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                timeout=_PAPER_NODE_TIMEOUTS.get("outline_expand", 180),
+                min_chars=100,
+                citation_checker=_check_paper_section_quality,
+            )
 
             # Fallback
             if not content or len(content) < 50:
                 content = f"{section_title}的详细论述内容。"
 
-            # Phase 4: CitationTrace — check citation coverage
+            # Phase 4: CitationTrace — extract metrics
             claims = _citation_trace.extract_claims(content)
             citations = _citation_trace.extract_citations(content)
             cite_ids = _find_relevant_citations(section_title, evidence)
 
-            expanded_section = {
+            return {
                 "title": section_title,
                 "content": content,
                 "coreArgument": f"{section_title}的核心论点",
@@ -623,11 +730,16 @@ async def outline_expand(state: Dict[str, Any]) -> Dict[str, Any]:
                 "claim_count": len(claims),
                 "citation_count": len(citations),
             }
-            expanded_sections.append(expanded_section)
-            done_sections += 1
 
-            progress = int(10 + 80 * done_sections / max(total_sections, 1))
-            await client.update_step(task_id, "outline_expand", "running", progress=progress)
+        sections_in_chapter = ch.get("sections", [])
+        expanded_sections = await asyncio.gather(
+            *[_expand_one_section(s) for s in sections_in_chapter]
+        )
+        expanded_sections = list(expanded_sections)
+        done_sections += len(sections_in_chapter)
+
+        progress = int(10 + 80 * done_sections / max(total_sections, 1))
+        await client.update_step(task_id, "outline_expand", "running", progress=progress)
 
         expanded_chapters.append({
             **ch,
@@ -814,63 +926,97 @@ async def quality_rewrite(state: Dict[str, Any]) -> Dict[str, Any]:
         if s.get("title", "") in uncovered or len(s.get("content", "")) < 100
     )
 
-    # Phase 4: dynamic system prompt
-    system_prompt = _dynamic_prompt.get_paper_system_prompt("quality_rewrite", state)
+    # Phase 5: adaptive model selection — rewrite always uses STRONG
+    model_override = _select_paper_model(state, "quality_rewrite")
+    effective_state = {**state, **({"llm_config_override": model_override} if model_override else {})}
 
+    # Phase 4: dynamic system prompt
+    system_prompt = _dynamic_prompt.get_paper_system_prompt("quality_rewrite", effective_state)
+
+    # Phase 5: SmartRetry escalation hint based on round
+    escalation_hint = _smart_retry.get_paper_rewrite_escalation_hint(rewrite_round - 1)
+
+    # Collect all sections that need rewriting, then run concurrently
+    rewrite_targets: List[Dict[str, Any]] = []
     for ch in chapters:
         chapter_title = ch.get("title", "")
         for section in ch.get("sections", []):
             title = section.get("title", "")
             content = section.get("content", "")
+            if title in uncovered or len(content) < 100:
+                rewrite_targets.append({
+                    "chapter_title": chapter_title,
+                    "section": section,
+                })
 
-            if title not in uncovered and len(content) >= 100:
-                continue  # Skip sections that passed quality check
+    rewrite_success_patterns: List[Dict[str, str]] = []
 
-            # Phase 4: compress evidence for this section
-            compressed_ev = _context_compression.compress_evidence(
-                evidence, section_title=title, max_items=5, max_chars=1200,
+    async def _rewrite_one_section(target: Dict[str, Any]) -> bool:
+        section = target["section"]
+        chapter_title = target["chapter_title"]
+        title = section.get("title", "")
+        content = section.get("content", "")
+
+        compressed_ev = _context_compression.compress_evidence(
+            evidence, section_title=title, max_items=5, max_chars=1200,
+        )
+
+        user_prompt = (
+            f"当前章节：{chapter_title} > {title}\n"
+            f"原始内容：\n{content}\n\n"
+        )
+        if compressed_ev:
+            user_prompt += f"可用学术证据：\n{compressed_ev}\n\n"
+        user_prompt += "请修改此章节。"
+
+        user_prompt = _dynamic_prompt.enhance_paper_instructions(
+            user_prompt, effective_state,
+            step_code="quality_rewrite",
+            chapter_title=chapter_title,
+            section_title=title,
+        )
+
+        # Phase 5: append escalation hint
+        if escalation_hint:
+            user_prompt += escalation_hint
+
+        # Phase 5: SmartRetry with citation quality checker
+        async def _generate_fn(sys_prompt: str, usr_prompt: str, timeout: int) -> str:
+            return await _llm_invoke(effective_state, "quality_rewrite", sys_prompt, usr_prompt, timeout=timeout, max_retries=1)
+
+        new_content = await _smart_retry.wrap_generate_paper_section(
+            generate_fn=_generate_fn,
+            section_title=f"rewrite:{title}",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            timeout=_PAPER_NODE_TIMEOUTS.get("quality_rewrite", 180),
+            min_chars=max(len(content), 100),
+            citation_checker=_check_paper_section_quality,
+        )
+
+        if new_content and len(new_content) > len(content):
+            section["content"] = new_content
+            new_citations = _citation_trace.extract_citations(new_content)
+            if new_citations and not section.get("citations"):
+                section["citations"] = _find_relevant_citations(title, evidence)
+            # Track success for long-term memory
+            rewrite_success_patterns.append({
+                "section": title,
+                "issue": "missing_citation" if title in uncovered else "content_short",
+                "action": f"Rewrote with {len(_citation_trace.extract_citations(new_content))} citations, {len(new_content)} chars",
+            })
+        else:
+            section["content"] = (
+                f"{content}\n\n"
+                f"经过深入分析和文献梳理，进一步论证了{title}的核心观点。"
             )
+            if not section.get("citations"):
+                section["citations"] = _find_relevant_citations(title, evidence) or [1]
+        return True
 
-            user_prompt = (
-                f"当前章节：{chapter_title} > {title}\n"
-                f"原始内容：\n{content}\n\n"
-            )
-            if compressed_ev:
-                user_prompt += f"可用学术证据：\n{compressed_ev}\n\n"
-            user_prompt += "请修改此章节。"
-
-            # Phase 4: enhance with rewrite directives
-            user_prompt = _dynamic_prompt.enhance_paper_instructions(
-                user_prompt, state,
-                step_code="quality_rewrite",
-                chapter_title=chapter_title,
-                section_title=title,
-            )
-
-            # Phase 4: LLM call
-            new_content = ""
-            for attempt in range(2):
-                raw = await _llm_invoke(state, "quality_rewrite", system_prompt, user_prompt)
-                if raw and len(raw) > len(content):
-                    new_content = raw
-                    break
-
-            if new_content:
-                section["content"] = new_content
-                # Update citation info
-                new_citations = _citation_trace.extract_citations(new_content)
-                if new_citations and not section.get("citations"):
-                    section["citations"] = _find_relevant_citations(title, evidence)
-            else:
-                # Minimal fallback enhancement
-                section["content"] = (
-                    f"{content}\n\n"
-                    f"经过深入分析和文献梳理，进一步论证了{title}的核心观点。"
-                )
-                if not section.get("citations"):
-                    section["citations"] = _find_relevant_citations(title, evidence) or [1]
-
-            rewritten_count += 1
+    if rewrite_targets:
+        await asyncio.gather(*[_rewrite_one_section(t) for t in rewrite_targets])
+    rewritten_count = len(rewrite_targets)
 
     # Persist updated manuscript
     try:
@@ -891,6 +1037,19 @@ async def quality_rewrite(state: Dict[str, Any]) -> Dict[str, Any]:
         state, "quality_rewrite",
         output_summary=f"Rewrite round {rewrite_round}: {rewritten_count} sections",
     )
+
+    # Phase 5: persist successful rewrite patterns to long-term memory
+    for pattern in rewrite_success_patterns:
+        try:
+            await _memory_bridge.save_fix_pattern(
+                state=effective_state,
+                error_pattern=f"paper_rewrite:{pattern['issue']}:{pattern['section']}",
+                fix_action=pattern["action"],
+                file_path=f"paper/section/{pattern['section']}",
+                success=True,
+            )
+        except Exception as exc:
+            logger.debug("Failed to save rewrite pattern: %s", exc)
 
     return {
         **memory_state,

@@ -369,7 +369,7 @@ class DynamicPromptMiddleware:
         return f"{base}\n{role_suffix}" if role_suffix else base
 
     def _paper_rewrite_hint(self, state: Dict[str, Any]) -> str:
-        """Generate targeted rewrite directives from quality issues."""
+        """Generate progressive rewrite directives escalating by round number."""
         issues = state.get("quality_issues", [])
         uncovered = state.get("uncovered_sections", [])
         rewrite_round = state.get("rewrite_round", 0)
@@ -380,7 +380,7 @@ class DynamicPromptMiddleware:
         parts = [f"\n\n--- 修改要求 (第{rewrite_round + 1}轮) ---"]
 
         if uncovered:
-            parts.append(f"以下章节缺少文献引用支撑，请补充引用标记 [n]：")
+            parts.append("以下章节缺少文献引用支撑，请补充引用标记 [n]：")
             for s in uncovered[:5]:
                 parts.append(f"  - {s}")
 
@@ -394,10 +394,36 @@ class DynamicPromptMiddleware:
         if "content_short" in issue_types:
             parts.append("有章节内容过短，请扩展论述，每节至少 300 字。")
         if "missing_citation" in issue_types:
-            parts.append("请确保每个论述性段落都有对应的文献引用 [n]。")
+            parts.append("请确保每个论述性断言都有对应的文献引用 [n]。")
 
-        if rewrite_round >= 1:
-            parts.append("这是最后一轮修改机会，请重点确保引用覆盖率达标。")
+        # Progressive escalation by round
+        if rewrite_round == 0:
+            parts.append(
+                "请针对以上问题逐一修改，保持原有论述结构和逻辑不变。"
+            )
+        elif rewrite_round == 1:
+            parts.append(
+                "--- 升级策略 (第2轮) ---\n"
+                "上一轮修改未能达标。请换一种思路：\n"
+                "1. 对缺少引用的段落，直接在论述性断言后插入 [n] 标记\n"
+                "2. 对内容过短的段落，补充具体数据、案例或文献观点\n"
+                "3. 检查全文引用分布是否均匀，避免引用集中在个别段落"
+            )
+        else:
+            parts.append(
+                "--- 最终修改策略 ---\n"
+                "这是最后的修改机会，请采取最彻底的方案：\n"
+                "1. 逐段扫描，每个「研究表明」「数据显示」「已被证实」旁必须有 [n]\n"
+                "2. 无法提供引用的空泛论断直接删除，替换为有据可查的论述\n"
+                "3. 每节确保至少3处引用标记，内容不少于300字\n"
+                "4. 优先保证引文覆盖率达标，其次再考虑内容深度"
+            )
+
+        # Inject long-term memory rewrite patterns
+        for memory in state.get("long_term_memories", []):
+            if "[success_pattern]" in memory.lower() and "rewrite" in memory.lower():
+                parts.append(f"\n[历史成功经验] {memory[:200]}")
+                break
 
         return "\n".join(parts)
 

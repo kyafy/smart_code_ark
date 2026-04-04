@@ -186,6 +186,109 @@ class SmartRetryMiddleware:
 
         return {"files": []}
 
+    async def wrap_generate_paper_section(
+        self,
+        generate_fn: Callable,
+        section_title: str,
+        system_prompt: str,
+        user_prompt: str,
+        timeout: int = 180,
+        min_chars: int = 100,
+        citation_checker: Optional[Callable] = None,
+    ) -> str:
+        """Wrap a paper section generation call with smart retry logic.
+
+        Args:
+            generate_fn: async callable(system_prompt, user_prompt, timeout) -> str
+            section_title: used for logging and failure tracking
+            min_chars: minimum acceptable content length
+            citation_checker: optional sync callable(content) -> list[str] issues
+        """
+        last_error = ""
+        extra_instructions = ""
+
+        for attempt in range(1 + self._max_retries):
+            try:
+                effective_prompt = user_prompt + extra_instructions
+                content = await generate_fn(system_prompt, effective_prompt, timeout)
+            except asyncio.TimeoutError:
+                logger.warning("smart_retry_paper[%s]: timeout on attempt %d", section_title, attempt + 1)
+                if attempt < self._max_retries:
+                    await self._backoff(attempt)
+                    continue
+                return ""
+            except Exception as exc:
+                if _is_rate_limit(exc):
+                    logger.warning("smart_retry_paper[%s]: rate limited, backing off", section_title)
+                    await self._backoff(attempt, rate_limited=True)
+                    continue
+                raise
+
+            # Check 1: empty or too short
+            if not content or not content.strip():
+                logger.warning("smart_retry_paper[%s]: empty on attempt %d", section_title, attempt + 1)
+                extra_instructions = "\n\n[重试提示] 上次生成为空，请输出完整的章节内容，不少于300字。"
+                last_error = "empty_content"
+                continue
+
+            if len(content.strip()) < min_chars:
+                logger.warning(
+                    "smart_retry_paper[%s]: too short (%d chars) on attempt %d",
+                    section_title, len(content.strip()), attempt + 1,
+                )
+                extra_instructions = (
+                    f"\n\n[重试提示] 上次只生成了{len(content.strip())}字，内容过少。"
+                    "请输出完整论述内容，每节至少300字，包含论点论据和引用标记 [n]。"
+                )
+                last_error = "too_short"
+                continue
+
+            # Check 2: citation coverage (if provided)
+            if citation_checker is not None:
+                issues = citation_checker(content)
+                if issues:
+                    issue_text = "; ".join(issues[:3])
+                    logger.warning(
+                        "smart_retry_paper[%s]: citation issues on attempt %d: %s",
+                        section_title, attempt + 1, issue_text,
+                    )
+                    extra_instructions = (
+                        f"\n\n[重试提示] 引文覆盖率不达标: {issue_text}。"
+                        "请确保每个论述性断言（如「研究表明」「数据显示」等）附近都有引用标记 [n]。"
+                    )
+                    last_error = "citation_rejected"
+                    continue
+
+            # Success
+            self._file_fail_counts.pop(section_title, None)
+            return content
+
+        # All retries exhausted
+        self._file_fail_counts[section_title] = self._file_fail_counts.get(section_title, 0) + 1
+        logger.warning(
+            "smart_retry_paper[%s]: all %d attempts failed (last_error=%s)",
+            section_title, 1 + self._max_retries, last_error,
+        )
+        return ""
+
+    def get_paper_rewrite_escalation_hint(self, rewrite_round: int) -> str:
+        """Generate escalation instructions for paper quality rewrite rounds."""
+        if rewrite_round <= 0:
+            return ""
+        if rewrite_round == 1:
+            return (
+                "\n\n[第2轮修改] 上一轮修改未达标。请：\n"
+                "1. 重点补充缺失的引用标记 [n]\n"
+                "2. 扩展过短段落，增加论证深度\n"
+                "3. 确保每个论述性断言有文献佐证"
+            )
+        return (
+            "\n\n[最终修改] 前几轮修改均未达标，这是最后的修改机会：\n"
+            "1. 逐段检查引用覆盖，每个「研究表明」「数据显示」旁必须有 [n]\n"
+            "2. 缺少论据的段落直接替换为有文献支撑的论述\n"
+            "3. 删除无法提供引用的空泛论断，替换为有据可查的具体论述"
+        )
+
     def should_escalate_fix(self, file_path: str) -> bool:
         """Check if a file has failed consecutive fix attempts and should escalate.
 
