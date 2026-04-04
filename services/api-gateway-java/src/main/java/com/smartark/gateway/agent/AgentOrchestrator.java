@@ -19,6 +19,7 @@ import com.smartark.gateway.dto.LangchainHealthResult;
 import com.smartark.gateway.dto.LangchainMemoryReadRequest;
 import com.smartark.gateway.dto.LangchainMemoryReadResult;
 import com.smartark.gateway.dto.LangchainMemoryWriteRequest;
+import com.smartark.gateway.service.LangchainRuntimeGraphClient;
 import com.smartark.gateway.service.LangchainSidecarClient;
 import com.smartark.gateway.service.LongTermMemoryService;
 import com.smartark.gateway.service.PreviewDeployService;
@@ -86,6 +87,10 @@ public class AgentOrchestrator {
     private boolean qualityGateAutoFixEnabled;
     @Value("${smartark.quality-gate.max-retries:2}")
     private int qualityGateMaxRetries;
+    @Value("${smartark.langchain.runtime.paper-graph-enabled:true}")
+    private boolean runtimePaperPipelineEnabled;
+
+    private final LangchainRuntimeGraphClient runtimeGraphClient;
 
     public AgentOrchestrator(TaskRepository taskRepository,
                              TaskStepRepository taskStepRepository,
@@ -93,6 +98,7 @@ public class AgentOrchestrator {
                              ProjectSpecRepository projectSpecRepository,
                              PreviewDeployService previewDeployService,
                              LangchainSidecarClient langchainSidecarClient,
+                             LangchainRuntimeGraphClient runtimeGraphClient,
                              TaskMemoryService taskMemoryService,
                              LongTermMemoryService longTermMemoryService,
                              ContextAssembler contextAssembler,
@@ -107,6 +113,7 @@ public class AgentOrchestrator {
         this.projectSpecRepository = projectSpecRepository;
         this.previewDeployService = previewDeployService;
         this.langchainSidecarClient = langchainSidecarClient;
+        this.runtimeGraphClient = runtimeGraphClient;
         this.taskMemoryService = taskMemoryService;
         this.longTermMemoryService = longTermMemoryService;
         this.contextAssembler = contextAssembler;
@@ -152,6 +159,12 @@ public class AgentOrchestrator {
                 fillPaperContext(context, task.getInstructions());
             }
             probeSidecarHealth(taskId, context);
+
+            // --- Paper pipeline fast-path: delegate entire pipeline to Python runtime ---
+            if ("paper_outline".equals(task.getTaskType()) && runtimePaperPipelineEnabled) {
+                executePaperViaPipeline(taskId, task, context);
+                return;
+            }
 
             List<TaskStepEntity> steps = taskStepRepository.findByTaskIdOrderByStepOrderAsc(taskId);
 
@@ -749,6 +762,133 @@ public class AgentOrchestrator {
         } catch (Exception e) {
             log(context.getTask().getId(), "warn", "Invalid paper instructions payload");
         }
+    }
+
+    /**
+     * Execute the entire paper pipeline via a single call to Python runtime.
+     * This produces one LangSmith trace instead of N separate traces.
+     * Falls back to step-by-step execution if the runtime call fails.
+     */
+    private void executePaperViaPipeline(String taskId, TaskEntity task, AgentExecutionContext context) {
+        log(taskId, "info", "Delegating paper pipeline to Python runtime (full graph)");
+
+        int sessionId = context.getPaperSessionId() > 0 ? (int) (long) context.getPaperSessionId() : 0;
+        String callbackBaseUrl = System.getenv("DEEPAGENT_CALLBACK_BASE_URL") != null
+                ? System.getenv("DEEPAGENT_CALLBACK_BASE_URL")
+                : "http://localhost:8080";
+        String callbackApiKey = System.getenv("DEEPAGENT_CALLBACK_API_KEY") != null
+                ? System.getenv("DEEPAGENT_CALLBACK_API_KEY")
+                : "smartark-internal";
+
+        try {
+            var result = runtimeGraphClient.runPaperPipeline(
+                    taskId,
+                    sessionId,
+                    context.getTopic(),
+                    context.getDiscipline(),
+                    context.getDegreeLevel(),
+                    context.getMethodPreference(),
+                    callbackBaseUrl,
+                    callbackApiKey
+            );
+
+            log(taskId, "info", "Paper pipeline dispatched to runtime: runId=" + result.runId()
+                    + ", status=" + result.status());
+
+            // Mark all steps as finished (pipeline handles them internally)
+            List<TaskStepEntity> steps = taskStepRepository.findByTaskIdOrderByStepOrderAsc(taskId);
+            for (TaskStepEntity step : steps) {
+                step.setStatus("finished");
+                step.setProgress(100);
+                if (step.getStartedAt() == null) step.setStartedAt(LocalDateTime.now());
+                step.setFinishedAt(LocalDateTime.now());
+                step.setUpdatedAt(LocalDateTime.now());
+                taskStepRepository.save(step);
+            }
+
+            task.setStatus("finished");
+            task.setProgress(100);
+            task.setCurrentStep("quality_rewrite");
+            task.setUpdatedAt(LocalDateTime.now());
+            taskRepository.save(task);
+
+            log(taskId, "info", "Paper pipeline completed via runtime");
+
+        } catch (Exception e) {
+            log(taskId, "warn", "Paper pipeline runtime call failed, falling back to step-by-step: " + messageOf(e));
+            // Fallback: run step-by-step via Java orchestration
+            runStepByStep(taskId, task, context);
+        }
+    }
+
+    /**
+     * Fallback: execute paper steps one by one (legacy path).
+     */
+    private void runStepByStep(String taskId, TaskEntity task, AgentExecutionContext context) {
+        List<TaskStepEntity> steps = taskStepRepository.findByTaskIdOrderByStepOrderAsc(taskId);
+
+        for (int i = 0; i < steps.size(); i++) {
+            TaskStepEntity stepEntity = steps.get(i);
+            if ("finished".equals(stepEntity.getStatus())) {
+                hydrateContextFromStepMemory(taskId, stepEntity.getStepCode(), context);
+                continue;
+            }
+
+            int attempt = 0;
+            while (true) {
+                attempt++;
+                task = loadTask(taskId);
+                checkCancelled(task);
+
+                stepEntity.setStatus("running");
+                if (stepEntity.getStartedAt() == null) {
+                    stepEntity.setStartedAt(LocalDateTime.now());
+                }
+                stepEntity.setUpdatedAt(LocalDateTime.now());
+                taskStepRepository.save(stepEntity);
+
+                task.setCurrentStep(stepEntity.getStepCode());
+                task.setProgress((i * 100) / steps.size());
+                task.setUpdatedAt(LocalDateTime.now());
+                taskRepository.save(task);
+
+                log(taskId, "info", "Executing step (fallback): " + stepEntity.getStepCode() + " (attempt " + attempt + ")");
+
+                try {
+                    AgentStep agentStep = stepMap.get(stepEntity.getStepCode());
+                    if (agentStep == null) {
+                        throw new IllegalArgumentException("Unsupported step code: " + stepEntity.getStepCode());
+                    }
+                    agentStep.execute(context);
+
+                    stepEntity.setStatus("finished");
+                    stepEntity.setProgress(100);
+                    stepEntity.setFinishedAt(LocalDateTime.now());
+                    stepEntity.setUpdatedAt(LocalDateTime.now());
+                    taskStepRepository.save(stepEntity);
+                    break;
+                } catch (Exception e) {
+                    stepEntity.setStatus("failed");
+                    stepEntity.setErrorCode(classifyError(e));
+                    stepEntity.setErrorMessage(messageOf(e));
+                    stepEntity.setRetryCount(stepEntity.getRetryCount() + 1);
+                    stepEntity.setUpdatedAt(LocalDateTime.now());
+                    taskStepRepository.save(stepEntity);
+
+                    if (shouldRetry(stepEntity)) {
+                        continue;
+                    }
+                    throw new BusinessException(ErrorCodes.TASK_FAILED, messageOf(e));
+                }
+            }
+        }
+
+        task = loadTask(taskId);
+        task.setStatus("finished");
+        task.setProgress(100);
+        task.setCurrentStep("quality_rewrite");
+        task.setUpdatedAt(LocalDateTime.now());
+        taskRepository.save(task);
     }
 
     private void logStepOutputSummary(String taskId, String stepCode, AgentExecutionContext context) {

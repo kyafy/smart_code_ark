@@ -537,6 +537,11 @@ async def outline_generate(state: Dict[str, Any]) -> Dict[str, Any]:
     # Phase 4: dynamic system prompt
     system_prompt = _dynamic_prompt.get_paper_system_prompt("outline_generate", state)
 
+    degree_level = state.get("degree_level", "")
+
+    # Phase 5: build template-constrained prompt
+    template_prompt = _build_template_prompt(degree_level, topic_refined)
+
     user_prompt = (
         f"论文主题：{topic_refined}\n\n"
         f"研究问题：\n" + "\n".join(f"  {i+1}. {q}" for i, q in enumerate(research_questions)) + "\n\n"
@@ -544,10 +549,12 @@ async def outline_generate(state: Dict[str, Any]) -> Dict[str, Any]:
     if compressed_evidence:
         user_prompt += f"检索到的学术证据摘要：\n{compressed_evidence}\n\n"
     user_prompt += (
-        "请设计论文的完整章节大纲。\n"
+        f"{template_prompt}\n\n"
+        "请基于上述章节框架，结合论文主题设计具体的章节大纲。\n"
         '输出格式（纯JSON）：\n'
         '{"chapters": [{"index": 1, "title": "章节标题", '
-        '"sections": [{"title": "小节标题"}]}]}'
+        '"sections": [{"title": "小节标题"}]}]}\n'
+        "只输出JSON，不要包含其他文字。"
     )
 
     # Phase 4: enhance with discipline/degree instructions
@@ -566,6 +573,8 @@ async def outline_generate(state: Dict[str, Any]) -> Dict[str, Any]:
             parsed = json.loads(raw)
             chapters = parsed.get("chapters", [])
             if chapters and isinstance(chapters, list):
+                # Phase 5: validate against template — fill gaps
+                chapters = _validate_outline_against_template(chapters, degree_level)
                 outline_draft = {
                     "topic": state.get("topic", ""),
                     "topicRefined": topic_refined,
@@ -577,10 +586,10 @@ async def outline_generate(state: Dict[str, Any]) -> Dict[str, Any]:
         except (json.JSONDecodeError, ValueError):
             logger.warning("outline_generate: JSON parse failed attempt %d", attempt + 1)
 
-    # Fallback: standard 5-chapter template
+    # Fallback: degree-level template
     if outline_draft is None:
-        logger.info("outline_generate: using fallback template")
-        chapters = _build_fallback_outline(topic_refined)
+        logger.info("outline_generate: using fallback template for degree=%s", degree_level)
+        chapters = _build_fallback_outline_from_template(degree_level, topic_refined)
         outline_draft = {
             "topic": state.get("topic", ""),
             "topicRefined": topic_refined,
@@ -1108,33 +1117,173 @@ def _find_relevant_citations(
     return [idx for idx, score in scored[:top_k] if score > 0]
 
 
+# ======================================================================
+# Paper outline templates — fixed chapter framework by degree level
+# ======================================================================
+
+_PAPER_CHAPTER_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
+    "bachelor": [
+        {"index": 1, "title": "绪论", "required_sections": [
+            "研究背景与意义", "国内外研究现状", "研究目标与内容", "论文组织结构",
+        ]},
+        {"index": 2, "title": "相关理论与技术基础", "required_sections": [
+            "核心概念界定", "理论基础", "技术路线分析",
+        ]},
+        {"index": 3, "title": "系统设计与实现", "required_sections": [
+            "需求分析", "系统总体设计", "详细设计与实现",
+        ]},
+        {"index": 4, "title": "系统测试与结果分析", "required_sections": [
+            "测试环境与方案", "功能测试", "结果分析与讨论",
+        ]},
+        {"index": 5, "title": "总结与展望", "required_sections": [
+            "研究工作总结", "不足与展望",
+        ]},
+    ],
+    "master": [
+        {"index": 1, "title": "绪论", "required_sections": [
+            "研究背景与意义", "国内外研究现状", "研究目标与主要贡献", "论文组织结构",
+        ]},
+        {"index": 2, "title": "相关理论与技术基础", "required_sections": [
+            "核心概念界定", "理论基础与文献综述", "关键技术分析",
+        ]},
+        {"index": 3, "title": "研究方法与模型设计", "required_sections": [
+            "研究方法选择与论证", "模型/系统架构设计", "关键算法与实现",
+        ]},
+        {"index": 4, "title": "实验设计与结果分析", "required_sections": [
+            "实验环境与数据集", "实验方案设计", "实验结果与对比分析", "结果讨论",
+        ]},
+        {"index": 5, "title": "总结与展望", "required_sections": [
+            "研究工作总结", "主要贡献与创新点", "不足与未来工作",
+        ]},
+    ],
+    "phd": [
+        {"index": 1, "title": "绪论", "required_sections": [
+            "研究背景与意义", "国内外研究综述", "现有研究的不足与空白",
+            "研究目标与科学问题", "主要贡献与创新点", "论文组织结构",
+        ]},
+        {"index": 2, "title": "理论基础与文献综述", "required_sections": [
+            "核心理论框架", "相关研究进展", "关键技术演进", "研究方法论综述",
+        ]},
+        {"index": 3, "title": "研究方法与模型构建", "required_sections": [
+            "研究方法体系", "理论模型构建", "关键算法设计", "形式化分析与证明",
+        ]},
+        {"index": 4, "title": "实验设计与验证", "required_sections": [
+            "实验设计与评价指标", "数据集与实验环境", "实验结果与分析",
+            "与现有方法的对比", "消融实验",
+        ]},
+        {"index": 5, "title": "深入讨论与扩展分析", "required_sections": [
+            "结果深入讨论", "理论意义与实践价值", "适用范围与局限性",
+        ]},
+        {"index": 6, "title": "总结与展望", "required_sections": [
+            "研究工作总结", "主要贡献与创新点", "研究局限", "未来研究方向",
+        ]},
+    ],
+}
+
+# Default (when degree not specified)
+_PAPER_CHAPTER_TEMPLATES["default"] = _PAPER_CHAPTER_TEMPLATES["master"]
+
+
+def _get_chapter_template(degree_level: str) -> List[Dict[str, Any]]:
+    """Get the chapter template for a given degree level."""
+    key = degree_level.lower().strip() if degree_level else "default"
+    # Normalize common variants
+    for k in ("bachelor", "master", "phd"):
+        if k in key or key in k:
+            return _PAPER_CHAPTER_TEMPLATES[k]
+    if "本科" in key or "学士" in key:
+        return _PAPER_CHAPTER_TEMPLATES["bachelor"]
+    if "硕" in key:
+        return _PAPER_CHAPTER_TEMPLATES["master"]
+    if "博" in key:
+        return _PAPER_CHAPTER_TEMPLATES["phd"]
+    return _PAPER_CHAPTER_TEMPLATES["default"]
+
+
+def _build_template_prompt(degree_level: str, topic: str) -> str:
+    """Build a structured template prompt that constrains LLM output."""
+    template = _get_chapter_template(degree_level)
+    lines = ["请严格按照以下章节框架设计论文大纲，每章可在必选小节基础上增加 1-2 个与主题相关的小节：\n"]
+    for ch in template:
+        lines.append(f"第{ch['index']}章 {ch['title']}")
+        for s in ch["required_sections"]:
+            lines.append(f"  - {s}（必选）")
+        lines.append(f"  - [可选：与「{topic}」相关的补充小节]")
+        lines.append("")
+    lines.append("注意：")
+    lines.append("1. 必选小节不可删除或合并，标题可根据主题适当调整措辞")
+    lines.append("2. 每章必选小节之外可增加 1-2 个小节，但总数不超过 6 个")
+    lines.append("3. 章节标题需具体化，体现论文主题特色")
+    return "\n".join(lines)
+
+
+def _validate_outline_against_template(
+    chapters: List[Dict[str, Any]],
+    degree_level: str,
+) -> List[Dict[str, Any]]:
+    """Validate and repair LLM-generated outline against the template.
+
+    Ensures required chapters exist, fills missing ones from template.
+    """
+    template = _get_chapter_template(degree_level)
+    if not chapters:
+        return _build_fallback_outline_from_template(degree_level, "")
+
+    # Check if LLM output has roughly the right number of chapters
+    if len(chapters) < len(template) - 1:
+        # Too few chapters — merge LLM output with template
+        return _merge_with_template(chapters, template)
+
+    # Ensure each chapter has at least 2 sections
+    for ch in chapters:
+        sections = ch.get("sections", [])
+        if len(sections) < 2:
+            ch["sections"] = sections + [{"title": f"{ch.get('title', '')}的补充分析"}]
+
+    return chapters
+
+
+def _merge_with_template(
+    chapters: List[Dict[str, Any]],
+    template: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge LLM-generated chapters with template, filling gaps."""
+    result = []
+    llm_titles = {ch.get("title", "").lower() for ch in chapters}
+    llm_by_idx = {ch.get("index", i + 1): ch for i, ch in enumerate(chapters)}
+
+    for tmpl in template:
+        idx = tmpl["index"]
+        if idx in llm_by_idx:
+            ch = llm_by_idx[idx]
+            # Ensure minimum sections
+            if len(ch.get("sections", [])) < 2:
+                ch["sections"] = [{"title": s} for s in tmpl["required_sections"]]
+            result.append(ch)
+        else:
+            # Use template chapter
+            result.append({
+                "index": idx,
+                "title": tmpl["title"],
+                "sections": [{"title": s} for s in tmpl["required_sections"]],
+            })
+
+    return result
+
+
+def _build_fallback_outline_from_template(degree_level: str, topic: str) -> List[Dict[str, Any]]:
+    """Build fallback outline from degree-level template."""
+    template = _get_chapter_template(degree_level)
+    return [
+        {
+            "index": ch["index"],
+            "title": ch["title"],
+            "sections": [{"title": s} for s in ch["required_sections"]],
+        }
+        for ch in template
+    ]
+
+
 def _build_fallback_outline(topic: str) -> List[Dict[str, Any]]:
     """Build standard 5-chapter fallback outline when LLM fails."""
-    return [
-        {"index": 1, "title": "绪论", "sections": [
-            {"title": "研究背景与意义"},
-            {"title": "国内外研究现状"},
-            {"title": "研究目标与内容"},
-            {"title": "论文组织结构"},
-        ]},
-        {"index": 2, "title": "相关理论与技术基础", "sections": [
-            {"title": "核心概念界定"},
-            {"title": "理论基础"},
-            {"title": "技术路线分析"},
-        ]},
-        {"index": 3, "title": "研究方法与系统设计", "sections": [
-            {"title": "研究方法选择"},
-            {"title": "系统架构设计"},
-            {"title": "关键算法与实现"},
-        ]},
-        {"index": 4, "title": "实验与结果分析", "sections": [
-            {"title": "实验环境与数据集"},
-            {"title": "实验方案设计"},
-            {"title": "实验结果与讨论"},
-        ]},
-        {"index": 5, "title": "总结与展望", "sections": [
-            {"title": "研究工作总结"},
-            {"title": "主要贡献"},
-            {"title": "不足与展望"},
-        ]},
-    ]
+    return _build_fallback_outline_from_template("default", topic)

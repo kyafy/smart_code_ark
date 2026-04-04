@@ -172,6 +172,15 @@ async def cancel_codegen(task_id: str) -> Dict:
 # ------------------------------------------------------------------
 
 
+@router.post("/paper/cancel/{task_id}")
+async def cancel_paper(task_id: str) -> Dict:
+    """Cancel a running paper pipeline by task_id."""
+    found = cancel_by_task_id(task_id, _run_status)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"No active run for task {task_id}")
+    return {"task_id": task_id, "status": "cancelling"}
+
+
 @router.post("/paper/run", response_model=PaperRunResponse)
 async def run_paper(
     request: PaperRunRequest,
@@ -196,12 +205,24 @@ async def run_paper(
 
 
 async def _execute_paper(run_id: str, request: PaperRunRequest) -> None:
-    """Background task executing the paper graph."""
+    """Background task executing the full paper graph as a single trace."""
     task_id = request.task_id
+    token = register_token(run_id)
 
     try:
         _run_status[run_id]["status"] = "running"
         logger.info("Starting paper pipeline for task %s (run %s)", task_id, run_id)
+
+        # Notify Java side that the pipeline has started
+        from ..tools.java_api_client import JavaApiClient
+        from ..config import CallbackConfig
+        callback_cfg = CallbackConfig(
+            base_url=request.callback_base_url,
+            api_key=request.callback_api_key,
+        )
+        callback_client = JavaApiClient(callback_cfg)
+        await callback_client.update_step(task_id, "paper_pipeline", "running", progress=0,
+                                          output_summary="Paper pipeline started (full graph)")
 
         graph = build_paper_graph()
 
@@ -245,13 +266,38 @@ async def _execute_paper(run_id: str, request: PaperRunRequest) -> None:
             "quality_score": result.get("quality_score", 0),
             "source_count": result.get("source_count", 0),
             "rewrite_rounds": result.get("rewrite_round", 0),
+            "manuscript": result.get("manuscript", {}),
         }
+
+        # Notify Java side completion
+        await callback_client.update_step(task_id, "paper_pipeline", "finished", progress=100,
+                                          output_summary=f"Paper pipeline completed: score={result.get('quality_score', 0):.0f}")
         logger.info("Paper pipeline completed for task %s", task_id)
+
+    except TaskCancelled:
+        logger.info("Paper pipeline cancelled for task %s (run %s)", task_id, run_id)
+        _run_status[run_id]["status"] = "cancelled"
 
     except Exception as exc:
         logger.exception("Paper pipeline failed for task %s: %s", task_id, exc)
         _run_status[run_id]["status"] = "failed"
         _run_status[run_id]["error"] = str(exc)
+
+        # Notify Java side failure
+        try:
+            from ..tools.java_api_client import JavaApiClient
+            from ..config import CallbackConfig
+            err_client = JavaApiClient(CallbackConfig(
+                base_url=request.callback_base_url,
+                api_key=request.callback_api_key,
+            ))
+            await err_client.update_step(task_id, "paper_pipeline", "failed", progress=0,
+                                         error_message=str(exc)[:500])
+        except Exception:
+            pass
+
+    finally:
+        remove_token(run_id)
 
 
 # ------------------------------------------------------------------

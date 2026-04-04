@@ -47,6 +47,64 @@ public class LangchainRuntimeGraphClient {
         return invokeGraph("paper", "/v1/graph/paper/run", taskId, projectId, userId, input);
     }
 
+    /**
+     * Invoke the full paper pipeline as a single graph execution.
+     * Calls /v1/agent/paper/run which runs the complete LangGraph paper graph
+     * (topic_clarify → academic_retrieve → ... → quality_rewrite) as one trace.
+     *
+     * @return result containing run_id, task_id, status; manuscript in result map
+     */
+    public LangchainGraphRunResult runPaperPipeline(String taskId,
+                                                     int sessionId,
+                                                     String topic,
+                                                     String discipline,
+                                                     String degreeLevel,
+                                                     String methodPreference,
+                                                     String callbackBaseUrl,
+                                                     String callbackApiKey) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("task_id", taskId);
+        body.put("session_id", sessionId);
+        body.put("topic", topic != null ? topic : "");
+        body.put("discipline", discipline != null ? discipline : "");
+        body.put("degree_level", degreeLevel != null ? degreeLevel : "");
+        body.put("method_preference", methodPreference != null ? methodPreference : "");
+        body.put("callback_base_url", callbackBaseUrl != null ? callbackBaseUrl : "http://localhost:8080");
+        body.put("callback_api_key", callbackApiKey != null ? callbackApiKey : "smartark-internal");
+
+        long startedAt = System.currentTimeMillis();
+        BusinessException lastError = null;
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                LangchainGraphRunResult result = restClient.post()
+                        .uri(buildUrl("/v1/agent/paper/run"))
+                        .body(body)
+                        .retrieve()
+                        .body(LangchainGraphRunResult.class);
+                long durationMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+                logger.info("runtime_paper_pipeline status=ok durationMs={}", durationMs);
+                if (result == null) {
+                    return new LangchainGraphRunResult(null, taskId, "paper", "failed", Map.of());
+                }
+                return result;
+            } catch (ResourceAccessException e) {
+                lastError = new BusinessException(ErrorCodes.MODEL_UPSTREAM_TIMEOUT, "runtime paper pipeline timeout");
+            } catch (RestClientResponseException e) {
+                lastError = mapRuntimeHttpException("paper_pipeline", e);
+            } catch (Exception e) {
+                lastError = new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "runtime paper pipeline failed: " + e.getMessage());
+            }
+            if (attempt < MAX_RETRIES) {
+                logger.warn("runtime_paper_pipeline_retry attempt={}", attempt + 1);
+            }
+        }
+        long durationMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+        logger.warn("runtime_paper_pipeline status=failed durationMs={}", durationMs);
+        throw lastError == null
+                ? new BusinessException(ErrorCodes.MODEL_SERVICE_ERROR, "runtime paper pipeline failed")
+                : lastError;
+    }
+
     public LangchainGraphRunResult runCodegenGraph(String taskId,
                                                    String projectId,
                                                    Long userId,
