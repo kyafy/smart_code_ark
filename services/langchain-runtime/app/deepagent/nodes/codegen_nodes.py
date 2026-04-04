@@ -490,6 +490,33 @@ async def sandbox_preview_deploy(state: Dict[str, Any]) -> Dict[str, Any]:
         container_id=sandbox.container_id or "",
     )
 
+    # Package source code and register downloadable artifact.
+    try:
+        zip_b64 = await sandbox.export_app_zip_base64()
+        artifact_info = await client.upload_artifact(
+            task_id=task_id,
+            artifact_type="zip",
+            file_name=f"smartark_{task_id}.zip",
+            content_base64=zip_b64,
+        )
+        await client.update_step(
+            task_id,
+            "package",
+            "finished",
+            progress=100,
+            output_summary="Artifact packaged",
+            output=artifact_info,
+        )
+    except Exception as exc:
+        logger.warning("Artifact packaging/upload failed for %s: %s", task_id, exc)
+        await client.update_step(
+            task_id,
+            "package",
+            "running",
+            progress=80,
+            output_summary=f"Artifact packaging skipped: {exc}",
+        )
+
     await client.update_step(
         task_id, "preview_deploy", "finished",
         progress=100,
@@ -645,7 +672,10 @@ async def _generate_files_by_groups(
     )
 
     return {
-        **memory_state,
+        # Do not return memory_state from parallel codegen branches.
+        # Otherwise multiple branches concurrently write keys like
+        # short_term_memories/long_term_memories/memory_context and trigger
+        # LangGraph INVALID_CONCURRENT_GRAPH_UPDATE.
         "generated_files": generated,
     }
 
@@ -821,17 +851,45 @@ def _extract_error_files(build_log: str) -> list[str]:
     """Extract file paths mentioned in build error logs."""
     import re
 
-    files = set()
+    def _normalize(path: str) -> str:
+        p = path.strip().strip("'\"").replace("\\", "/")
+        p = re.sub(r"^file://", "", p)
+        if p.startswith("/app/"):
+            p = p[len("/app/"):]
+        return p.lstrip("./")
+
+    files: list[str] = []
+    seen: set[str] = set()
+
+    def _add(path: str) -> None:
+        normalized = _normalize(path)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            files.append(normalized)
+
     # Java pattern: /path/File.java:[line,col] error
     for m in re.finditer(r"(/\S+\.java):\[?\d+", build_log):
-        files.add(m.group(1).lstrip("/app/"))
+        _add(m.group(1))
     # TypeScript/Vue pattern: file.ts(line,col): error
     for m in re.finditer(r"(\S+\.(?:ts|tsx|vue))\(\d+,\d+\)", build_log):
-        files.add(m.group(1))
+        _add(m.group(1))
     # Generic: ERROR in ./path/file
     for m in re.finditer(r"ERROR in [./]*(\S+\.(?:ts|tsx|js|jsx|vue|java|py))", build_log):
-        files.add(m.group(1))
-    return list(files)
+        _add(m.group(1))
+    # Vite/Node style: failed to load config from /app/frontend/vite.config.js
+    for m in re.finditer(
+        r"failed to load config from\s+(\S+\.(?:js|cjs|mjs|ts|cts|mts))",
+        build_log,
+        flags=re.IGNORECASE,
+    ):
+        _add(m.group(1))
+    # Generic absolute project file path fallback.
+    for m in re.finditer(
+        r"(/app/\S+\.(?:ts|tsx|js|jsx|vue|json|mjs|cjs|mts|cts|java|py))",
+        build_log,
+    ):
+        _add(m.group(1))
+    return files
 
 
 def _extract_errors_for_file(build_log: str, file_path: str) -> str:

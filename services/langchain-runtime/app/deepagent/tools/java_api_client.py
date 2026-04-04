@@ -187,6 +187,24 @@ class JavaApiClient:
             },
         )
 
+    async def upload_artifact(
+        self,
+        task_id: str,
+        artifact_type: str,
+        file_name: str,
+        content_base64: str,
+    ) -> Dict[str, Any]:
+        """POST /api/internal/task/{taskId}/artifact/upload"""
+        data = await self._post_json(
+            f"/api/internal/task/{task_id}/artifact/upload",
+            {
+                "artifact_type": artifact_type,
+                "file_name": file_name,
+                "content_base64": content_base64,
+            },
+        )
+        return self._ensure_dict(data)
+
     # ------------------------------------------------------------------
     # Model / generation delegation
     # ------------------------------------------------------------------

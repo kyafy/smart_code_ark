@@ -7,8 +7,12 @@ same Docker infrastructure as the existing ContainerRuntimeService (Java).
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import logging
 import socket
+import tarfile
+import zipfile
 from dataclasses import dataclass
 from typing import Optional
 
@@ -137,6 +141,11 @@ class DockerSandboxBackend:
             self._host_port or 0,
         )
 
+    async def export_app_zip_base64(self) -> str:
+        """Export /app from sandbox as zip bytes encoded in base64."""
+        self._ensure_running()
+        return await asyncio.to_thread(self._export_app_zip_base64_sync)
+
     # ------------------------------------------------------------------
     # SandboxBackendProtocol: execute
     # ------------------------------------------------------------------
@@ -245,6 +254,29 @@ class DockerSandboxBackend:
             demux=False,
         )
         return exec_result.exit_code, exec_result.output
+
+    def _export_app_zip_base64_sync(self) -> str:
+        assert self._container is not None
+        stream, _ = self._container.get_archive("/app")
+        tar_bytes = b"".join(stream)
+        tar_buffer = io.BytesIO(tar_bytes)
+        zip_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="r:*") as tf, zipfile.ZipFile(
+            zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as zf:
+            for member in tf.getmembers():
+                if not member.isfile():
+                    continue
+                file_obj = tf.extractfile(member)
+                if file_obj is None:
+                    continue
+                data = file_obj.read()
+                name = member.name.lstrip("./")
+                if name.startswith("app/"):
+                    name = name[4:]
+                if name:
+                    zf.writestr(name, data)
+        return base64.b64encode(zip_buffer.getvalue()).decode("ascii")
 
     def _find_available_port(self) -> int:
         """Find an available host port in the configured range."""

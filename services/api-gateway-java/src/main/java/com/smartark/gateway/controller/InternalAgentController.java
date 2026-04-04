@@ -1,12 +1,15 @@
 package com.smartark.gateway.controller;
 
 import com.smartark.gateway.common.response.ApiResponse;
+import com.smartark.gateway.db.entity.ArtifactEntity;
 import com.smartark.gateway.db.entity.TaskEntity;
 import com.smartark.gateway.db.entity.TaskLogEntity;
 import com.smartark.gateway.db.entity.TaskStepEntity;
+import com.smartark.gateway.db.repo.ArtifactRepository;
 import com.smartark.gateway.db.repo.TaskLogRepository;
 import com.smartark.gateway.db.repo.TaskRepository;
 import com.smartark.gateway.db.repo.TaskStepRepository;
+import com.smartark.gateway.dto.InternalArtifactUploadRequest;
 import com.smartark.gateway.dto.InternalTaskDispatchResult;
 import com.smartark.gateway.dto.InternalTaskLogRequest;
 import com.smartark.gateway.dto.InternalTaskStepUpdateRequest;
@@ -27,9 +30,14 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 @RestController
@@ -41,6 +49,7 @@ public class InternalAgentController {
     private final TaskRepository taskRepository;
     private final TaskStepRepository taskStepRepository;
     private final TaskLogRepository taskLogRepository;
+    private final ArtifactRepository artifactRepository;
     private final TaskExecutorService taskExecutorService;
 
     @Value("${smartark.agent.internal-token:smartark-internal}")
@@ -49,10 +58,12 @@ public class InternalAgentController {
     public InternalAgentController(TaskRepository taskRepository,
                                    TaskStepRepository taskStepRepository,
                                    TaskLogRepository taskLogRepository,
+                                   ArtifactRepository artifactRepository,
                                    TaskExecutorService taskExecutorService) {
         this.taskRepository = taskRepository;
         this.taskStepRepository = taskStepRepository;
         this.taskLogRepository = taskLogRepository;
+        this.artifactRepository = artifactRepository;
         this.taskExecutorService = taskExecutorService;
     }
 
@@ -216,6 +227,55 @@ public class InternalAgentController {
         logger.info("node-metrics received: taskId={}, node={}, run_id={}, status={}, duration_ms={}",
                 taskId, payload.node(), payload.runId(), payload.status(), payload.durationMs());
         return ApiResponse.success(null);
+    }
+
+    @PostMapping("/{taskId}/artifact/upload")
+    @Operation(summary = "Upload task artifact", description = "DeepAgent callback to register downloadable artifact bytes.")
+    public ApiResponse<Map<String, Object>> uploadArtifact(
+            @Parameter(description = "Task ID", required = true) @PathVariable("taskId") String taskId,
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestBody InternalArtifactUploadRequest request) {
+        if (!internalToken.equals(token)) {
+            return ApiResponse.fail(401, "Invalid internal token");
+        }
+        if (request == null || request.contentBase64() == null || request.contentBase64().isBlank()) {
+            return ApiResponse.fail(400, "content_base64 is required");
+        }
+        TaskEntity task = taskRepository.findById(taskId).orElse(null);
+        if (task == null) {
+            return ApiResponse.fail(404, "Task not found");
+        }
+        try {
+            byte[] data = Base64.getDecoder().decode(request.contentBase64());
+            String artifactType = (request.artifactType() == null || request.artifactType().isBlank())
+                    ? "zip" : request.artifactType().trim().toLowerCase(Locale.ROOT);
+            String fileName = (request.fileName() == null || request.fileName().isBlank())
+                    ? ("smartark_" + taskId + ".zip") : request.fileName().trim();
+
+            Path dir = Paths.get(System.getProperty("java.io.tmpdir"), "smartark", "artifacts", taskId);
+            Files.createDirectories(dir);
+            Path target = dir.resolve(fileName).normalize();
+            Files.write(target, data);
+
+            ArtifactEntity artifact = new ArtifactEntity();
+            artifact.setTaskId(taskId);
+            artifact.setProjectId(task.getProjectId());
+            artifact.setArtifactType(artifactType);
+            artifact.setStorageUrl("file://" + target.toAbsolutePath());
+            artifact.setSizeBytes((long) data.length);
+            artifact.setCreatedAt(LocalDateTime.now());
+            artifactRepository.save(artifact);
+
+            appendTaskLog(taskId, "info", "[deepagent] artifact uploaded: " + artifactType + ", size=" + data.length);
+            return ApiResponse.success(Map.of(
+                    "artifact_type", artifactType,
+                    "storage_url", artifact.getStorageUrl(),
+                    "size_bytes", data.length
+            ));
+        } catch (Exception e) {
+            logger.error("Artifact upload failed for task {}", taskId, e);
+            return ApiResponse.fail(500, "artifact upload failed: " + e.getMessage());
+        }
     }
 
     private TaskStepEntity findOrCreateStep(String taskId,
