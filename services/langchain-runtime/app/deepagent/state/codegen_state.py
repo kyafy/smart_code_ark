@@ -51,6 +51,10 @@ class CodegenState(TypedDict, total=False):
     sandbox_id: Optional[str]  # Docker container ID
     sandbox_port: Optional[int]  # host port mapped to sandbox
 
+    # --- compile check (Phase 5) ---
+    compile_check_round: int       # internal fix rounds within compile check
+    compile_check_log: str         # last compile check output
+
     # --- build / verify ---
     build_status: str  # pending | passed | failed
     build_log: str

@@ -1,6 +1,6 @@
 """Code generation StateGraph with parallel domains and sandbox back-chain.
 
-Graph topology (Phase 2):
+Graph topology (Phase 5):
 
     requirement_analyze
            ↓
@@ -10,15 +10,15 @@ sql_generate   codegen_backend   codegen_frontend   ← parallel via Send API
     └──────┬─────────┴──────────────────┘
     artifact_contract_validate  (cross-domain consistency check)
            ↓
-    sandbox_init → build_verify
-                       ↓ (conditional)
-                   build_fix  ←→  build_verify  (loop, max 3 rounds)
-                       ↓
-                   smoke_test
-                       ↓ (conditional)
-                   build_fix  ←→  smoke_test    (loop, max 2 rounds)
-                       ↓
-                   preview_deploy → END
+    sandbox_init → compile_check → build_verify
+                                       ↓ (conditional)
+                                   build_fix  ←→  build_verify  (loop, max 3 rounds)
+                                       ↓
+                                   smoke_test
+                                       ↓ (conditional)
+                                   build_fix  ←→  smoke_test    (loop, max 2 rounds)
+                                       ↓
+                                   preview_deploy → END
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from ..nodes.codegen_nodes import (
     requirement_analyze,
     sandbox_build_fix,
     sandbox_build_verify,
+    sandbox_compile_check,
     sandbox_init,
     sandbox_preview_deploy,
     sandbox_smoke_test,
@@ -91,6 +92,7 @@ def build_codegen_graph() -> StateGraph:
 
     # --- Sandbox back-chain ---
     _add("sandbox_init", sandbox_init)
+    _add("compile_check", sandbox_compile_check)
     _add("build_verify", sandbox_build_verify)
     _add("build_fix", sandbox_build_fix)
     _add("smoke_test", sandbox_smoke_test)
@@ -114,7 +116,8 @@ def build_codegen_graph() -> StateGraph:
     graph.add_edge("artifact_contract_validate", "sandbox_init")
 
     # --- Edges: sandbox chain ---
-    graph.add_edge("sandbox_init", "build_verify")
+    graph.add_edge("sandbox_init", "compile_check")
+    graph.add_edge("compile_check", "build_verify")
 
     graph.add_conditional_edges(
         "build_verify",

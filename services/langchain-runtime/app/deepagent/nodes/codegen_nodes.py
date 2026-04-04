@@ -178,6 +178,162 @@ async def sandbox_init(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+async def sandbox_compile_check(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Fast syntax/type check before full build — catches errors early.
+
+    Runs lightweight compile commands (tsc --noEmit, mvn compile) and fixes
+    errors in-place using an internal loop. Uses its own round counter
+    (compile_check_round) independent of build_fix_round.
+
+    Phase 5: inserted between sandbox_init and build_verify.
+    """
+    check_cancelled(state)
+    task_id = state["task_id"]
+    sandbox = await get_sandbox(task_id)
+    if sandbox is None:
+        return {"compile_check_round": 0, "compile_check_log": "", "current_step": "compile_check"}
+
+    from ..config import DeepAgentConfig
+    cfg = DeepAgentConfig.from_env()
+
+    client = JavaApiClient.from_state(state)
+    await client.update_step(task_id, "compile_check", "running", progress=5)
+
+    frontend_root, backend_root = await _detect_project_roots(sandbox, state)
+    if frontend_root is None and backend_root is None:
+        logger.info("compile_check: no recognizable project roots, skipping")
+        await client.update_step(task_id, "compile_check", "finished", progress=8)
+        return {"compile_check_round": 0, "compile_check_log": "No project roots found", "current_step": "compile_check"}
+
+    max_rounds = cfg.max_compile_check_rounds
+    timeout = cfg.compile_check_timeout
+    compile_round = 0
+    compile_log = ""
+
+    # Pre-check: does the sandbox have tsc / mvn available?
+    has_tsconfig = False
+    has_mvn = False
+    if frontend_root:
+        has_tsconfig = await sandbox.file_exists(f"{frontend_root}/tsconfig.json")
+    if backend_root:
+        mvn_check = await sandbox.execute("which mvn 2>/dev/null", timeout=5)
+        has_mvn = mvn_check.exit_code == 0
+
+    if not has_tsconfig and not has_mvn:
+        logger.info("compile_check: no tsconfig.json and no mvn, skipping")
+        await client.update_step(task_id, "compile_check", "finished", progress=8)
+        return {"compile_check_round": 0, "compile_check_log": "No compile tools applicable", "current_step": "compile_check"}
+
+    # Ensure npm install for tsc (shared with build_verify)
+    if has_tsconfig:
+        has_node_modules = await sandbox.file_exists(f"{frontend_root}/node_modules/.package-lock.json")
+        if not has_node_modules:
+            install_result = await sandbox.execute(
+                f"cd {frontend_root} && npm install --prefer-offline 2>&1",
+                timeout=120,
+            )
+            if install_result.exit_code != 0:
+                logger.warning("compile_check: npm install failed, skipping tsc")
+                has_tsconfig = False
+                compile_log = f"npm install failed (exit={install_result.exit_code})"
+
+    while compile_round < max_rounds:
+        check_cancelled(state)
+        errors_found = False
+        log_parts = []
+
+        # --- Frontend: TypeScript type check ---
+        if has_tsconfig:
+            result = await sandbox.execute(
+                f"cd {frontend_root} && npx tsc --noEmit 2>&1",
+                timeout=timeout,
+            )
+            log_parts.append(f"=== tsc --noEmit (exit={result.exit_code}) ===\n{result.stdout}")
+            if result.exit_code != 0:
+                errors_found = True
+
+        # --- Backend: Maven compile check ---
+        if has_mvn:
+            result = await sandbox.execute(
+                f"cd {backend_root} && mvn -q compile 2>&1",
+                timeout=timeout,
+            )
+            log_parts.append(f"=== mvn compile (exit={result.exit_code}) ===\n{result.stdout}")
+            if result.exit_code != 0:
+                errors_found = True
+
+        compile_log = "\n\n".join(log_parts)
+
+        if not errors_found:
+            logger.info("compile_check: passed on round %d for task %s", compile_round, task_id)
+            break
+
+        # --- Fix error files ---
+        compile_round += 1
+        error_files = _extract_error_files(compile_log)
+        if not error_files:
+            logger.warning("compile_check: errors detected but no files extracted, skipping fix")
+            break
+
+        await client.log(task_id, "info", f"Compile check round {compile_round}: fixing {len(error_files[:5])} files")
+
+        llm_client = LLMCodegenClient.from_state(state, node_name="compile_check")
+        if llm_client is None:
+            logger.warning("compile_check: no LLM client configured, skipping fix")
+            break
+
+        tech_stack = f"{state.get('stack_backend', '')} {state.get('stack_frontend', '')}"
+        project_structure = "\n".join(state.get("file_list", []))
+
+        for file_path in error_files[:5]:
+            check_cancelled(state)
+            try:
+                current = await sandbox.read(f"/app/{file_path}")
+            except Exception:
+                logger.warning("compile_check: cannot read %s, skipping", file_path)
+                continue
+
+            file_errors = _extract_errors_for_file(compile_log, file_path)
+            enriched_context = _context_compression.build_fix_context(
+                state, file_path, file_errors,
+            )
+            fix_hint = _memory_bridge.build_fix_hint(state, file_errors)
+
+            fix_instructions = (
+                f"Fix the following compilation/type errors:\n{enriched_context}\n\n"
+                f"Current file content:\n{current[:3000]}"
+                f"{fix_hint}"
+            )
+
+            try:
+                fixed_content = await _smart_retry.wrap_generate_file(
+                    generate_fn=llm_client.generate_file_content,
+                    file_path=file_path,
+                    prd=state.get("prd", ""),
+                    tech_stack=tech_stack,
+                    project_structure=project_structure,
+                    group=_classify_file_group(file_path),
+                    instructions=fix_instructions,
+                    quality_checker=_code_quality._check_quality,
+                )
+            except Exception as exc:
+                logger.warning("compile_check: LLM fix failed for %s: %s", file_path, exc)
+                continue
+
+            if fixed_content and fixed_content.strip():
+                await sandbox.write(f"/app/{file_path}", fixed_content)
+                logger.info("compile_check: fixed %s (round %d)", file_path, compile_round)
+
+    await client.update_step(task_id, "compile_check", "finished", progress=8,
+                             output_summary=f"Compile check done: {compile_round} fix rounds")
+
+    return {
+        "compile_check_round": compile_round,
+        "compile_check_log": compile_log[-2000:],
+        "current_step": "compile_check",
+    }
+
+
 async def sandbox_build_verify(state: Dict[str, Any]) -> Dict[str, Any]:
     """Run build commands inside the sandbox and capture results."""
     check_cancelled(state)
@@ -197,14 +353,20 @@ async def sandbox_build_verify(state: Dict[str, Any]) -> Dict[str, Any]:
     build_log_parts = []
 
     if has_package_json:
-        # Node.js project
-        result = await sandbox.execute(
-            f"cd {frontend_root} && npm install --prefer-offline 2>&1",
-            timeout=120,
-        )
-        build_log_parts.append(f"=== npm install (exit={result.exit_code}) ===\n{result.stdout}")
+        # Node.js project — skip npm install if node_modules already exists (e.g., from compile_check)
+        has_node_modules = await sandbox.file_exists(f"{frontend_root}/node_modules/.package-lock.json")
+        if has_node_modules:
+            build_log_parts.append("=== npm install (skipped, node_modules exists from compile_check) ===")
+            install_ok = True
+        else:
+            result = await sandbox.execute(
+                f"cd {frontend_root} && npm install --prefer-offline 2>&1",
+                timeout=120,
+            )
+            build_log_parts.append(f"=== npm install (exit={result.exit_code}) ===\n{result.stdout}")
+            install_ok = result.exit_code == 0
 
-        if result.exit_code == 0:
+        if install_ok:
             result = await sandbox.execute(
                 f"cd {frontend_root} && npm run build 2>&1",
                 timeout=180,
