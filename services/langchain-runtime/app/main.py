@@ -51,10 +51,13 @@ LANGCHAIN_MODEL_BASE_URL = os.getenv("LANGCHAIN_MODEL_BASE_URL", "").strip()
 LANGCHAIN_MODEL_API_KEY = os.getenv("LANGCHAIN_MODEL_API_KEY", "").strip()
 LANGSMITH_ENABLED = os.getenv("LANGCHAIN_ENABLE_LANGSMITH", "false").lower() == "true"
 LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "smartark-langchain-runtime")
+LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY", "").strip()
 
 if LANGSMITH_ENABLED:
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_PROJECT", LANGSMITH_PROJECT)
+    if LANGSMITH_API_KEY:
+        os.environ.setdefault("LANGCHAIN_API_KEY", LANGSMITH_API_KEY)
 
 
 class HealthResult(BaseModel):
