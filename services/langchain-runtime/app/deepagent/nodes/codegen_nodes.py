@@ -422,11 +422,16 @@ async def sandbox_build_verify(state: Dict[str, Any]) -> Dict[str, Any]:
             install_ok = result.exit_code == 0
 
         if install_ok:
-            result = await sandbox.execute(
-                f"cd {frontend_root} && npm run build 2>&1",
-                timeout=180,
-            )
-            build_log_parts.append(f"=== npm run build (exit={result.exit_code}) ===\n{result.stdout}")
+            precheck_log = await _precheck_frontend_config(sandbox, frontend_root)
+            if precheck_log:
+                build_log_parts.append(precheck_log)
+                result = type("R", (), {"exit_code": 1, "stdout": "vite config precheck failed"})()
+            else:
+                result = await sandbox.execute(
+                    f"cd {frontend_root} && npm run build 2>&1",
+                    timeout=180,
+                )
+                build_log_parts.append(f"=== npm run build (exit={result.exit_code}) ===\n{result.stdout}")
 
     elif has_pom:
         # Maven project
@@ -515,26 +520,80 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
     error_files = _extract_error_files(build_log)
 
     if not error_files:
-        # No specific files identified — try a general fix
-        await client.log(task_id, "warn", "No specific error files found in build log")
-        return {
-            "build_fix_round": round_num,
-            "build_status": "failed",
-            "current_step": "build_fix",
-        }
+        # No specific files identified — fall back to common frontend config files.
+        fallback_files: list[str] = []
+        if frontend_root:
+            candidates = [
+                "vite.config.ts",
+                "vite.config.js",
+                "package.json",
+                "tsconfig.json",
+                "index.html",
+            ]
+            for name in candidates:
+                abs_path = f"{frontend_root.rstrip('/')}/{name}"
+                if await sandbox.file_exists(abs_path):
+                    rel_path = abs_path[len("/app/"):] if abs_path.startswith("/app/") else abs_path.lstrip("/")
+                    fallback_files.append(rel_path)
+
+        if fallback_files:
+            error_files = fallback_files
+            await client.log(
+                task_id,
+                "warn",
+                f"No specific error files found in build log; fallback to common config files: {', '.join(error_files[:5])}",
+            )
+        else:
+            await client.log(task_id, "warn", "No specific error files found in build log")
+            return {
+                "build_fix_round": round_num,
+                "build_status": "failed",
+                "current_step": "build_fix",
+            }
 
     # For each error file: read current content, request fix from LLM
     llm_client = LLMCodegenClient.from_state(state, node_name="build_fix")
     tech_stack = f"{state.get('stack_backend', '')} {state.get('stack_frontend', '')}"
     project_structure = "\n".join(state.get("file_list", []))
     fix_history = list(state.get("fix_history", []))
+    filtered_build_log = _filter_build_log_noise(build_log)
 
     for file_path in error_files[:5]:  # limit to 5 files per round
         check_cancelled(state)
-        current = await sandbox.read(f"/app/{file_path}")
+        try:
+            current = await sandbox.read(f"/app/{file_path}")
+        except FileNotFoundError:
+            await client.log(task_id, "warn", f"Skip missing file during build_fix: {file_path}")
+            continue
 
         # Phase 4: enrich error context with compression middleware
-        file_errors = _extract_errors_for_file(build_log, file_path)
+        file_errors = _extract_errors_for_file(filtered_build_log, file_path)
+        if not file_errors.strip():
+            file_errors = _extract_errors_for_file(build_log, file_path)
+        if not file_errors.strip():
+            file_errors = filtered_build_log[:1500]
+        error_fingerprint = _error_fingerprint(file_errors)
+        repeated_same_error = sum(
+            1
+            for record in fix_history
+            if record.get("file") == file_path and record.get("error_fingerprint") == error_fingerprint
+        )
+
+        if _is_vite_config_file(file_path) and repeated_same_error >= 1:
+            fallback_content = _vite_config_fallback_template(file_path)
+            is_valid = await _validate_vite_config_content(sandbox, file_path, fallback_content)
+            if is_valid:
+                await sandbox.write(f"/app/{file_path}", fallback_content)
+                await client.log(task_id, "warn", f"Use deterministic fallback for repeated vite config error: {file_path}")
+                fix_history.append({
+                    "file": file_path,
+                    "round": round_num,
+                    "error_summary": file_errors[:200],
+                    "error_fingerprint": error_fingerprint,
+                    "fix_summary": f"Applied deterministic fallback for {file_path}",
+                })
+                continue
+            await client.log(task_id, "warn", f"Deterministic fallback validation failed for {file_path}, keep trying LLM")
         enriched_context = _context_compression.build_fix_context(
             state, file_path, file_errors,
         )
@@ -603,13 +662,31 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
             )
 
         if fixed_content and fixed_content.strip():
+            fixed_content = _sanitize_generated_content(fixed_content, file_path)
+            if not fixed_content.strip():
+                await client.log(task_id, "warn", f"Skip empty fix content after sanitize: {file_path}")
+                continue
+
+            used_fallback = False
+            if _is_vite_config_file(file_path):
+                is_valid = await _validate_vite_config_content(sandbox, file_path, fixed_content)
+                if not is_valid:
+                    await client.log(task_id, "warn", f"Invalid vite config generated for {file_path}, applying fallback template")
+                    fixed_content = _vite_config_fallback_template(file_path)
+                    used_fallback = True
+                    is_valid = await _validate_vite_config_content(sandbox, file_path, fixed_content)
+                    if not is_valid:
+                        await client.log(task_id, "warn", f"Fallback vite config still invalid for {file_path}, skipping write")
+                        continue
+
             await sandbox.write(f"/app/{file_path}", fixed_content)
-            await client.log(task_id, "info", f"Fixed: {file_path}")
+            await client.log(task_id, "info", f"Fixed: {file_path}{' (fallback)' if used_fallback else ''}")
 
             fix_history.append({
                 "file": file_path,
                 "round": round_num,
                 "error_summary": file_errors[:200],
+                "error_fingerprint": error_fingerprint,
                 "fix_summary": f"Precision-patched {file_path}",
             })
 
@@ -1705,7 +1782,7 @@ def _extract_error_files(build_log: str) -> list[str]:
         _add(m.group(1))
     # Generic absolute project file path fallback.
     for m in re.finditer(
-        r"(/app/\S+\.(?:ts|tsx|js|jsx|vue|json|mjs|cjs|mts|cts|java|py))",
+        r"(/app/\S+\.(?:json|tsx|jsx|vue|mjs|cjs|mts|cts|ts|js|java|py))(?![A-Za-z0-9_])",
         build_log,
     ):
         _add(m.group(1))
@@ -1724,6 +1801,119 @@ def _extract_errors_for_file(build_log: str, file_path: str) -> str:
             relevant.extend(lines[start:end])
             relevant.append("---")
     return "\n".join(relevant[:50])  # limit output
+
+
+def _filter_build_log_noise(build_log: str) -> str:
+    """Filter low-signal npm noise while keeping lines useful for fixing build errors."""
+    noise_prefixes = (
+        "npm warn deprecated ",
+        "npm notice",
+        "npm fund",
+        "run `npm fund`",
+        "to address all issues",
+        "run `npm audit`",
+        "added ",
+        "audited ",
+        "packages are looking for funding",
+    )
+    keep_keywords = (
+        "error",
+        "failed",
+        "vite.config",
+        "esbuild",
+        "expected",
+        "ts",
+        "syntax",
+    )
+
+    kept: list[str] = []
+    for raw in build_log.splitlines():
+        line = raw.strip()
+        lower = line.lower()
+        if any(lower.startswith(p) for p in noise_prefixes) and not any(k in lower for k in keep_keywords):
+            continue
+        kept.append(raw)
+    return "\n".join(kept)
+
+
+def _sanitize_generated_content(content: str, file_path: str) -> str:
+    """Normalize LLM output into plain source code before writing files."""
+    import re
+
+    text = content.strip()
+
+    # Strip markdown fences if model returned a fenced block.
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    # Remove accidental file-path prefix contamination.
+    text = re.sub(
+        r'^\s*["\']?/app/\S*["\']?\s*;\s*',
+        "",
+        text,
+        count=1,
+    )
+    if _is_vite_config_file(file_path):
+        text = text.replace("\\''", "'")
+        text = text.replace("\\\"", "\"")
+
+    return text.strip()
+
+
+def _error_fingerprint(error_text: str) -> str:
+    import hashlib
+
+    normalized = " ".join(error_text.lower().split())
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def _is_vite_config_file(file_path: str) -> bool:
+    lower = file_path.lower()
+    return lower.endswith("/vite.config.js") or lower.endswith("/vite.config.ts") or lower == "vite.config.js" or lower == "vite.config.ts"
+
+
+def _vite_config_fallback_template(file_path: str) -> str:
+    # Keep fallback deterministic and minimal to maximize build pass rate.
+    _ = file_path
+    return 'import { defineConfig } from "vite";\n\nexport default defineConfig({});\n'
+
+
+async def _validate_vite_config_content(sandbox, file_path: str, content: str) -> bool:
+    """Validate vite config syntax quickly before writing to target file."""
+    lower = file_path.lower()
+    if lower.endswith(".ts"):
+        # Lightweight guard for TS config when node --check is not reliable.
+        return "export default" in content
+
+    tmp_path = "/tmp/.smartark_vite_config_check.js"
+    await sandbox.write(tmp_path, content)
+    result = await sandbox.execute(f"node --check '{tmp_path}' 2>&1", timeout=10)
+    await sandbox.execute(f"rm -f '{tmp_path}'", timeout=5)
+    return result.exit_code == 0
+
+
+async def _precheck_frontend_config(sandbox, frontend_root: str) -> str:
+    """Run lightweight config checks before npm run build to fail fast on syntax corruption."""
+    for name in ("vite.config.js", "vite.config.ts"):
+        abs_path = f"{frontend_root.rstrip('/')}/{name}"
+        if not await sandbox.file_exists(abs_path):
+            continue
+        try:
+            content = await sandbox.read(abs_path)
+        except Exception as exc:
+            return f"=== vite precheck (exit=1) ===\nCannot read {abs_path}: {exc}"
+        valid = await _validate_vite_config_content(sandbox, name, content)
+        if not valid:
+            return (
+                "=== vite precheck (exit=1) ===\n"
+                f"Invalid syntax in {abs_path}. Skip npm run build and hand over to build_fix."
+            )
+    return ""
 
 
 async def _async_sleep(seconds: int) -> None:
