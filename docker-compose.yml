@@ -125,7 +125,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/smartark:/tmp/smartark
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 10s
       timeout: 5s
       retries: 10
