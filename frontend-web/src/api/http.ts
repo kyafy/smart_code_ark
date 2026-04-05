@@ -16,7 +16,7 @@ export class ApiRequestError extends Error {
   }
 }
 
-const useMock = (import.meta.env.VITE_USE_MOCK ?? 'true') === 'true'
+const useMock = import.meta.env.VITE_USE_MOCK === 'true'
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '',

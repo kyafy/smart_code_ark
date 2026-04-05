@@ -23,7 +23,7 @@ const submitting = ref(false)
 const allProjects = computed(() => projectStore.projects.slice(0, 3)) // 只展示最近3个项目
 
 const loadLocalSessions = async () => {
-  if (import.meta.env.VITE_USE_MOCK === 'false') {
+  if (import.meta.env.VITE_USE_MOCK !== 'true') {
     try {
       const list = await chatApi.getSessions()
       sessions.value = list
