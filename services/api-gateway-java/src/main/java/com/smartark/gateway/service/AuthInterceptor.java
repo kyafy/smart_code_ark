@@ -35,7 +35,6 @@ public class AuthInterceptor implements HandlerInterceptor {
                 || path.startsWith("/api/internal/")
                 || path.startsWith("/internal/")
                 || path.startsWith("/api/preview/")
-                || path.startsWith("/api/chat")
                 || path.startsWith("/v3/api-docs")
                 || path.startsWith("/swagger-ui")
                 || path.equals("/swagger-ui.html")
