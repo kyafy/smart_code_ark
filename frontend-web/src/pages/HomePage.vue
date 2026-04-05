@@ -22,7 +22,34 @@ const topicInput = ref('')
 const submitting = ref(false)
 const allProjects = computed(() => projectStore.projects.slice(0, 3)) // 只展示最近3个项目
 
-const loadLocalSessions = () => {
+const loadLocalSessions = async () => {
+  if (import.meta.env.VITE_USE_MOCK === 'false') {
+    try {
+      const list = await chatApi.getSessions()
+      sessions.value = list
+        .map((s: any) => {
+          const updatedAt = typeof s.updatedAt === 'number'
+            ? s.updatedAt
+            : (Date.parse(String(s.updatedAt ?? '')) || Date.now())
+          const messageCount = typeof s.messageCount === 'number' ? s.messageCount : (Array.isArray(s.messages) ? s.messages.length : 0)
+
+          return {
+            sessionId: String(s.sessionId ?? ''),
+            title: String(s.title || '未命名对话'),
+            status: messageCount > 0 ? '进行中' : '进行中',
+            messageCount,
+            updatedAt,
+          } satisfies SessionSummary
+        })
+        .filter((s: SessionSummary) => Boolean(s.sessionId))
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 3) // 只展示最近3个会话
+    } catch (e) {
+      console.error(e)
+    }
+    return
+  }
+
   try {
     const raw = localStorage.getItem('__smartark_mock_state__')
     if (!raw) {
@@ -64,7 +91,7 @@ const formatAgo = (ts: number) => {
 
 onMounted(() => {
   void projectStore.refresh()
-  loadLocalSessions()
+  void loadLocalSessions()
 })
 
 const openSession = async (sessionId: string) => {
@@ -91,7 +118,7 @@ const deleteSession = async (sessionId: string) => {
         localStorage.setItem('__smartark_mock_state__', JSON.stringify(state))
       }
     }
-    loadLocalSessions()
+    void loadLocalSessions()
     ElMessage.success('会话已删除')
   } catch (err) {
     if (String((err as any)?.message || '').includes('cancel')) return
