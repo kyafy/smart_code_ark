@@ -144,6 +144,13 @@ class DeepAgentConfig:
     # --- compile check settings (Phase 5) ---
     max_compile_check_rounds: int = 2     # DEEPAGENT_MAX_COMPILE_CHECK_ROUNDS
     compile_check_timeout: int = 60       # DEEPAGENT_COMPILE_CHECK_TIMEOUT (seconds)
+    # --- auto-heal & golden config (Phase 6) ---
+    auto_heal_enabled: bool = True      # DEEPAGENT_AUTO_HEAL_ENABLED
+    golden_config_enabled: bool = True  # DEEPAGENT_GOLDEN_CONFIG_ENABLED
+    # --- fixture test mode (Phase 6) ---
+    fixture_mode: bool = False          # DEEPAGENT_FIXTURE_MODE
+    fixture_dir: str = ""               # DEEPAGENT_FIXTURE_DIR
+    save_fixture: bool = False          # DEEPAGENT_SAVE_FIXTURE
     # --- smart retry settings (Phase 4) ---
     smart_retry_max_retries: int = 2
     smart_retry_backoff_base: float = 1.0
@@ -183,6 +190,11 @@ class DeepAgentConfig:
             memory_context_max_chars=int(os.getenv("DEEPAGENT_MEMORY_CONTEXT_MAX_CHARS", "4000")),
             max_compile_check_rounds=int(os.getenv("DEEPAGENT_MAX_COMPILE_CHECK_ROUNDS", "2")),
             compile_check_timeout=int(os.getenv("DEEPAGENT_COMPILE_CHECK_TIMEOUT", "60")),
+            auto_heal_enabled=os.getenv("DEEPAGENT_AUTO_HEAL_ENABLED", "true").lower() == "true",
+            golden_config_enabled=os.getenv("DEEPAGENT_GOLDEN_CONFIG_ENABLED", "true").lower() == "true",
+            fixture_mode=os.getenv("DEEPAGENT_FIXTURE_MODE", "false").lower() == "true",
+            fixture_dir=os.getenv("DEEPAGENT_FIXTURE_DIR", ""),
+            save_fixture=os.getenv("DEEPAGENT_SAVE_FIXTURE", "false").lower() == "true",
             smart_retry_max_retries=int(os.getenv("DEEPAGENT_SMART_RETRY_MAX", "2")),
             smart_retry_backoff_base=float(os.getenv("DEEPAGENT_SMART_RETRY_BACKOFF", "1.0")),
         )

@@ -60,6 +60,30 @@ async def requirement_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
 
         await client.update_step(task_id, "requirement_analyze", "running", progress=10)
 
+        # Phase 6: Fixture mode — load pre-saved files, skip LLM entirely
+        from ..config import DeepAgentConfig as _DACfg
+        _fixture_cfg = _DACfg.from_env()
+        if _fixture_cfg.fixture_mode and _fixture_cfg.fixture_dir:
+            import json as _json
+            from pathlib import Path as _Path
+            fixture_path = _Path(_fixture_cfg.fixture_dir) / "generated_files.json"
+            if fixture_path.exists():
+                logger.info("requirement_analyze: FIXTURE MODE — loading from %s", fixture_path)
+                with open(fixture_path, encoding="utf-8") as _f:
+                    fixture_data = _json.load(_f)
+                await client.update_step(task_id, "requirement_analyze", "finished",
+                                         progress=100, output_summary="Loaded from fixture")
+                return {
+                    **memory_state,
+                    "file_plan": fixture_data.get("file_plan", []),
+                    "file_list": fixture_data.get("file_list", []),
+                    "generated_files": fixture_data.get("generated_files", {}),
+                    "template_key": fixture_data.get("template_key"),
+                    "current_step": "requirement_analyze",
+                }
+            else:
+                logger.warning("requirement_analyze: fixture file not found: %s", fixture_path)
+
         # Resolve template
         stack = {
             "backend": state.get("stack_backend", "springboot"),
@@ -102,22 +126,40 @@ async def requirement_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
             group = _classify_file_group(path)
             file_plan.append({"path": path, "group": group, "priority": 0})
 
+        # Phase 6: materialize golden config files (bypass LLM)
+        golden_files: Dict[str, str] = {}
+        if _fixture_cfg.golden_config_enabled:
+            prd_text = state.get("prd", "")
+            project_slug = _slugify(prd_text[:50]) if prd_text else "app"
+            display = prd_text[:30] if prd_text else "Application"
+            golden_files = _materialize_golden_configs(
+                file_plan,
+                stack_backend=state.get("stack_backend", "springboot"),
+                stack_frontend=state.get("stack_frontend", "vue3"),
+                project_name=project_slug,
+                display_name=display,
+            )
+        golden_count = len(golden_files)
+        if golden_count:
+            logger.info("requirement_analyze: materialized %d golden config files", golden_count)
+
         await client.update_step(
             task_id, "requirement_analyze", "finished",
             progress=100,
-            output_summary=f"Generated file plan with {len(file_plan)} files",
+            output_summary=f"Generated file plan with {len(file_plan)} files ({golden_count} golden configs)",
         )
 
         # Phase 4: save checkpoint after node
         await _memory_bridge.after_node(
             state, "requirement_analyze",
-            output_summary=f"Generated {len(file_plan)} files structure plan",
+            output_summary=f"Generated {len(file_plan)} files structure plan ({golden_count} golden)",
         )
 
         return {
             **memory_state,
             "file_plan": file_plan,
             "file_list": safe_files,
+            "generated_files": golden_files,  # Phase 6: pre-populate with golden configs
             "template_key": template_info.get("template_key"),
             "current_step": "requirement_analyze",
         }
@@ -237,6 +279,8 @@ async def sandbox_compile_check(state: Dict[str, Any]) -> Dict[str, Any]:
                 has_tsconfig = False
                 compile_log = f"npm install failed (exit={install_result.exit_code})"
 
+    compile_heal_applied = False  # guard: auto-heal runs at most once per compile_check
+
     while compile_round < max_rounds:
         check_cancelled(state)
         errors_found = False
@@ -268,7 +312,18 @@ async def sandbox_compile_check(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.info("compile_check: passed on round %d for task %s", compile_round, task_id)
             break
 
-        # --- Fix error files ---
+        # --- Phase 6: Auto-heal before LLM fix (once per loop to prevent infinite retry) ---
+        if cfg.auto_heal_enabled and not compile_heal_applied:
+            healed, heal_desc = await _auto_heal_build_errors(
+                sandbox, compile_log, frontend_root if has_tsconfig else None,
+                backend_root if has_mvn else None,
+            )
+            if healed:
+                compile_heal_applied = True  # prevent re-entry on next loop
+                logger.info("compile_check: auto-heal applied: %s", heal_desc)
+                continue  # Re-run compile check with healed files
+
+        # --- Fix error files via LLM ---
         compile_round += 1
         error_files = _extract_error_files(compile_log)
         if not error_files:
@@ -356,7 +411,7 @@ async def sandbox_build_verify(state: Dict[str, Any]) -> Dict[str, Any]:
         # Node.js project — skip npm install if node_modules already exists (e.g., from compile_check)
         has_node_modules = await sandbox.file_exists(f"{frontend_root}/node_modules/.package-lock.json")
         if has_node_modules:
-            build_log_parts.append("=== npm install (skipped, node_modules exists from compile_check) ===")
+            build_log_parts.append("=== npm install (skipped, node_modules already up-to-date) ===")
             install_ok = True
         else:
             result = await sandbox.execute(
@@ -426,14 +481,35 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
 
     await client.log(task_id, "info", f"Build fix attempt {round_num}")
 
-    # Fast-path: auto-heal known npm ETARGET issue before LLM-based file fixing.
-    frontend_root, _ = await _detect_project_roots(sandbox, state)
-    if frontend_root and "No matching version found for @types/date-fns@" in build_log:
-        await client.log(task_id, "warn", "Auto-fix npm ETARGET: removing @types/date-fns from package.json")
-        await sandbox.execute(
-            f"cd {frontend_root} && npm pkg delete devDependencies.@types/date-fns && npm pkg delete dependencies.@types/date-fns",
-            timeout=20,
+    # Phase 6: Auto-heal rule engine — deterministic fixes before LLM
+    from ..config import DeepAgentConfig as _DAC
+    _p6_cfg = _DAC.from_env()
+    frontend_root, backend_root = await _detect_project_roots(sandbox, state)
+    healed = False
+    heal_desc = ""
+    if _p6_cfg.auto_heal_enabled:
+        healed, heal_desc = await _auto_heal_build_errors(
+            sandbox, build_log, frontend_root, backend_root,
         )
+    if healed:
+        await client.log(task_id, "info", f"Auto-heal applied: {heal_desc}")
+        # Re-run build to check if auto-heal resolved everything
+        verify_result = await sandbox_build_verify(state)
+        if verify_result.get("build_status") == "passed":
+            await client.log(task_id, "info", "Auto-heal resolved all build errors, skipping LLM fix")
+            await _memory_bridge.after_node(
+                state, "build_fix",
+                output_summary=f"Round {round_num}: auto-healed ({heal_desc})",
+            )
+            return {
+                **verify_result,
+                "build_fix_round": round_num,
+                "fix_history": list(state.get("fix_history", [])),
+                "current_step": "build_fix",
+            }
+        # Auto-heal partially helped, update build_log for LLM fix
+        build_log = verify_result.get("build_log", build_log)
+        await client.log(task_id, "info", "Auto-heal partial, proceeding to LLM fix")
 
     # Extract error file paths from build log (common patterns)
     error_files = _extract_error_files(build_log)
@@ -477,9 +553,19 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 4: escalation hint from smart retry
         escalation = _smart_retry.get_escalation_hint(file_path, round_num)
 
+        # Phase 6: precision patch — send full file content + error context,
+        # instruct LLM to output the COMPLETE fixed file (not a diff) but
+        # only modify the parts that caused errors.
         fix_instructions = (
-            f"Fix the following build errors:\n{enriched_context}\n\n"
-            f"Current file content:\n{current[:3000]}"
+            f"以下文件存在编译/构建错误，请修复。\n\n"
+            f"--- 错误信息 ---\n{enriched_context}\n\n"
+            f"--- 当前文件完整内容 ({file_path}) ---\n{current}\n\n"
+            f"--- 修复要求 ---\n"
+            f"1. 只修改导致错误的部分，不要改动其他正常代码\n"
+            f"2. 保持原有代码风格、命名约定和导入结构\n"
+            f"3. 输出修复后的完整文件内容（不要输出 diff 或 Markdown 代码块）\n"
+            f"4. 如果错误是 import 缺失，只添加缺失的 import，不要重组所有 import\n"
+            f"5. 如果错误是类型不匹配，只修改类型声明，不要重写业务逻辑\n"
             f"{fix_hint}"
             f"{round_hint}"
             f"{escalation}"
@@ -487,11 +573,10 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
 
         if llm_client is not None:
             try:
-                # Phase 4: smart retry wrapping
                 fixed_content = await _smart_retry.wrap_generate_file(
                     generate_fn=llm_client.generate_file_content,
                     file_path=file_path,
-                    prd=state.get("prd", ""),
+                    prd=state.get("prd", "")[:1500],  # reduce PRD for fix (less noise)
                     tech_stack=tech_stack,
                     project_structure=project_structure,
                     group=_classify_file_group(file_path),
@@ -501,7 +586,7 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
                 logger.warning("build_fix: direct LLM failed for %s, falling back to Java: %s", file_path, exc)
                 fixed_content = await client.generate_file_content(
                     file_path=file_path,
-                    prd=state.get("prd", ""),
+                    prd=state.get("prd", "")[:1500],
                     tech_stack=tech_stack,
                     project_structure=project_structure,
                     group=_classify_file_group(file_path),
@@ -510,7 +595,7 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
         else:
             fixed_content = await client.generate_file_content(
                 file_path=file_path,
-                prd=state.get("prd", ""),
+                prd=state.get("prd", "")[:1500],
                 tech_stack=tech_stack,
                 project_structure=project_structure,
                 group=_classify_file_group(file_path),
@@ -521,12 +606,11 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
             await sandbox.write(f"/app/{file_path}", fixed_content)
             await client.log(task_id, "info", f"Fixed: {file_path}")
 
-            # Phase 4: record fix history for rolling window
             fix_history.append({
                 "file": file_path,
                 "round": round_num,
                 "error_summary": file_errors[:200],
-                "fix_summary": f"Regenerated {file_path} with fix instructions",
+                "fix_summary": f"Precision-patched {file_path}",
             })
 
     # Re-run build to verify fix
@@ -686,6 +770,37 @@ async def sandbox_preview_deploy(state: Dict[str, Any]) -> Dict[str, Any]:
         output={"host_port": host_port, "preview_url": preview_url},
     )
 
+    # Phase 6: save fixture snapshot for future test runs
+    from ..config import DeepAgentConfig as _DACfg2
+    _fix_cfg = _DACfg2.from_env()
+    if _fix_cfg.save_fixture:
+        try:
+            import json as _json2
+            from pathlib import Path as _Path2
+            fixture_dir = _Path2(_fix_cfg.fixture_dir or "/tmp/smartark/fixtures")
+            fixture_dir.mkdir(parents=True, exist_ok=True)
+            fixture = {
+                "file_plan": state.get("file_plan", []),
+                "file_list": state.get("file_list", []),
+                "generated_files": state.get("generated_files", {}),
+                "template_key": state.get("template_key"),
+                "stack": {
+                    "backend": state.get("stack_backend"),
+                    "frontend": state.get("stack_frontend"),
+                    "db": state.get("stack_db"),
+                },
+            }
+            fixture_path = fixture_dir / f"{task_id}.json"
+            with open(fixture_path, "w", encoding="utf-8") as _ff:
+                _json2.dump(fixture, _ff, ensure_ascii=False)
+            # Also save as latest for easy fixture_mode loading
+            latest_path = fixture_dir / "generated_files.json"
+            with open(latest_path, "w", encoding="utf-8") as _fl:
+                _json2.dump(fixture, _fl, ensure_ascii=False)
+            logger.info("Fixture saved: %s (+ latest symlink)", fixture_path)
+        except Exception as exc:
+            logger.warning("Fixture save failed (non-fatal): %s", exc)
+
     return {
         "preview_url": preview_url,
         "preview_status": "ready",
@@ -774,6 +889,87 @@ async def _detect_project_roots(sandbox, state: Dict[str, Any]) -> tuple[Optiona
     return frontend_root, backend_root
 
 
+# File generation priority for dependency ordering within a group.
+# Lower number = generated first. Files not matching any pattern get 50.
+_FILE_PRIORITY_PATTERNS = [
+    # Database layer first (entities depend on schema)
+    (10, [".sql", "migration", "flyway", "schema"]),
+    # Entity / Model / DTO (everything depends on these)
+    (20, ["entity", "model", "pojo", "dto", "vo", "domain", "bean"]),
+    # Repository / DAO (services depend on these)
+    (25, ["repository", "repo", "dao", "mapper"]),
+    # Service (controllers depend on these)
+    (30, ["service", "usecase", "handler"]),
+    # Controller / API (depends on service)
+    (35, ["controller", "resource", "endpoint", "api"]),
+    # Config / Application (standalone)
+    (40, ["config", "configuration", "application", "properties"]),
+    # Frontend: store → composable → component → page → router
+    (42, ["store", "pinia"]),
+    (44, ["composable", "hook", "use"]),
+    (46, ["component"]),
+    (48, ["view", "page"]),
+    (49, ["router", "route"]),
+    # Tests last
+    (60, ["test", "spec", "__test"]),
+]
+
+
+def _file_generation_priority(path: str) -> int:
+    """Return generation priority for a file (lower = earlier)."""
+    lower = path.lower()
+    for priority, patterns in _FILE_PRIORITY_PATTERNS:
+        if any(p in lower for p in patterns):
+            return priority
+    return 50
+
+
+def _build_related_file_context(
+    current_path: str,
+    generated: Dict[str, str],
+    max_chars: int = 2000,
+) -> str:
+    """Extract snippets from already-generated files that the current file likely depends on.
+
+    E.g., when generating UserService.java, include UserEntity.java's class/field signatures.
+    """
+    if not generated:
+        return ""
+
+    current_lower = current_path.lower()
+    # Infer the domain/entity name from current file
+    base = current_path.split("/")[-1].rsplit(".", 1)[0].lower()
+    # Strip common suffixes to get domain name: UserService → user, UserController → user
+    for suffix in ("controller", "service", "repository", "repo", "dao", "mapper",
+                    "page", "list", "form", "detail", "view", "test", "spec",
+                    "request", "response", "dto", "vo"):
+        if base.endswith(suffix) and len(base) > len(suffix):
+            base = base[: -len(suffix)]
+            break
+
+    if len(base) < 2:
+        return ""
+
+    snippets = []
+    chars = 0
+    for gen_path, content in generated.items():
+        if not content or gen_path == current_path:
+            continue
+        gen_lower = gen_path.lower()
+        # Match by domain name (e.g., "user" matches UserEntity, UserRepository)
+        if base not in gen_lower:
+            continue
+        # Extract first 40 lines (signatures, class definition, fields)
+        lines = content.split("\n")[:40]
+        snippet = "\n".join(lines)
+        if chars + len(snippet) > max_chars:
+            break
+        snippets.append(f"// --- {gen_path} (前40行) ---\n{snippet}")
+        chars += len(snippet)
+
+    return "\n\n".join(snippets)
+
+
 async def _generate_files_by_groups(
     state: Dict[str, Any],
     groups: set[str],
@@ -783,6 +979,7 @@ async def _generate_files_by_groups(
     """Generate code files for the specified groups.
 
     Phase 4: integrated with all middleware layers.
+    Phase 6: files sorted by dependency priority (Entity → Service → Controller).
     """
     client = JavaApiClient.from_state(state)
     task_id = state["task_id"]
@@ -795,6 +992,9 @@ async def _generate_files_by_groups(
 
     file_plan = state.get("file_plan", [])
     target_files = [f for f in file_plan if f.get("group") in groups]
+
+    # Phase 6: sort by dependency priority so earlier files can inform later ones
+    target_files.sort(key=lambda f: _file_generation_priority(f.get("path", "")))
 
     generated = dict(state.get("generated_files", {}))
     tech_stack = f"{state.get('stack_backend', '')} {state.get('stack_frontend', '')} {state.get('stack_db', '')}"
@@ -862,6 +1062,13 @@ async def _generate_files_concurrent(
     async def _generate_one(file_item: Dict[str, Any]) -> tuple[str, Optional[str]]:
         path = file_item["path"]
         group = file_item["group"]
+
+        # Phase 6: skip files already populated (golden config or template cache)
+        existing = generated.get(path)
+        if existing and existing.strip():
+            logger.debug("%s: skipping %s (already populated, %d chars)", step_code, path, len(existing))
+            return path, existing
+
         try:
             # Phase 4: compress PRD with relevance to this file
             compressed_prd = _context_compression.compress_prd(prd, file_path=path)
@@ -888,6 +1095,11 @@ async def _generate_files_concurrent(
             if deps:
                 enhanced_instructions += f"\n\n{deps}"
 
+            # Phase 6: inject already-generated file snippets for cross-file consistency
+            related_snippets = _build_related_file_context(path, generated)
+            if related_snippets:
+                enhanced_instructions += f"\n\n--- 已生成的相关文件（请保持接口一致） ---\n{related_snippets}"
+
             # Phase 4: smart retry wrapping with quality check
             content = await _smart_retry.wrap_generate_file(
                 generate_fn=llm_client.generate_file_content,
@@ -908,24 +1120,35 @@ async def _generate_files_concurrent(
             logger.warning("%s: error generating %s: %s", step_code, path, exc)
             return path, None
 
-    tasks = [_generate_one(f) for f in target_files]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
+    # Phase 6: tiered generation — group files by priority tier, generate
+    # each tier concurrently but tiers sequentially (Entity before Service
+    # before Controller). This lets later files reference already-generated content.
+    from itertools import groupby
+    sorted_files = sorted(target_files, key=lambda f: _file_generation_priority(f.get("path", "")))
+    tiers = []
+    for _, group_iter in groupby(sorted_files, key=lambda f: _file_generation_priority(f.get("path", ""))):
+        tiers.append(list(group_iter))
 
     success_count = 0
     fail_count = 0
-    for path, content in results:
-        if content is not None:
-            generated[path] = content
-            success_count += 1
-            if metrics:
-                metrics.record_subtask(path, success=True)
-                metrics.record_model_call()
-        else:
-            generated[path] = ""  # placeholder so contract_validate can detect missing
-            fail_count += 1
-            if metrics:
-                metrics.record_subtask(path, success=False)
-                metrics.mark_degrade(f"file empty/timeout: {path}")
+
+    for tier in tiers:
+        tasks = [_generate_one(f) for f in tier]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+
+        for path, content in results:
+            if content is not None:
+                generated[path] = content
+                success_count += 1
+                if metrics:
+                    metrics.record_subtask(path, success=True)
+                    metrics.record_model_call()
+            else:
+                generated[path] = ""  # placeholder so contract_validate can detect missing
+                fail_count += 1
+                if metrics:
+                    metrics.record_subtask(path, success=False)
+                    metrics.mark_degrade(f"file empty/timeout: {path}")
 
     # Single progress update after all concurrent tasks complete
     await callback_client.update_step(task_id, step_code, "running", progress=90)
@@ -1007,6 +1230,441 @@ def _classify_file_group(path: str) -> str:
     if any(d in lower for d in (".vue", ".tsx", ".jsx", "frontend/", "src/views", "src/components", "src/pages")):
         return "frontend"
     return "backend"
+
+
+# ======================================================================
+# Golden config templates — verified content from template-repo
+# ======================================================================
+
+
+def _get_golden_vite_config() -> str:
+    """Return verified vite.config.ts (from springboot-vue3-mysql template)."""
+    return (
+        "import { defineConfig } from 'vite'\n"
+        "import vue from '@vitejs/plugin-vue'\n"
+        "\n"
+        "export default defineConfig({\n"
+        "  plugins: [vue()],\n"
+        "  server: {\n"
+        "    host: '0.0.0.0',\n"
+        "    port: 5173\n"
+        "  },\n"
+        "  test: {\n"
+        "    environment: 'jsdom',\n"
+        "    globals: true\n"
+        "  }\n"
+        "})\n"
+    )
+
+
+def _get_golden_tsconfig() -> str:
+    """Return verified tsconfig.json (from springboot-vue3-mysql template)."""
+    return (
+        '{\n'
+        '  "extends": "@vue/tsconfig/tsconfig.dom.json",\n'
+        '  "compilerOptions": {\n'
+        '    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",\n'
+        '    "types": ["vite/client"]\n'
+        '  },\n'
+        '  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"]\n'
+        '}\n'
+    )
+
+
+def _get_golden_package_json_scripts() -> dict:
+    """Return verified scripts block for package.json."""
+    return {
+        "dev": "vite",
+        "build": "vue-tsc -b && vite build",
+        "preview": "vite preview",
+    }
+
+
+def _get_golden_package_json(project_name: str = "app") -> str:
+    """Return verified package.json (from springboot-vue3-mysql template)."""
+    import json as _json
+    return _json.dumps({
+        "name": f"{project_name}-frontend",
+        "private": True,
+        "version": "0.1.0",
+        "type": "module",
+        "scripts": {
+            "dev": "vite",
+            "build": "vue-tsc -b && vite build",
+            "preview": "vite preview",
+            "test": "vitest run",
+            "test:watch": "vitest",
+        },
+        "dependencies": {
+            "vue": "^3.5.13",
+        },
+        "devDependencies": {
+            "@vitejs/plugin-vue": "^5.2.1",
+            "@vue/test-utils": "^2.4.6",
+            "@vue/tsconfig": "^0.7.0",
+            "jsdom": "^25.0.1",
+            "typescript": "^5.8.2",
+            "vite": "^5.4.14",
+            "vitest": "^2.1.8",
+            "vue-tsc": "^2.2.8",
+        },
+    }, indent=2, ensure_ascii=False) + "\n"
+
+
+def _get_golden_pom_xml(project_name: str = "app", display_name: str = "Application") -> str:
+    """Return verified pom.xml (from springboot-vue3-mysql template)."""
+    return f'''<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.4</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.smartark.template</groupId>
+    <artifactId>{project_name}-backend</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>{display_name} Backend</name>
+
+    <properties>
+        <java.version>17</java.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+'''
+
+
+def _get_golden_frontend_dockerfile() -> str:
+    """Return verified frontend Dockerfile."""
+    return (
+        "FROM node:20-alpine AS build\n"
+        "WORKDIR /app\n"
+        "\n"
+        "COPY package.json .\n"
+        "RUN npm install\n"
+        "\n"
+        "COPY . .\n"
+        "RUN npm run build\n"
+        "\n"
+        "FROM nginx:1.27-alpine\n"
+        "COPY --from=build /app/dist /usr/share/nginx/html\n"
+        "\n"
+        "EXPOSE 80\n"
+    )
+
+
+def _get_golden_backend_dockerfile() -> str:
+    """Return verified backend Dockerfile."""
+    return (
+        "FROM maven:3.9.9-eclipse-temurin-17 AS build\n"
+        "WORKDIR /workspace\n"
+        "\n"
+        "COPY pom.xml .\n"
+        "COPY src ./src\n"
+        "\n"
+        "RUN mvn -q -DskipTests package\n"
+        "\n"
+        "FROM eclipse-temurin:17-jre\n"
+        "WORKDIR /app\n"
+        "\n"
+        "COPY --from=build /workspace/target/*.jar app.jar\n"
+        "\n"
+        "EXPOSE 8080\n"
+        "\n"
+        'ENTRYPOINT ["java", "-jar", "app.jar"]\n'
+    )
+
+
+def _get_golden_docker_compose(project_name: str = "app") -> str:
+    """Return verified docker-compose.yml (from springboot-vue3-mysql template)."""
+    return f'''services:
+  mysql:
+    image: mysql:8.4
+    container_name: {project_name}_mysql
+    environment:
+      MYSQL_DATABASE: ${{MYSQL_DATABASE:-app_db}}
+      MYSQL_USER: ${{MYSQL_USER:-app}}
+      MYSQL_PASSWORD: ${{MYSQL_PASSWORD:-app123456}}
+      MYSQL_ROOT_PASSWORD: ${{MYSQL_ROOT_PASSWORD:-root123456}}
+    ports:
+      - "${{MYSQL_PORT:-3306}}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      SERVER_PORT: ${{BACKEND_PORT:-8080}}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ${{MYSQL_DATABASE:-app_db}}
+      DB_USER: ${{MYSQL_USER:-app}}
+      DB_PASSWORD: ${{MYSQL_PASSWORD:-app123456}}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${{BACKEND_PORT:-8080}}:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "${{FRONTEND_PORT:-5173}}:80"
+
+volumes:
+  mysql_data:
+'''
+
+
+def _get_golden_gitignore() -> str:
+    """Return a standard .gitignore."""
+    return (
+        "node_modules/\ndist/\n.vite/\n*.log\n.env\n.env.local\n"
+        "target/\n*.class\n*.jar\n.idea/\n*.iml\n.DS_Store\n"
+    )
+
+
+# Golden config file pattern matching
+_GOLDEN_CONFIG_PATTERNS = {
+    "package.json", "pom.xml", "tsconfig.json", "vite.config.ts",
+    "vite.config.js", "dockerfile", "docker-compose.yml",
+    "docker-compose.yaml", ".gitignore",
+}
+
+
+def _is_golden_config(path: str) -> bool:
+    """Check if a file should use golden template instead of LLM generation."""
+    base = path.split("/")[-1].lower()
+    return any(p in base for p in _GOLDEN_CONFIG_PATTERNS)
+
+
+def _slugify(text: str) -> str:
+    """Convert text to a URL-safe slug for project names."""
+    import re as _re
+    slug = _re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", text.lower().strip())
+    return slug.strip("-")[:30] or "app"
+
+
+def _materialize_golden_configs(
+    file_plan: List[Dict[str, Any]],
+    stack_backend: str,
+    stack_frontend: str,
+    project_name: str,
+    display_name: str,
+) -> Dict[str, str]:
+    """Generate golden config files from hardcoded templates.
+
+    Returns dict of {path: content} for config files that should bypass LLM.
+    """
+    golden: Dict[str, str] = {}
+
+    for item in file_plan:
+        path = item.get("path", "")
+        if not _is_golden_config(path):
+            continue
+
+        lower = path.lower()
+        base = path.split("/")[-1].lower()
+
+        # Match by filename
+        if base == "package.json" and "vue" in stack_frontend.lower():
+            golden[path] = _get_golden_package_json(project_name)
+        elif base == "pom.xml" and "spring" in stack_backend.lower():
+            golden[path] = _get_golden_pom_xml(project_name, display_name)
+        elif base == "tsconfig.json" and ("vue" in stack_frontend.lower() or "react" in stack_frontend.lower()):
+            golden[path] = _get_golden_tsconfig()
+        elif base in ("vite.config.ts", "vite.config.js") and "vue" in stack_frontend.lower():
+            golden[path] = _get_golden_vite_config()
+        elif base == "dockerfile":
+            if "frontend" in lower or "web" in lower or "client" in lower:
+                golden[path] = _get_golden_frontend_dockerfile()
+            elif "backend" in lower or "server" in lower:
+                golden[path] = _get_golden_backend_dockerfile()
+        elif base in ("docker-compose.yml", "docker-compose.yaml"):
+            golden[path] = _get_golden_docker_compose(project_name)
+        elif base == ".gitignore":
+            golden[path] = _get_golden_gitignore()
+
+    return golden
+
+
+# ======================================================================
+# Auto-heal rule engine — deterministic fixes before LLM
+# ======================================================================
+
+
+import re as _re_module  # module-level re already imported, alias for clarity
+
+
+async def _auto_heal_build_errors(
+    sandbox,
+    build_log: str,
+    frontend_root: Optional[str],
+    backend_root: Optional[str],
+) -> tuple:
+    """Apply deterministic fixes for common build errors before LLM.
+
+    Returns (any_fixes_applied: bool, description: str).
+    """
+    fixes = []
+
+    # --- npm / Node.js rules ---
+    if frontend_root:
+        # Rule 1: ERESOLVE peer dependency conflict
+        if "ERESOLVE" in build_log or "peer dep" in build_log.lower():
+            await sandbox.execute(
+                f"cd {frontend_root} && npm install --legacy-peer-deps 2>&1",
+                timeout=120,
+            )
+            fixes.append("npm: --legacy-peer-deps")
+
+        # Rule 2: Package version not found (404 / ETARGET)
+        for m in _re_module.finditer(
+            r"(?:404\s+Not Found|No matching version found for)\s*['\"]?([@\w/-]+)@([^\s'\"]+)",
+            build_log,
+        ):
+            pkg = m.group(1)
+            await sandbox.execute(
+                f"cd {frontend_root} && npm pkg delete dependencies.{pkg} "
+                f"&& npm pkg delete devDependencies.{pkg}",
+                timeout=20,
+            )
+            fixes.append(f"npm: removed {pkg} (version not found)")
+
+        # Rule 3: Cannot find module (missing dependency)
+        seen_modules: set = set()
+        for m in _re_module.finditer(r"Cannot find module '([@\w/-]+)'", build_log):
+            mod = m.group(1)
+            if mod.startswith(".") or mod.startswith("/") or mod in seen_modules:
+                continue
+            seen_modules.add(mod)
+            await sandbox.execute(
+                f"cd {frontend_root} && npm install {mod} --save 2>&1",
+                timeout=60,
+            )
+            fixes.append(f"npm: installed {mod}")
+
+        # Rule 4: vite.config load failure → restore golden
+        if "failed to load config from" in build_log.lower():
+            golden = _get_golden_vite_config()
+            vite_path = f"{frontend_root}/vite.config.ts"
+            await sandbox.write(vite_path, golden)
+            fixes.append("vite: restored golden vite.config.ts")
+
+        # Rule 5: tsconfig parse error → restore golden
+        if (
+            "error TS5024" in build_log
+            or "error TS6046" in build_log
+            or ("tsconfig" in build_log.lower() and "parse error" in build_log.lower())
+        ):
+            golden = _get_golden_tsconfig()
+            await sandbox.write(f"{frontend_root}/tsconfig.json", golden)
+            fixes.append("tsconfig: restored golden tsconfig.json")
+
+        # Rule 6: Missing build script
+        if "missing script: build" in build_log.lower() or "'build' is not found" in build_log:
+            scripts = _get_golden_package_json_scripts()
+            for key, val in scripts.items():
+                await sandbox.execute(
+                    f'cd {frontend_root} && npm pkg set scripts.{key}="{val}"',
+                    timeout=10,
+                )
+            fixes.append("npm: injected missing build/dev scripts")
+
+        # Rule 9 (extended): @types/xxx version not found
+        for m in _re_module.finditer(
+            r"No matching version found for (@types/[\w-]+)@", build_log,
+        ):
+            pkg = m.group(1)
+            await sandbox.execute(
+                f"cd {frontend_root} && npm pkg delete devDependencies.{pkg} "
+                f"&& npm pkg delete dependencies.{pkg}",
+                timeout=20,
+            )
+            fixes.append(f"npm: removed {pkg} (version mismatch)")
+
+    # --- Maven / Java rules ---
+    if backend_root:
+        # Rule 7: POM XML parse error (log only in Phase 1)
+        if "Non-parseable POM" in build_log or "Malformed POM" in build_log:
+            logger.warning("auto_heal: POM XML parse error detected, manual fix required")
+            # Phase 1: don't auto-restore pom.xml (too project-specific)
+
+        # Rule 8: javax → jakarta migration
+        if "package javax." in build_log and "does not exist" in build_log:
+            error_files = _extract_error_files(build_log)
+            for fp in error_files[:10]:
+                if not fp.endswith(".java"):
+                    continue
+                try:
+                    content = await sandbox.read(f"/app/{fp}")
+                    original = content
+                    content = content.replace("import javax.persistence", "import jakarta.persistence")
+                    content = content.replace("import javax.validation", "import jakarta.validation")
+                    content = content.replace("import javax.servlet", "import jakarta.servlet")
+                    content = content.replace("import javax.annotation", "import jakarta.annotation")
+                    content = content.replace("import javax.transaction", "import jakarta.transaction")
+                    if content != original:
+                        await sandbox.write(f"/app/{fp}", content)
+                        fixes.append(f"java: javax→jakarta in {fp}")
+                except Exception:
+                    pass
+
+    return len(fixes) > 0, "; ".join(fixes) if fixes else ""
 
 
 def _extract_error_files(build_log: str) -> list[str]:
