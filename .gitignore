@@ -37,3 +37,6 @@ pnpm-debug.log*
 
 .claude/
 .trae/
+
+.m2repo/
+.third_party/

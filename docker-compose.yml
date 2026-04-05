@@ -40,6 +40,7 @@ services:
       LANGCHAIN_RUNTIME_API_VERSION: ${LANGCHAIN_SIDECAR_API_VERSION:-v1}
       LANGCHAIN_MODEL_BASE_URL: ${MODEL_BASE_URL:-}
       LANGCHAIN_MODEL_API_KEY: ${MODEL_API_KEY:-}
+      LANGCHAIN_MODEL_NAME: ${LANGCHAIN_MODEL_NAME:-}
       LANGCHAIN_DEFAULT_CHAT_MODEL: ${CHAT_MODEL:-qwen-plus}
       LANGCHAIN_DEFAULT_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-text-embedding-v3}
       LANGCHAIN_ENABLE_LANGSMITH: ${LANGCHAIN_ENABLE_LANGSMITH:-false}
@@ -67,6 +68,8 @@ services:
       DEEPAGENT_NODE_MODEL_CODEGEN_BACKEND: ${DEEPAGENT_NODE_MODEL_CODEGEN_BACKEND:-}
       DEEPAGENT_NODE_MODEL_CODEGEN_FRONTEND: ${DEEPAGENT_NODE_MODEL_CODEGEN_FRONTEND:-}
       DEEPAGENT_NODE_MODEL_SQL_GENERATE: ${DEEPAGENT_NODE_MODEL_SQL_GENERATE:-}
+      DEEPAGENT_MODEL_STRONG_NAME: ${DEEPAGENT_MODEL_STRONG_NAME:-}
+      DEEPAGENT_MODEL_FAST_NAME: ${DEEPAGENT_MODEL_FAST_NAME:-}
       TZ: UTC
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -87,6 +90,9 @@ services:
       DB_NAME: smartark
       DB_USER: smartark
       DB_PASSWORD: smartark
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/smartark?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: smartark
+      SPRING_DATASOURCE_PASSWORD: smartark
       REDIS_HOST: redis
       REDIS_PORT: 6379
       MODEL_BASE_URL: ${MODEL_BASE_URL:-}
@@ -135,8 +141,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend-web
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend-web/Dockerfile
     ports:
       - "80:80"
     depends_on:

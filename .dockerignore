@@ -1,0 +1,5 @@
+.git
+.m2repo
+.third_party
+back
+**/node_modules
