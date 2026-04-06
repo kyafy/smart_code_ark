@@ -1,5 +1,7 @@
 package com.smartark.gateway.service;
 
+import com.smartark.gateway.config.ModelProperties;
+import com.smartark.gateway.config.RagProperties;
 import com.smartark.gateway.db.entity.ModelRegistryEntity;
 import com.smartark.gateway.db.entity.ModelUsageDailyEntity;
 import com.smartark.gateway.db.repo.ModelRegistryRepository;
@@ -33,6 +35,9 @@ public class ModelRouterService {
     private final String defaultPaperModel;
     private final String defaultEmbeddingModel;
 
+    private final ModelProperties modelProperties;
+    private final RagProperties ragProperties;
+
     public record ModelConnection(String baseUrl, String apiKey) {
     }
 
@@ -40,17 +45,17 @@ public class ModelRouterService {
             ModelRegistryRepository registryRepository,
             ModelUsageDailyRepository usageDailyRepository,
             ModelCredentialCryptoService credentialCryptoService,
-            @Value("${smartark.model.chat-model:qwen-plus}") String defaultChatModel,
-            @Value("${smartark.model.code-model:qwen-plus}") String defaultCodeModel,
-            @Value("${smartark.model.paper-model:qwen-plus}") String defaultPaperModel,
-            @Value("${smartark.rag.embedding-model:text-embedding-v3}") String defaultEmbeddingModel) {
+            ModelProperties modelProperties,
+            RagProperties ragProperties) {
         this.registryRepository = registryRepository;
         this.usageDailyRepository = usageDailyRepository;
         this.credentialCryptoService = credentialCryptoService;
-        this.defaultChatModel = defaultChatModel;
-        this.defaultCodeModel = defaultCodeModel;
-        this.defaultPaperModel = defaultPaperModel;
-        this.defaultEmbeddingModel = defaultEmbeddingModel;
+        this.modelProperties = modelProperties;
+        this.ragProperties = ragProperties;
+        this.defaultChatModel = modelProperties.getChatModel();
+        this.defaultCodeModel = modelProperties.getCodeModel();
+        this.defaultPaperModel = modelProperties.getPaperModel();
+        this.defaultEmbeddingModel = ragProperties.getEmbeddingModel();
     }
 
     /**

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.config.ModelProperties;
+import com.smartark.gateway.config.RagProperties;
 import com.smartark.gateway.service.modelgateway.ModelGatewayEndpoint;
 import com.smartark.gateway.service.modelgateway.ModelGatewayInvocation;
 import com.smartark.gateway.service.modelgateway.ModelGatewayResult;
@@ -35,24 +37,26 @@ public class EmbeddingService {
     private record EmbeddingConnection(String modelName, String baseUrl, String apiKey, String source) {
     }
 
+    private final RagProperties ragProperties;
+    private final ModelProperties modelProperties;
+
     public EmbeddingService(
             ObjectMapper objectMapper,
             ModelRouterService modelRouterService,
             OpenAiCompatibleModelGatewayService modelGatewayService,
-            @Value("${smartark.model.base-url:}") String baseUrl,
-            @Value("${smartark.rag.embedding-base-url:}") String embeddingBaseUrl,
-            @Value("${smartark.model.api-key:}") String apiKey,
-            @Value("${smartark.rag.embedding-model:text-embedding-v3}") String embeddingModel,
-            @Value("${smartark.rag.embedding-dimension:1024}") int embeddingDimension
+            RagProperties ragProperties,
+            ModelProperties modelProperties
     ) {
         this.objectMapper = objectMapper;
         this.modelRouterService = modelRouterService;
         this.modelGatewayService = modelGatewayService;
-        this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
-        this.embeddingBaseUrl = embeddingBaseUrl == null ? "" : embeddingBaseUrl.trim();
-        this.apiKey = apiKey == null ? "" : apiKey.trim();
-        this.embeddingModel = embeddingModel;
-        this.embeddingDimension = embeddingDimension;
+        this.ragProperties = ragProperties;
+        this.modelProperties = modelProperties;
+        this.baseUrl = modelProperties.getBaseUrl() == null ? "" : modelProperties.getBaseUrl().trim();
+        this.embeddingBaseUrl = ragProperties.getEmbeddingBaseUrl() == null ? "" : ragProperties.getEmbeddingBaseUrl().trim();
+        this.apiKey = modelProperties.getApiKey() == null ? "" : modelProperties.getApiKey().trim();
+        this.embeddingModel = ragProperties.getEmbeddingModel();
+        this.embeddingDimension = ragProperties.getEmbeddingDimension();
     }
 
     public List<float[]> embed(List<String> texts) {

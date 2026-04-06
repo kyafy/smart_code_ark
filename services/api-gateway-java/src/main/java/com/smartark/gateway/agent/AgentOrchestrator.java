@@ -772,12 +772,12 @@ public class AgentOrchestrator {
     private void executePaperViaPipeline(String taskId, TaskEntity task, AgentExecutionContext context) {
         log(taskId, "info", "Delegating paper pipeline to Python runtime (full graph)");
 
-        int sessionId = context.getPaperSessionId() > 0 ? (int) (long) context.getPaperSessionId() : 0;
-        String callbackBaseUrl = System.getenv("DEEPAGENT_CALLBACK_BASE_URL") != null
-                ? System.getenv("DEEPAGENT_CALLBACK_BASE_URL")
-                : "http://localhost:8080";
-        String callbackApiKey = System.getenv("DEEPAGENT_CALLBACK_API_KEY") != null
-                ? System.getenv("DEEPAGENT_CALLBACK_API_KEY")
+        int sessionId = (context.getPaperSessionId() != null && context.getPaperSessionId() > 0) ? (int) (long) context.getPaperSessionId() : 0;
+        String callbackBaseUrl = System.getenv("AGENT_DEEPAGENT_CALLBACK_BASE_URL") != null
+                ? System.getenv("AGENT_DEEPAGENT_CALLBACK_BASE_URL")
+                : "http://api-gateway:8080";
+        String callbackApiKey = System.getenv("AGENT_DEEPAGENT_CALLBACK_TOKEN") != null
+                ? System.getenv("AGENT_DEEPAGENT_CALLBACK_TOKEN")
                 : "smartark-internal";
 
         try {

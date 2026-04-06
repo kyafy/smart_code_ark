@@ -15,16 +15,18 @@ import org.springframework.context.annotation.Configuration;
 public class QdrantConfig {
     private static final Logger logger = LoggerFactory.getLogger(QdrantConfig.class);
 
-    @Value("${smartark.rag.qdrant.host:localhost}")
-    private String host;
+    private final RagProperties ragProperties;
 
-    @Value("${smartark.rag.qdrant.port:6334}")
-    private int port;
+    public QdrantConfig(RagProperties ragProperties) {
+        this.ragProperties = ragProperties;
+    }
 
     private QdrantClient qdrantClient;
 
     @Bean
     public QdrantClient qdrantClient() {
+        String host = ragProperties.getQdrant().getHost();
+        int port = ragProperties.getQdrant().getPort();
         logger.info("Connecting to Qdrant at {}:{}", host, port);
         QdrantGrpcClient grpcClient = QdrantGrpcClient.newBuilder(host, port, false).build();
         this.qdrantClient = new QdrantClient(grpcClient);

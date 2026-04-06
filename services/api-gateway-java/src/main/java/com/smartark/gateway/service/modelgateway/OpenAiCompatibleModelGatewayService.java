@@ -25,6 +25,7 @@ import com.openai.models.embeddings.CreateEmbeddingResponse;
 import com.openai.models.embeddings.EmbeddingCreateParams;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.config.ModelProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,17 +58,15 @@ public class OpenAiCompatibleModelGatewayService {
     public OpenAiCompatibleModelGatewayService(
             ObjectMapper objectMapper,
             ModelGatewayAuditService auditService,
-            @Value("${smartark.model.gateway.default-timeout-ms:45000}") int defaultTimeoutMs,
-            @Value("${smartark.model.gateway.max-retries:2}") int maxRetries,
-            @Value("${smartark.model.gateway.response-validation-enabled:true}") boolean responseValidationEnabled,
+            ModelProperties modelProperties,
             @Value("${smartark.langchain.runtime.model-enabled:false}") boolean runtimeModelEnabled,
             @Value("${smartark.langchain.runtime.base-url:http://localhost:18080}") String runtimeBaseUrl,
             @Value("${smartark.langchain.runtime.timeout-ms:45000}") int runtimeTimeoutMs) {
         this.objectMapper = objectMapper;
         this.auditService = auditService;
-        this.defaultTimeoutMs = Math.max(1000, defaultTimeoutMs);
-        this.maxRetries = Math.max(0, maxRetries);
-        this.responseValidationEnabled = responseValidationEnabled;
+        this.defaultTimeoutMs = Math.max(1000, modelProperties.getGateway().getDefaultTimeoutMs());
+        this.maxRetries = Math.max(0, modelProperties.getGateway().getMaxRetries());
+        this.responseValidationEnabled = modelProperties.getGateway().isResponseValidationEnabled();
         this.runtimeModelEnabled = runtimeModelEnabled;
         this.runtimeBaseUrl = runtimeBaseUrl == null ? "" : runtimeBaseUrl.trim();
         this.runtimeTimeoutMs = Math.max(1000, runtimeTimeoutMs);

@@ -11,7 +11,7 @@ import io.qdrant.client.grpc.Points;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import com.smartark.gateway.config.RagProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -38,12 +38,11 @@ public class QdrantService {
 
     public QdrantService(
             QdrantClient qdrantClient,
-            @Value("${smartark.rag.qdrant.collection-name:paper_chunks}") String collectionName,
-            @Value("${smartark.rag.embedding-dimension:1024}") int embeddingDimension
+            RagProperties ragProperties
     ) {
         this.qdrantClient = qdrantClient;
-        this.collectionName = collectionName;
-        this.embeddingDimension = embeddingDimension;
+        this.collectionName = ragProperties.getQdrant().getCollectionName();
+        this.embeddingDimension = ragProperties.getEmbeddingDimension();
     }
 
     @PostConstruct

@@ -3,6 +3,7 @@ package com.smartark.gateway.service;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
 import org.springframework.beans.factory.annotation.Value;
+import com.smartark.gateway.config.ModelProperties;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Cipher;
@@ -22,8 +23,8 @@ public class ModelCredentialCryptoService {
     private final SecretKeySpec keySpec;
     private final SecureRandom secureRandom = new SecureRandom();
 
-    public ModelCredentialCryptoService(@Value("${smartark.model.crypto-master-key:change-me-please}") String masterKey) {
-        this.keySpec = new SecretKeySpec(deriveKey(masterKey), "AES");
+    public ModelCredentialCryptoService(ModelProperties modelProperties) {
+        this.keySpec = new SecretKeySpec(deriveKey(modelProperties.getCryptoMasterKey()), "AES");
     }
 
     public String version() {

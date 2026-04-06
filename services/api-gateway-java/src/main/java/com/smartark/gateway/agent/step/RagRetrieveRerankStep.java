@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartark.gateway.agent.AgentExecutionContext;
 import com.smartark.gateway.agent.AgentStep;
 import com.smartark.gateway.agent.model.RagEvidenceItem;
+import com.smartark.gateway.config.RagProperties;
 import com.smartark.gateway.db.entity.PaperTopicSessionEntity;
 import com.smartark.gateway.db.repo.PaperTopicSessionRepository;
 import com.smartark.gateway.service.RagService;
@@ -22,15 +23,16 @@ public class RagRetrieveRerankStep implements AgentStep {
     private final PaperTopicSessionRepository paperTopicSessionRepository;
     private final ObjectMapper objectMapper;
 
-    @Value("${smartark.rag.retrieve-top-k:30}")
-    private int retrieveTopK;
+    private final RagProperties ragProperties;
 
     public RagRetrieveRerankStep(RagService ragService,
                                   PaperTopicSessionRepository paperTopicSessionRepository,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  RagProperties ragProperties) {
         this.ragService = ragService;
         this.paperTopicSessionRepository = paperTopicSessionRepository;
         this.objectMapper = objectMapper;
+        this.ragProperties = ragProperties;
     }
 
     @Override
@@ -63,6 +65,7 @@ public class RagRetrieveRerankStep implements AgentStep {
             }
         }
         String retrievalQuery = queryBuilder.toString();
+        int retrieveTopK = ragProperties.getRetrieveTopK();
         logger.info("Step rag_retrieve_rerank start: taskId={}, sessionId={}, retrieveTopK={}, query={}",
                 context.getTask().getId(), session.getId(), retrieveTopK, truncate(retrievalQuery, 220));
 

@@ -10,7 +10,7 @@ export JWT_SECRET=dev-local-secret
 export MODEL_BASE_URL=${MODEL_BASE_URL:-}
 export MODEL_API_KEY=${MODEL_API_KEY:-}
 export MODEL_MOCK_ENABLED=${MODEL_MOCK_ENABLED:-true}
-export CHAT_MODEL=${CHAT_MODEL:-Qwen3.5-Plus}
+export CHAT_MODEL=${CHAT_MODEL:-qwen-plus}
 export CODE_MODEL=${CODE_MODEL:-qwen-plus}
 
 java -jar target/api-gateway-0.0.1-SNAPSHOT.jar

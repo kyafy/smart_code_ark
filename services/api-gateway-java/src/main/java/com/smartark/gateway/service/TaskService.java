@@ -333,6 +333,24 @@ public class TaskService {
         task.setUpdatedAt(now);
         taskRepository.save(task);
 
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(instructions);
+            PaperTopicSessionEntity session = new PaperTopicSessionEntity();
+            session.setTaskId(taskId);
+            session.setProjectId(projectId);
+            session.setUserId(userId);
+            session.setTopic(root.path("topic").asText(""));
+            session.setDiscipline(root.path("discipline").asText(""));
+            session.setDegreeLevel(root.path("degreeLevel").asText(""));
+            session.setMethodPreference(root.path("methodPreference").asText(""));
+            session.setStatus("adopted"); // 明确设置状态为已采纳/已确认
+            session.setCreatedAt(now);
+            session.setUpdatedAt(now);
+            paperTopicSessionRepository.save(session);
+        } catch (Exception e) {
+            appendTaskLog(taskId, "warn", "Failed to init PaperTopicSessionEntity synchronously: " + e.getMessage());
+        }
+
         createStep(taskId, "topic_clarify",         "主题澄清",       1);
         createStep(taskId, "academic_retrieve",     "学术检索",       2);
         createStep(taskId, "rag_index_enrich",      "RAG索引构建",    3);
@@ -623,6 +641,26 @@ public class TaskService {
         for (TaskEntity task : tasks) {
             PaperTopicSessionEntity session = paperTopicSessionRepository.findByTaskId(task.getId()).orElse(null);
             if (session == null) {
+                // 如果会话尚未异步创建，尝试从 task.instructions 中解析基础信息
+                String topic = "未知主题";
+                String discipline = "未知学科";
+                String degreeLevel = "未知";
+                try {
+                    JsonNode instructions = parseJson(task.getInstructions());
+                    topic = instructions.path("topic").asText(topic);
+                    discipline = instructions.path("discipline").asText(discipline);
+                    degreeLevel = instructions.path("degreeLevel").asText(degreeLevel);
+                } catch (Exception e) {
+                    // 忽略解析错误
+                }
+                result.add(new PaperProjectSummary(
+                        task.getId(),
+                        topic,
+                        discipline,
+                        degreeLevel,
+                        task.getStatus(),
+                        task.getUpdatedAt() == null ? null : task.getUpdatedAt().toString()
+                ));
                 continue;
             }
             result.add(new PaperProjectSummary(

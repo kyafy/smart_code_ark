@@ -563,8 +563,8 @@ async def sandbox_build_fix(state: Dict[str, Any]) -> Dict[str, Any]:
         try:
             current = await sandbox.read(f"/app/{file_path}")
         except FileNotFoundError:
-            await client.log(task_id, "warn", f"Skip missing file during build_fix: {file_path}")
-            continue
+            await client.log(task_id, "info", f"File missing during build_fix: {file_path}, asking LLM to generate it")
+            current = f"/* File {file_path} is missing. Please generate its contents based on the error. */\n"
 
         # Phase 4: enrich error context with compression middleware
         file_errors = _extract_errors_for_file(filtered_build_log, file_path)
@@ -1682,10 +1682,12 @@ async def _auto_heal_build_errors(
             await sandbox.write(vite_path, golden)
             fixes.append("vite: restored golden vite.config.ts")
 
-        # Rule 5: tsconfig parse error → restore golden
+        # Rule 5: tsconfig parse error or missing → restore golden
         if (
             "error TS5024" in build_log
             or "error TS6046" in build_log
+            or "error TS5083" in build_log
+            or "Cannot read file" in build_log and "tsconfig.json" in build_log
             or ("tsconfig" in build_log.lower() and "parse error" in build_log.lower())
         ):
             golden = _get_golden_tsconfig()

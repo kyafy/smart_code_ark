@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.config.ModelProperties;
 import com.smartark.gateway.db.entity.PromptHistoryEntity;
 import com.smartark.gateway.db.repo.PromptHistoryRepository;
 import com.smartark.gateway.prompt.PromptRenderer;
@@ -71,6 +72,7 @@ public class ModelService {
     private final int correctiveRetryMax;
     private final ModelRouterService modelRouterService;
     private final OpenAiCompatibleModelGatewayService modelGatewayService;
+    private final ModelProperties modelProperties;
 
     public ModelService(
             ObjectMapper objectMapper,
@@ -80,28 +82,22 @@ public class ModelService {
             OutputSchemaValidator outputSchemaValidator,
             ModelRouterService modelRouterService,
             OpenAiCompatibleModelGatewayService modelGatewayService,
-            @Value("${smartark.model.base-url:}") String baseUrl,
-            @Value("${smartark.model.api-key:}") String apiKey,
-            @Value("${smartark.model.mock-enabled:false}") boolean mockEnabled,
-            @Value("${smartark.model.chat-model:qwen-plus}") String chatModel,
-            @Value("${smartark.model.code-model:qwen-plus}") String codeModel,
-            @Value("${smartark.model.paper-model:qwen-plus}") String paperModel,
-            @Value("${smartark.model.schema-validation-enabled:true}") boolean schemaValidationEnabled,
-            @Value("${smartark.model.corrective-retry-max:2}") int correctiveRetryMax
+            ModelProperties modelProperties
     ) {
         this.objectMapper = objectMapper;
-        this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
-        this.apiKey = apiKey == null ? "" : apiKey.trim();
-        this.mockEnabled = mockEnabled;
-        this.chatModel = chatModel;
-        this.codeModel = codeModel;
-        this.paperModel = paperModel;
+        this.modelProperties = modelProperties;
+        this.baseUrl = modelProperties.getBaseUrl() == null ? "" : modelProperties.getBaseUrl().trim();
+        this.apiKey = modelProperties.getApiKey() == null ? "" : modelProperties.getApiKey().trim();
+        this.mockEnabled = modelProperties.isMockEnabled();
+        this.chatModel = modelProperties.getChatModel();
+        this.codeModel = modelProperties.getCodeModel();
+        this.paperModel = modelProperties.getPaperModel();
         this.promptResolver = promptResolver;
         this.promptRenderer = promptRenderer;
         this.promptHistoryRepository = promptHistoryRepository;
         this.outputSchemaValidator = outputSchemaValidator;
-        this.schemaValidationEnabled = schemaValidationEnabled;
-        this.correctiveRetryMax = Math.max(0, correctiveRetryMax);
+        this.schemaValidationEnabled = modelProperties.isSchemaValidationEnabled();
+        this.correctiveRetryMax = Math.max(0, modelProperties.getCorrectiveRetryMax());
         this.modelRouterService = modelRouterService;
         this.modelGatewayService = modelGatewayService;
     }

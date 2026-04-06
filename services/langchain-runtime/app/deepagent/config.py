@@ -96,8 +96,8 @@ class NodeModelConfig:
     """Per-node LLM model overrides via DEEPAGENT_NODE_MODEL_{NODE_NAME} env vars.
 
     Example:
-        DEEPAGENT_NODE_MODEL_BUILD_FIX=gml-5
-        DEEPAGENT_NODE_MODEL_REQUIREMENT_ANALYZE=qwen3-max
+        DEEPAGENT_NODE_MODEL_BUILD_FIX=qwen-max
+        DEEPAGENT_NODE_MODEL_REQUIREMENT_ANALYZE=qwen-max
     """
 
     overrides: Dict[str, str] = field(default_factory=dict)

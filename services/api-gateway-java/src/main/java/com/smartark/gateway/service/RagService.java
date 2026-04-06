@@ -5,6 +5,7 @@ import com.smartark.gateway.agent.model.QdrantSearchResult;
 import com.smartark.gateway.agent.model.RagEvidenceItem;
 import com.smartark.gateway.common.exception.BusinessException;
 import com.smartark.gateway.common.exception.ErrorCodes;
+import com.smartark.gateway.config.RagProperties;
 import com.smartark.gateway.db.entity.PaperCorpusChunkEntity;
 import com.smartark.gateway.db.entity.PaperCorpusDocEntity;
 import com.smartark.gateway.db.entity.PaperSourceEntity;
@@ -35,18 +36,7 @@ public class RagService {
     private final PaperCorpusDocRepository corpusDocRepository;
     private final PaperCorpusChunkRepository corpusChunkRepository;
     private final PaperSourceRepository paperSourceRepository;
-
-    @Value("${smartark.rag.chunk-max-tokens:512}")
-    private int chunkMaxTokens;
-
-    @Value("${smartark.rag.chunk-overlap-tokens:64}")
-    private int chunkOverlapTokens;
-
-    @Value("${smartark.rag.retrieve-top-k:30}")
-    private int retrieveTopK;
-
-    @Value("${smartark.rag.rerank-top-n:15}")
-    private int rerankTopN;
+    private final RagProperties ragProperties;
 
     public RagService(
             EmbeddingService embeddingService,
@@ -54,7 +44,8 @@ public class RagService {
             QdrantService qdrantService,
             PaperCorpusDocRepository corpusDocRepository,
             PaperCorpusChunkRepository corpusChunkRepository,
-            PaperSourceRepository paperSourceRepository
+            PaperSourceRepository paperSourceRepository,
+            RagProperties ragProperties
     ) {
         this.embeddingService = embeddingService;
         this.textChunkService = textChunkService;
@@ -62,6 +53,7 @@ public class RagService {
         this.corpusDocRepository = corpusDocRepository;
         this.corpusChunkRepository = corpusChunkRepository;
         this.paperSourceRepository = paperSourceRepository;
+        this.ragProperties = ragProperties;
     }
 
     public record RagIndexResult(int chunkCount, int docCount) {}
@@ -115,7 +107,7 @@ public class RagService {
                 continue;
             }
 
-            List<TextChunkService.TextChunk> chunks = textChunkService.chunk(fullText, chunkMaxTokens, chunkOverlapTokens);
+            List<TextChunkService.TextChunk> chunks = textChunkService.chunk(fullText, ragProperties.getChunkMaxTokens(), ragProperties.getChunkOverlapTokens());
             doc.setChunkCount(chunks.size());
             corpusDocRepository.save(doc);
 
@@ -180,7 +172,7 @@ public class RagService {
     public List<RagEvidenceItem> retrieveAndRerank(Long sessionId, String query, String discipline, int topK) {
         try {
             logger.info("RAG retrieve start: sessionId={}, topK={}, discipline={}, query={}",
-                    sessionId, topK > 0 ? topK : retrieveTopK, discipline, truncate(query, 220));
+                    sessionId, topK > 0 ? topK : ragProperties.getRetrieveTopK(), discipline, truncate(query, 220));
             // 1. Embed query
             List<float[]> queryVectors = embeddingService.embed(List.of(query));
             if (queryVectors.isEmpty()) {
@@ -191,7 +183,7 @@ public class RagService {
             logger.info("RAG retrieve query embedded: sessionId={}, queryVectorDim={}", sessionId, queryVector.length);
 
             // 2. Search Qdrant with discipline filter
-            List<QdrantSearchResult> searchResults = qdrantService.search(queryVector, topK > 0 ? topK : retrieveTopK, discipline);
+            List<QdrantSearchResult> searchResults = qdrantService.search(queryVector, topK > 0 ? topK : ragProperties.getRetrieveTopK(), discipline);
             logger.info("RAG retrieve qdrant hits: sessionId={}, hitCount={}, topVector={}",
                     sessionId, searchResults.size(), buildQdrantHitSample(searchResults, 5));
 
@@ -228,7 +220,7 @@ public class RagService {
 
             // 4. Sort by rerank score descending, take top-N
             items.sort(Comparator.comparingDouble(RagEvidenceItem::getRerankScore).reversed());
-            int limit = Math.min(rerankTopN, items.size());
+            int limit = Math.min(ragProperties.getRerankTopN(), items.size());
             List<RagEvidenceItem> finalItems = items.subList(0, limit);
             logger.info("RAG rerank done: sessionId={}, inputCount={}, outputCount={}, topRerank={}",
                     sessionId, items.size(), finalItems.size(), buildRerankSample(finalItems, 5));

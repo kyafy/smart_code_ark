@@ -2,6 +2,7 @@ package com.smartark.gateway.service.modelgateway;
 
 import com.smartark.gateway.common.auth.ClientContext;
 import com.smartark.gateway.common.auth.RequestContext;
+import com.smartark.gateway.config.ModelProperties;
 import com.smartark.gateway.db.entity.ModelCallAuditEntity;
 import com.smartark.gateway.db.repo.ModelCallAuditRepository;
 import org.slf4j.Logger;
@@ -21,11 +22,10 @@ public class ModelGatewayAuditService {
 
     public ModelGatewayAuditService(
             ModelCallAuditRepository repository,
-            @Value("${smartark.model.gateway.audit.request-body-max-length:16000}") int requestBodyMaxLength,
-            @Value("${smartark.model.gateway.audit.response-body-max-length:16000}") int responseBodyMaxLength) {
+            ModelProperties modelProperties) {
         this.repository = repository;
-        this.requestBodyMaxLength = Math.max(1024, requestBodyMaxLength);
-        this.responseBodyMaxLength = Math.max(1024, responseBodyMaxLength);
+        this.requestBodyMaxLength = Math.max(1024, modelProperties.getGateway().getAudit().getRequestBodyMaxLength());
+        this.responseBodyMaxLength = Math.max(1024, modelProperties.getGateway().getAudit().getResponseBodyMaxLength());
     }
 
     public void save(ModelGatewayInvocation invocation,
