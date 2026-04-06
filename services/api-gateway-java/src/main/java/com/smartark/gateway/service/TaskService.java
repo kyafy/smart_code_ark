@@ -502,7 +502,7 @@ public class TaskService {
         preview.setUpdatedAt(now);
         taskPreviewRepository.save(preview);
         appendTaskLog(taskId, "info", "Preview rebuild requested");
-        previewDeployService.deployPreviewAsync(taskId);
+        previewDeployService.deployPreviewAsync(taskId, true);
         return toPreviewResult(taskId, preview);
     }
 

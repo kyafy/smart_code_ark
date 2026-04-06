@@ -1,0 +1,109 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.4.4)
+
+2026-04-05T10:02:53.049Z  INFO 1 --- [api-gateway] [           main] c.s.gateway.ApiGatewayApplication        : Starting ApiGatewayApplication v0.0.1-SNAPSHOT using Java 17.0.18 with PID 1 (/app/app.jar started by root in /app)
+2026-04-05T10:02:53.050Z  INFO 1 --- [api-gateway] [           main] c.s.gateway.ApiGatewayApplication        : No active profile set, falling back to 1 default profile: "default"
+2026-04-05T10:02:53.768Z  INFO 1 --- [api-gateway] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-04-05T10:02:53.771Z  INFO 1 --- [api-gateway] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-04-05T10:02:53.850Z  INFO 1 --- [api-gateway] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 73 ms. Found 25 JPA repository interfaces.
+2026-04-05T10:02:54.153Z  INFO 1 --- [api-gateway] [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8080 (http)
+2026-04-05T10:02:54.158Z  INFO 1 --- [api-gateway] [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-04-05T10:02:54.159Z  INFO 1 --- [api-gateway] [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.39]
+2026-04-05T10:02:54.170Z  INFO 1 --- [api-gateway] [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-04-05T10:02:54.171Z  INFO 1 --- [api-gateway] [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1091 ms
+2026-04-05T10:02:54.391Z  INFO 1 --- [api-gateway] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-04-05T10:02:54.489Z  INFO 1 --- [api-gateway] [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection com.mysql.cj.jdbc.ConnectionImpl@7bdb4d69
+2026-04-05T10:02:54.490Z  INFO 1 --- [api-gateway] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-04-05T10:02:54.517Z  INFO 1 --- [api-gateway] [           main] org.flywaydb.core.FlywayExecutor         : Database: jdbc:mysql://mysql:3306/smartark?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC (MySQL 8.0)
+2026-04-05T10:02:54.582Z  INFO 1 --- [api-gateway] [           main] o.f.core.internal.command.DbValidate     : Successfully validated 35 migrations (execution time 00:00.025s)
+2026-04-05T10:02:54.588Z  INFO 1 --- [api-gateway] [           main] o.f.core.internal.command.DbMigrate      : Current version of schema `smartark`: 35
+2026-04-05T10:02:54.588Z  WARN 1 --- [api-gateway] [           main] o.f.core.internal.command.DbMigrate      : Schema `smartark` has a version (35) that is newer than the latest available migration (34) !
+2026-04-05T10:02:54.590Z  INFO 1 --- [api-gateway] [           main] o.f.core.internal.command.DbMigrate      : Schema `smartark` is up to date. No migration necessary.
+2026-04-05T10:02:54.632Z  INFO 1 --- [api-gateway] [           main] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-04-05T10:02:54.652Z  INFO 1 --- [api-gateway] [           main] org.hibernate.Version                    : HHH000412: Hibernate ORM core version 6.6.11.Final
+2026-04-05T10:02:54.665Z  INFO 1 --- [api-gateway] [           main] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-04-05T10:02:54.779Z  INFO 1 --- [api-gateway] [           main] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-04-05T10:02:54.815Z  INFO 1 --- [api-gateway] [           main] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
+	Database JDBC URL [Connecting through datasource 'HikariDataSource (HikariPool-1)']
+	Database driver: undefined/unknown
+	Database version: 8.0.45
+	Autocommit mode: undefined/unknown
+	Isolation level: undefined/unknown
+	Minimum pool size: undefined/unknown
+	Maximum pool size: undefined/unknown
+2026-04-05T10:02:55.367Z  INFO 1 --- [api-gateway] [           main] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-04-05T10:02:55.390Z  INFO 1 --- [api-gateway] [           main] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-04-05T10:02:55.634Z  INFO 1 --- [api-gateway] [           main] c.s.gateway.config.DockerClientConfig    : DockerClient initialized with host: unix:///var/run/docker.sock
+2026-04-05T10:02:55.936Z  INFO 1 --- [api-gateway] [           main] o.s.d.j.r.query.QueryEnhancerFactory     : Hibernate is in classpath; If applicable, HQL parser will be used.
+2026-04-05T10:02:55.990Z  INFO 1 --- [api-gateway] [           main] c.smartark.gateway.config.QdrantConfig   : Connecting to Qdrant at qdrant:6334
+2026-04-05T10:02:56.354Z  INFO 1 --- [api-gateway] [           main] c.s.gateway.service.QdrantService        : Qdrant collection 'paper_chunks' already exists
+2026-04-05T10:02:57.045Z  INFO 1 --- [api-gateway] [           main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 2 endpoints beneath base path '/actuator'
+2026-04-05T10:02:57.096Z  INFO 1 --- [api-gateway] [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8080 (http) with context path '/'
+2026-04-05T10:02:57.110Z  INFO 1 --- [api-gateway] [           main] c.s.gateway.ApiGatewayApplication        : Started ApiGatewayApplication in 4.262 seconds (process running for 4.59)
+2026-04-05T10:03:02.664Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-04-05T10:03:02.664Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-04-05T10:03:02.666Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 2 ms
+2026-04-05T10:03:02.780Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=110ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:03:12.853Z  INFO 1 --- [api-gateway] [nio-8080-exec-2] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=5ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:03:22.902Z  INFO 1 --- [api-gateway] [nio-8080-exec-3] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:03:32.975Z  INFO 1 --- [api-gateway] [nio-8080-exec-4] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:03:43.041Z  INFO 1 --- [api-gateway] [nio-8080-exec-6] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:03:53.119Z  INFO 1 --- [api-gateway] [nio-8080-exec-8] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:04:03.191Z  INFO 1 --- [api-gateway] [io-8080-exec-10] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=5ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:04:13.247Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=5ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:04:23.292Z  INFO 1 --- [api-gateway] [nio-8080-exec-2] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=1ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:04:33.351Z  INFO 1 --- [api-gateway] [nio-8080-exec-3] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:04:43.417Z  INFO 1 --- [api-gateway] [nio-8080-exec-5] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:04:53.490Z  INFO 1 --- [api-gateway] [nio-8080-exec-7] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=5ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:05:03.558Z  INFO 1 --- [api-gateway] [nio-8080-exec-9] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:05:13.640Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:05:23.676Z  INFO 1 --- [api-gateway] [nio-8080-exec-3] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=1ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:05:33.761Z  INFO 1 --- [api-gateway] [nio-8080-exec-5] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=10ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:05:43.820Z  INFO 1 --- [api-gateway] [nio-8080-exec-6] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:05:53.903Z  INFO 1 --- [api-gateway] [nio-8080-exec-8] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:03.964Z  INFO 1 --- [api-gateway] [io-8080-exec-10] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=1ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:14.032Z  INFO 1 --- [api-gateway] [nio-8080-exec-2] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=5ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:22.626Z  INFO 1 --- [api-gateway] [nio-8080-exec-4] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/projects/676b823ecc064c7f868ffa99f0295aaa status=200 duration=214ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:24.126Z  INFO 1 --- [api-gateway] [nio-8080-exec-5] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:24.895Z  INFO 1 --- [api-gateway] [nio-8080-exec-7] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/task/43a7cfb939c0426398b529e9a1678606/preview status=200 duration=50ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:27.805Z  INFO 1 --- [api-gateway] [nio-8080-exec-8] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/task/43a7cfb939c0426398b529e9a1678606/preview status=200 duration=15ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:34.209Z  INFO 1 --- [api-gateway] [nio-8080-exec-9] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=4ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:44.311Z  INFO 1 --- [api-gateway] [io-8080-exec-10] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=11ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:54.432Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=5ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:06:54.995Z  INFO 1 --- [api-gateway] [nio-8080-exec-2] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/task/43a7cfb939c0426398b529e9a1678606/preview status=200 duration=32ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:07:04.521Z  INFO 1 --- [api-gateway] [nio-8080-exec-3] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=5ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:07:14.591Z  INFO 1 --- [api-gateway] [nio-8080-exec-5] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=5ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:07:24.688Z  INFO 1 --- [api-gateway] [nio-8080-exec-6] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=8ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:07:34.745Z  INFO 1 --- [api-gateway] [nio-8080-exec-7] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:07:44.810Z  INFO 1 --- [api-gateway] [nio-8080-exec-9] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=4ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:07:54.863Z  INFO 1 --- [api-gateway] [io-8080-exec-10] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=1ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:08:04.934Z  INFO 1 --- [api-gateway] [nio-8080-exec-2] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=7ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:08:14.994Z  INFO 1 --- [api-gateway] [nio-8080-exec-3] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:08:25.063Z  INFO 1 --- [api-gateway] [nio-8080-exec-5] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:08:35.127Z  INFO 1 --- [api-gateway] [nio-8080-exec-7] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:08:45.188Z  INFO 1 --- [api-gateway] [nio-8080-exec-9] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:08:55.237Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=1ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:08:59.253Z  INFO 1 --- [api-gateway] [nio-8080-exec-3] c.s.gateway.service.LoggingFilter        : API Request: method=POST uri=/api/tasks/43a7cfb939c0426398b529e9a1678606/preview status=401 duration=26ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:09:05.303Z  INFO 1 --- [api-gateway] [nio-8080-exec-5] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:09:15.368Z  INFO 1 --- [api-gateway] [nio-8080-exec-7] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:09:25.423Z  INFO 1 --- [api-gateway] [nio-8080-exec-9] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:09:35.489Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=7ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:09:45.543Z  INFO 1 --- [api-gateway] [nio-8080-exec-2] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:09:55.621Z  INFO 1 --- [api-gateway] [nio-8080-exec-3] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:10:05.675Z  INFO 1 --- [api-gateway] [nio-8080-exec-5] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:10:15.748Z  INFO 1 --- [api-gateway] [nio-8080-exec-7] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:10:25.843Z  INFO 1 --- [api-gateway] [nio-8080-exec-9] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=6ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:10:35.910Z  INFO 1 --- [api-gateway] [io-8080-exec-10] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:10:45.956Z  INFO 1 --- [api-gateway] [nio-8080-exec-2] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=1ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:10:56.019Z  INFO 1 --- [api-gateway] [nio-8080-exec-4] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=1ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:11:06.093Z  INFO 1 --- [api-gateway] [nio-8080-exec-6] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=3ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:11:16.153Z  INFO 1 --- [api-gateway] [nio-8080-exec-8] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=0ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:11:26.227Z  INFO 1 --- [api-gateway] [io-8080-exec-10] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=10ms platform=null appVersion=null deviceId=null traceId=null
+2026-04-05T10:11:36.293Z  INFO 1 --- [api-gateway] [nio-8080-exec-1] c.s.gateway.service.LoggingFilter        : API Request: method=GET uri=/api/health status=200 duration=2ms platform=null appVersion=null deviceId=null traceId=null

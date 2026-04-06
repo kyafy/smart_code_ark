@@ -83,9 +83,9 @@ public class ModelService {
             @Value("${smartark.model.base-url:}") String baseUrl,
             @Value("${smartark.model.api-key:}") String apiKey,
             @Value("${smartark.model.mock-enabled:false}") boolean mockEnabled,
-            @Value("${smartark.model.chat-model:Qwen3.5-Plus}") String chatModel,
+            @Value("${smartark.model.chat-model:qwen-plus}") String chatModel,
             @Value("${smartark.model.code-model:qwen-plus}") String codeModel,
-            @Value("${smartark.model.paper-model:Qwen3.5-Plus}") String paperModel,
+            @Value("${smartark.model.paper-model:qwen-plus}") String paperModel,
             @Value("${smartark.model.schema-validation-enabled:true}") boolean schemaValidationEnabled,
             @Value("${smartark.model.corrective-retry-max:2}") int correctiveRetryMax
     ) {

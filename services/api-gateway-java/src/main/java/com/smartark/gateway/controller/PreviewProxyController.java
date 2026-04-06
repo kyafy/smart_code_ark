@@ -74,7 +74,15 @@ public class PreviewProxyController {
 
         String proxyPath = extractProxyPath(request, taskId);
         String queryString = request.getQueryString();
-        String targetUrl = "http://localhost:" + hostPort + "/" + proxyPath;
+        String targetUrl;
+        try {
+            // Try to resolve the container name first (works when running in the same Docker network)
+            java.net.InetAddress.getByName("smartark-preview-" + taskId);
+            targetUrl = "http://smartark-preview-" + taskId + ":5173/" + proxyPath;
+        } catch (java.net.UnknownHostException e) {
+            // Fallback to localhost if not resolvable (e.g. running api-gateway locally)
+            targetUrl = "http://localhost:" + hostPort + "/" + proxyPath;
+        }
         if (queryString != null && !queryString.isEmpty()) {
             targetUrl += "?" + queryString;
         }

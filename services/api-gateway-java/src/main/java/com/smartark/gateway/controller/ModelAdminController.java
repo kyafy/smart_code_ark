@@ -67,7 +67,7 @@ public class ModelAdminController {
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Found")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Model not found")
     public ResponseEntity<ApiResponse<ModelRegistryEntity>> getModel(
-            @Parameter(description = "Model name, for example qwen3.5-plus", required = true)
+            @Parameter(description = "Model name, for example qwen-plus", required = true)
             @PathVariable String modelName) {
         return modelRouterService.findByName(modelName)
                 .map(model -> ResponseEntity.ok(ApiResponse.success(model)))
@@ -89,7 +89,7 @@ public class ModelAdminController {
                     examples = @ExampleObject(
                             value = """
                                     {
-                                      "modelName": "qwen3.5-plus",
+                                      "modelName": "qwen-plus",
                                       "displayName": "Qwen 3.5 Plus",
                                       "provider": "dashscope",
                                       "modelRole": "paper",

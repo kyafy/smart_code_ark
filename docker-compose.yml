@@ -36,6 +36,8 @@ services:
   langchain-runtime:
     build:
       context: ./services/langchain-runtime
+    env_file:
+      - .env
     environment:
       LANGCHAIN_RUNTIME_API_VERSION: ${LANGCHAIN_SIDECAR_API_VERSION:-v1}
       LANGCHAIN_MODEL_BASE_URL: ${MODEL_BASE_URL:-}
@@ -84,6 +86,8 @@ services:
   api-gateway:
     build:
       context: ./services/api-gateway-java
+    env_file:
+      - .env
     environment:
       DB_HOST: mysql
       DB_PORT: 3306
@@ -117,10 +121,11 @@ services:
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-aicfu71@gmail.com}
       PREVIEW_ENABLED: ${PREVIEW_ENABLED:-true}
       PREVIEW_DOCKER_HOST: unix:///var/run/docker.sock
+      AGENT_EXECUTOR_MODE: ${AGENT_EXECUTOR_MODE:-legacy}
+      AGENT_DEEPAGENT_SUPPORTED_TASK_TYPES: ${AGENT_DEEPAGENT_SUPPORTED_TASK_TYPES:-generate,modify}
       TZ: UTC
     ports:
       - "8080:8080"
-      - "30000-30100:30000-30100"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/smartark:/tmp/smartark

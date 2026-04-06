@@ -74,12 +74,20 @@ public class ContainerRuntimeService {
         long memoryBytes = containerMemoryMb * 1024 * 1024;
         long nanoCpus = (long) (containerCpus * 1_000_000_000L);
 
+        String networkMode = "bridge";
+        try {
+            dockerClient.inspectNetworkCmd().withNetworkId("smart_code_ark_default").exec();
+            networkMode = "smart_code_ark_default";
+        } catch (Exception e) {
+            logger.info("Network smart_code_ark_default not found, using bridge mode");
+        }
+
         HostConfig hostConfig = HostConfig.newHostConfig()
                 .withPortBindings(portBindings)
                 .withMemory(memoryBytes)
                 .withNanoCPUs(nanoCpus)
                 .withBinds(Bind.parse(workspacePath + ":/app"))
-                .withNetworkMode("bridge");
+                .withNetworkMode(networkMode);
 
         CreateContainerResponse container = dockerClient.createContainerCmd(baseImage)
                 .withName("smartark-preview-" + taskId)

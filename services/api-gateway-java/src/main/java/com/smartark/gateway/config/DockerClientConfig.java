@@ -3,7 +3,7 @@ package com.smartark.gateway.config;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientImpl;
-import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
+import com.github.dockerjava.zerodep.ZerodepDockerHttpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,7 +28,7 @@ public class DockerClientConfig {
                 .withDockerHost(dockerHost)
                 .build();
 
-        ApacheDockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
+        ZerodepDockerHttpClient httpClient = new ZerodepDockerHttpClient.Builder()
                 .dockerHost(URI.create(dockerHost))
                 .maxConnections(10)
                 .connectionTimeout(Duration.ofSeconds(10))

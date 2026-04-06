@@ -117,9 +117,9 @@ smartark:
     base-url: ${MODEL_BASE_URL:}
     api-key: ${MODEL_API_KEY:}
     mock-enabled: ${MODEL_MOCK_ENABLED:false}
-    chat-model: ${CHAT_MODEL:Qwen3.5-Plus}
+    chat-model: ${CHAT_MODEL:qwen-plus}
     code-model: ${CODE_MODEL:qwen-plus}
-    paper-model: ${PAPER_MODEL:Qwen3.5-Plus}
+    paper-model: ${PAPER_MODEL:qwen-plus}
     schema-validation-enabled: ${MODEL_SCHEMA_VALIDATION_ENABLED:true}
     corrective-retry-max: ${MODEL_CORRECTIVE_RETRY_MAX:2}
   billing:

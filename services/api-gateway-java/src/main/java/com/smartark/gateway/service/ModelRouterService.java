@@ -40,10 +40,10 @@ public class ModelRouterService {
             ModelRegistryRepository registryRepository,
             ModelUsageDailyRepository usageDailyRepository,
             ModelCredentialCryptoService credentialCryptoService,
-            @Value("${smartark.model.chat-model:Qwen3.5-Plus}") String defaultChatModel,
+            @Value("${smartark.model.chat-model:qwen-plus}") String defaultChatModel,
             @Value("${smartark.model.code-model:qwen-plus}") String defaultCodeModel,
-            @Value("${smartark.model.paper-model:Qwen3.5-Plus}") String defaultPaperModel,
-            @Value("${smartark.rag.embedding-model:text-embedding-v4}") String defaultEmbeddingModel) {
+            @Value("${smartark.model.paper-model:qwen-plus}") String defaultPaperModel,
+            @Value("${smartark.rag.embedding-model:text-embedding-v3}") String defaultEmbeddingModel) {
         this.registryRepository = registryRepository;
         this.usageDailyRepository = usageDailyRepository;
         this.credentialCryptoService = credentialCryptoService;

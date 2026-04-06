@@ -89,6 +89,11 @@ public class PreviewDeployService {
 
     @Async
     public void deployPreviewAsync(String taskId) {
+        deployPreviewAsync(taskId, false);
+    }
+
+    @Async
+    public void deployPreviewAsync(String taskId, boolean forceDeploy) {
         long startedAt = System.currentTimeMillis();
         TaskPreviewEntity preview = null;
         try {
@@ -97,11 +102,11 @@ public class PreviewDeployService {
                 return;
             }
             TaskEntity task = taskOptional.get();
-            if (shouldSkipBecauseDeepAgent(task)) {
+            if (!forceDeploy && shouldSkipBecauseDeepAgent(task)) {
                 appendTaskLog(taskId, "info", "Preview deployment skipped: deepagent mode selected");
                 return;
             }
-            if (!shouldTriggerDeploy(task)) {
+            if (!shouldTriggerDeploy(task, forceDeploy)) {
                 return;
             }
             LocalDateTime now = LocalDateTime.now();
@@ -347,9 +352,9 @@ public class PreviewDeployService {
         appendTaskLog(taskId, "info", "Reusable runtime from runtime_smoke_test cleaned up after task failure");
     }
 
-    private boolean shouldTriggerDeploy(TaskEntity task) {
+    private boolean shouldTriggerDeploy(TaskEntity task, boolean forceDeploy) {
         return previewEnabled
-                && autoDeployOnFinish
+                && (forceDeploy || autoDeployOnFinish)
                 && "finished".equals(task.getStatus())
                 && ("generate".equals(task.getTaskType()) || "modify".equals(task.getTaskType()));
     }
